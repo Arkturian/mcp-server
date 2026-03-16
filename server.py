@@ -367,7 +367,25 @@ storage_mcp = FastMCP(
 
 @storage_mcp.tool(
     name="assets_list",
-    description="List storage objects with optional filters.",
+    description="""List storage objects with filters and full-text search.
+
+    Parameters:
+    - mine: Only own objects (default true, admin can set false for all)
+    - context: Filter by context tag
+    - collection_id: Exact collection match
+    - collection_like: Partial collection match (case-insensitive)
+    - name: Filename contains (case-insensitive)
+    - ext: File extension filter (e.g. 'mp4', 'png')
+    - link_id: Filter by link_id (supports multi-value with semicolons)
+    - search: Full-text search across filename, title, description, ai_title, ai_tags
+    - mime_type: MIME type filter ('video' matches video/*, 'image/png' matches exactly)
+    - has_hls: Filter by HLS availability (true = only transcoded videos)
+    - min_id: Only objects with id >= min_id
+    - max_id: Only objects with id <= max_id
+    - sort: Sort field ('created_at', 'id', 'filename', 'file_size'). Prefix '-' for ascending.
+    - offset: Pagination offset (default 0)
+    - limit: Max results (default 100, max 5000)
+    """,
 )
 async def storage_assets_list(
     mine: Optional[bool] = True,
@@ -377,6 +395,13 @@ async def storage_assets_list(
     name: Optional[str] = None,
     ext: Optional[str] = None,
     link_id: Optional[str] = None,
+    search: Optional[str] = None,
+    mime_type: Optional[str] = None,
+    has_hls: Optional[bool] = None,
+    min_id: Optional[int] = None,
+    max_id: Optional[int] = None,
+    sort: Optional[str] = None,
+    offset: int = 0,
     limit: int = 100,
 ) -> Dict[str, Any]:
     params = _clean_params(
@@ -387,6 +412,13 @@ async def storage_assets_list(
         name=name,
         ext=ext,
         link_id=link_id,
+        search=search,
+        mime_type=mime_type,
+        has_hls=has_hls,
+        min_id=min_id,
+        max_id=max_id,
+        sort=sort,
+        offset=offset,
         limit=limit,
     )
     return await call_storage_api("GET", "/storage/list", params=params)

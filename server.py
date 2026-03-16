@@ -1839,6 +1839,117 @@ async def content_stories_languages(
 
 
 @content_mcp.tool(
+    name="stories_create",
+    description="""Create a new story with scenes.
+
+    Creates a story with all metadata and scenes in one call. No need to know the
+    internal JSON structure — just provide flat parameters.
+
+    Parameters:
+    - title: Story title (required)
+    - story_group: Group ID shared across language variants (auto-generated from title if omitted)
+    - language: Language code (de, en, sl, it, es). Default: de
+    - subtitle: Subtitle text
+    - narrator: Narrator name. Default: tschauko
+    - color: Theme color hex. Default: #7CB342
+    - cover: Cover image URL or storage ID
+    - region: Region/location of the story
+    - duration: Duration estimate (e.g. "12 min")
+    - status: draft, published, or archived. Default: draft
+    - author_id: Author identifier. Default: system
+    - author_name: Author display name. Default: System
+    - scenes: List of scene objects, each with:
+        - title (str): Scene title
+        - narrative (str): The narrative text
+        - mood (str): Scene mood/atmosphere
+        - location (str, optional): Scene location
+        - illustrationPrompt (str, optional): AI prompt for illustration
+    """,
+)
+async def content_stories_create(
+    title: str,
+    scenes: List[Dict[str, Any]],
+    story_group: Optional[str] = None,
+    language: str = "de",
+    subtitle: str = "",
+    narrator: str = "tschauko",
+    color: str = "#7CB342",
+    cover: str = "",
+    region: str = "",
+    duration: str = "",
+    status: str = "draft",
+    author_id: str = "system",
+    author_name: str = "System",
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {
+        "title": title,
+        "language": language,
+        "subtitle": subtitle,
+        "narrator": narrator,
+        "color": color,
+        "cover": cover,
+        "region": region,
+        "duration": duration,
+        "status": status,
+        "author_id": author_id,
+        "author_name": author_name,
+        "scenes": scenes,
+    }
+    if story_group:
+        body["story_group"] = story_group
+    return await call_content_api("POST", "/api/v1/stories/", json_body=body)
+
+
+@content_mcp.tool(
+    name="stories_update",
+    description="""Update an existing story.
+
+    Only provided (non-null) fields are updated. If scenes are provided,
+    they replace ALL existing scenes.
+
+    Parameters:
+    - story_group: Story group identifier (required)
+    - language: Language code of the version to update. Default: de
+    - title: New title (optional)
+    - subtitle: New subtitle (optional)
+    - narrator: New narrator name (optional)
+    - color: New theme color hex (optional)
+    - cover: New cover image (optional)
+    - region: New region (optional)
+    - duration: New duration (optional)
+    - status: New status: draft, published, archived (optional)
+    - scenes: New scenes list (replaces all existing scenes, optional)
+    """,
+)
+async def content_stories_update(
+    story_group: str,
+    language: str = "de",
+    title: Optional[str] = None,
+    subtitle: Optional[str] = None,
+    narrator: Optional[str] = None,
+    color: Optional[str] = None,
+    cover: Optional[str] = None,
+    region: Optional[str] = None,
+    duration: Optional[str] = None,
+    status: Optional[str] = None,
+    scenes: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    body = _clean_params(
+        title=title,
+        subtitle=subtitle,
+        narrator=narrator,
+        color=color,
+        cover=cover,
+        region=region,
+        duration=duration,
+        status=status,
+        scenes=scenes,
+    )
+    params = {"language": language}
+    return await call_content_api("PUT", f"/api/v1/stories/{story_group}", json_body=body, params=params)
+
+
+@content_mcp.tool(
     name="stories_generate_languages",
     description="""Batch-generate story translations for multiple languages.
 

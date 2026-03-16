@@ -314,12 +314,14 @@ async def call_business_api(
     *,
     params: Optional[Dict[str, Any]] = None,
     json_body: Optional[Dict[str, Any]] = None,
+    api_key: Optional[str] = None,
 ) -> Any:
     """Call Business API for invoicing, clients, transactions, and documents."""
+    effective_key = api_key or BUSINESS_API_KEY
     return await _fetch_json(
         method,
         f"{BUSINESS_API_BASE}{endpoint}",
-        headers={"X-API-Key": BUSINESS_API_KEY},
+        headers={"X-API-Key": effective_key},
         params=params,
         json_body=json_body,
     )
@@ -1123,16 +1125,19 @@ codepilot_mcp = FastMCP(
     The message is sent immediately and does not wait for a response.
     """,
 )
-async def codepilot_notify_human(message: str) -> Dict[str, Any]:
+async def codepilot_notify_human(message: str, chat_id: Optional[str] = None) -> Dict[str, Any]:
     """Send notification to human via Telegram (routed through Comm API)."""
     if not COMM_API_KEY:
         return {"error": "COMM_API_KEY not configured", "sent": False}
 
     try:
+        body: Dict[str, Any] = {"message": message}
+        if chat_id:
+            body["chat_id"] = chat_id
         result = await call_comm_api(
             "POST",
             "/api/v1/telegram/interventions/notification",
-            json_body={"message": message},
+            json_body=body,
         )
         return {"sent": result.get("sent", False), "message_id": result.get("message_id")}
     except Exception as e:
@@ -1165,6 +1170,7 @@ async def codepilot_ask_human(
     question: str,
     options: Optional[List[str]] = None,
     timeout_seconds: int = 300,
+    chat_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Ask human a question and wait for response (routed through Comm API)."""
     if not COMM_API_KEY:
@@ -1174,24 +1180,30 @@ async def codepilot_ask_human(
         # Determine endpoint based on options
         if options and len(options) > 0:
             # Approval request with buttons
+            body: Dict[str, Any] = {
+                "message": question,
+                "options": options,
+                "timeout_seconds": timeout_seconds,
+            }
+            if chat_id:
+                body["chat_id"] = chat_id
             create_result = await call_comm_api(
                 "POST",
                 "/api/v1/telegram/interventions/approval",
-                json_body={
-                    "message": question,
-                    "options": options,
-                    "timeout_seconds": timeout_seconds,
-                },
+                json_body=body,
             )
         else:
             # Text input request
+            body = {
+                "message": question,
+                "timeout_seconds": timeout_seconds,
+            }
+            if chat_id:
+                body["chat_id"] = chat_id
             create_result = await call_comm_api(
                 "POST",
                 "/api/v1/telegram/interventions/text-input",
-                json_body={
-                    "message": question,
-                    "timeout_seconds": timeout_seconds,
-                },
+                json_body=body,
             )
 
         request_id = create_result.get("id")
@@ -1763,6 +1775,92 @@ async def content_references_update(
 )
 async def content_references_delete(post_id: int, reference_id: int) -> Dict[str, Any]:
     return await call_content_api("DELETE", f"/api/v1/posts/{post_id}/references/{reference_id}")
+
+
+@content_mcp.tool(
+    name="stories_list",
+    description="""List all stories in a given language.
+
+    Stories are multilingual narrative content with scenes, narrators, and illustrations.
+    Returns story cards (no full scene text) with available_languages info.
+
+    Parameters:
+    - language: Language code (de, en, sl, it, es). Default: de
+    - status: Filter by status (draft, published, archived). Default: published
+    """,
+)
+async def content_stories_list(
+    language: str = "de",
+    status: Optional[str] = "published",
+) -> Dict[str, Any]:
+    params = _clean_params(language=language, status=status)
+    return await call_content_api("GET", "/api/v1/stories/", params=params)
+
+
+@content_mcp.tool(
+    name="stories_get",
+    description="""Get a story by group ID and language.
+
+    Returns the full story with all scenes including narrative text, mood, location,
+    illustration prompts, and media references.
+
+    If the requested language doesn't exist and auto_generate=True,
+    the story is automatically translated from the source language (German).
+
+    Parameters:
+    - story_group: Story group identifier (shared across language variants)
+    - language: Language code (de, en, sl, it, es). Default: de
+    - auto_generate: Auto-translate if not available. Default: true
+    """,
+)
+async def content_stories_get(
+    story_group: str,
+    language: str = "de",
+    auto_generate: bool = True,
+) -> Dict[str, Any]:
+    params = _clean_params(language=language, auto_generate=auto_generate)
+    return await call_content_api("GET", f"/api/v1/stories/{story_group}", params=params)
+
+
+@content_mcp.tool(
+    name="stories_languages",
+    description="""List available languages for a story group.
+
+    Returns:
+    - languages: List of available language codes
+    - supported_languages: All supported languages (de, en, sl, it, es)
+    - missing_languages: Languages not yet translated
+    """,
+)
+async def content_stories_languages(
+    story_group: str,
+) -> Dict[str, Any]:
+    return await call_content_api("GET", f"/api/v1/stories/{story_group}/languages")
+
+
+@content_mcp.tool(
+    name="stories_generate_languages",
+    description="""Batch-generate story translations for multiple languages.
+
+    Translates the story from its source language (German) into the requested target languages.
+    Only generates TEXT — no audio generation.
+
+    Parameters:
+    - story_group: Story group identifier
+    - languages: List of target language codes (e.g. ["en", "sl", "it"])
+    - force_refresh: Re-translate even if translation already exists. Default: false
+    """,
+)
+async def content_stories_generate_languages(
+    story_group: str,
+    languages: List[str],
+    force_refresh: bool = False,
+) -> Dict[str, Any]:
+    return await call_content_api(
+        "POST",
+        f"/api/v1/stories/{story_group}/generate-languages",
+        json_body={"languages": languages, "force_refresh": force_refresh},
+    )
 
 
 @content_mcp.tool(
@@ -2977,17 +3075,17 @@ Use clients_list() to get current list with IDs.
     name="dashboard_summary",
     description="Get dashboard summary: income/expense YTD and MTD, profit, open documents.",
 )
-async def business_dashboard_summary() -> Dict[str, Any]:
-    return await call_business_api("GET", "/api/v1/dashboard/summary")
+async def business_dashboard_summary(api_key: Optional[str] = None) -> Dict[str, Any]:
+    return await call_business_api("GET", "/api/v1/dashboard/summary", api_key=api_key)
 
 
 @business_mcp.tool(
     name="dashboard_cashflow",
     description="Get monthly cashflow data (income, expense, profit per month) for a given year.",
 )
-async def business_dashboard_cashflow(year: Optional[int] = None) -> List[Dict[str, Any]]:
+async def business_dashboard_cashflow(year: Optional[int] = None, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
     params = _clean_params(year=year)
-    return await call_business_api("GET", "/api/v1/dashboard/cashflow", params=params)
+    return await call_business_api("GET", "/api/v1/dashboard/cashflow", params=params, api_key=api_key)
 
 
 # --- Clients ---
@@ -3000,17 +3098,18 @@ async def business_dashboard_cashflow(year: Optional[int] = None) -> List[Dict[s
 async def business_clients_list(
     search: Optional[str] = None,
     limit: int = 50,
+    api_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     params = _clean_params(search=search, limit=limit)
-    return await call_business_api("GET", "/api/v1/clients/", params=params)
+    return await call_business_api("GET", "/api/v1/clients/", params=params, api_key=api_key)
 
 
 @business_mcp.tool(
     name="clients_get",
     description="Get a single client by ID with all details.",
 )
-async def business_clients_get(client_id: int) -> Dict[str, Any]:
-    return await call_business_api("GET", f"/api/v1/clients/{client_id}")
+async def business_clients_get(client_id: int, api_key: Optional[str] = None) -> Dict[str, Any]:
+    return await call_business_api("GET", f"/api/v1/clients/{client_id}", api_key=api_key)
 
 
 @business_mcp.tool(
@@ -3028,13 +3127,14 @@ async def business_clients_create(
     country: str = "AT",
     uid_number: Optional[str] = None,
     notes: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {"name": name, "country": country}
     for k, v in {"company": company, "email": email, "phone": phone, "address": address,
                   "zip": zip, "city": city, "uid_number": uid_number, "notes": notes}.items():
         if v is not None:
             body[k] = v
-    return await call_business_api("POST", "/api/v1/clients/", json_body=body)
+    return await call_business_api("POST", "/api/v1/clients/", json_body=body, api_key=api_key)
 
 
 @business_mcp.tool(
@@ -3056,6 +3156,7 @@ async def business_clients_update(
     lead_status: Optional[str] = None,
     source: Optional[str] = None,
     next_followup_at: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {}
     for k, v in {"name": name, "company": company, "email": email, "phone": phone,
@@ -3064,7 +3165,7 @@ async def business_clients_update(
                   "source": source, "next_followup_at": next_followup_at}.items():
         if v is not None:
             body[k] = v
-    return await call_business_api("PATCH", f"/api/v1/clients/{client_id}", json_body=body)
+    return await call_business_api("PATCH", f"/api/v1/clients/{client_id}", json_body=body, api_key=api_key)
 
 
 # --- CRM ---
@@ -3077,10 +3178,11 @@ async def business_clients_update(
 async def business_clients_update_status(
     client_id: int,
     lead_status: str,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     return await call_business_api(
         "PATCH", f"/api/v1/clients/{client_id}",
-        json_body={"lead_status": lead_status},
+        json_body={"lead_status": lead_status}, api_key=api_key,
     )
 
 
@@ -3093,12 +3195,13 @@ async def business_clients_log_interaction(
     interaction_type: str,
     subject: str,
     description: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {"interaction_type": interaction_type, "subject": subject}
     if description:
         body["description"] = description
     return await call_business_api(
-        "POST", f"/api/v1/clients/{client_id}/interactions", json_body=body,
+        "POST", f"/api/v1/clients/{client_id}/interactions", json_body=body, api_key=api_key,
     )
 
 
@@ -3109,10 +3212,11 @@ async def business_clients_log_interaction(
 async def business_clients_interactions(
     client_id: int,
     limit: int = 20,
+    api_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     params = _clean_params(limit=limit)
     return await call_business_api(
-        "GET", f"/api/v1/clients/{client_id}/interactions", params=params,
+        "GET", f"/api/v1/clients/{client_id}/interactions", params=params, api_key=api_key,
     )
 
 
@@ -3120,16 +3224,16 @@ async def business_clients_interactions(
     name="clients_pipeline",
     description="CRM pipeline overview: clients grouped by lead status (lead, prospect, active, inactive, lost) with counts.",
 )
-async def business_clients_pipeline() -> Dict[str, Any]:
-    return await call_business_api("GET", "/api/v1/crm/pipeline")
+async def business_clients_pipeline(api_key: Optional[str] = None) -> Dict[str, Any]:
+    return await call_business_api("GET", "/api/v1/crm/pipeline", api_key=api_key)
 
 
 @business_mcp.tool(
     name="clients_followups",
     description="List clients with overdue or upcoming followups (next 7 days). Returns overdue and upcoming lists.",
 )
-async def business_clients_followups() -> Dict[str, Any]:
-    return await call_business_api("GET", "/api/v1/crm/followups")
+async def business_clients_followups(api_key: Optional[str] = None) -> Dict[str, Any]:
+    return await call_business_api("GET", "/api/v1/crm/followups", api_key=api_key)
 
 
 @business_mcp.tool(
@@ -3139,10 +3243,11 @@ async def business_clients_followups() -> Dict[str, Any]:
 async def business_clients_set_followup(
     client_id: int,
     next_followup_at: str,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     return await call_business_api(
         "PATCH", f"/api/v1/clients/{client_id}",
-        json_body={"next_followup_at": next_followup_at},
+        json_body={"next_followup_at": next_followup_at}, api_key=api_key,
     )
 
 
@@ -3159,17 +3264,18 @@ async def business_documents_list(
     client_id: Optional[int] = None,
     year: Optional[int] = None,
     limit: int = 50,
+    api_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     params = _clean_params(doc_type=doc_type, status=status, client_id=client_id, year=year, limit=limit)
-    return await call_business_api("GET", "/api/v1/documents/", params=params)
+    return await call_business_api("GET", "/api/v1/documents/", params=params, api_key=api_key)
 
 
 @business_mcp.tool(
     name="documents_get",
     description="Get a single document with all line items and client details.",
 )
-async def business_documents_get(doc_id: int) -> Dict[str, Any]:
-    return await call_business_api("GET", f"/api/v1/documents/{doc_id}")
+async def business_documents_get(doc_id: int, api_key: Optional[str] = None) -> Dict[str, Any]:
+    return await call_business_api("GET", f"/api/v1/documents/{doc_id}", api_key=api_key)
 
 
 @business_mcp.tool(
@@ -3185,6 +3291,7 @@ async def business_create_honorarnote(
     issued_date: Optional[str] = None,
     due_days: int = 14,
     notes: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {
         "client_id": client_id,
@@ -3198,7 +3305,7 @@ async def business_create_honorarnote(
         body["issued_date"] = issued_date
     if notes:
         body["notes"] = notes
-    return await call_business_api("POST", "/api/v1/documents/honorarnote", json_body=body)
+    return await call_business_api("POST", "/api/v1/documents/honorarnote", json_body=body, api_key=api_key)
 
 
 @business_mcp.tool(
@@ -3212,6 +3319,7 @@ async def business_create_invoice(
     issued_date: Optional[str] = None,
     due_days: int = 14,
     notes: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {
         "client_id": client_id,
@@ -3223,7 +3331,7 @@ async def business_create_invoice(
         body["issued_date"] = issued_date
     if notes:
         body["notes"] = notes
-    return await call_business_api("POST", "/api/v1/documents/invoice", json_body=body)
+    return await call_business_api("POST", "/api/v1/documents/invoice", json_body=body, api_key=api_key)
 
 
 @business_mcp.tool(
@@ -3233,19 +3341,20 @@ async def business_create_invoice(
 async def business_documents_mark_paid(
     doc_id: int,
     paid_date: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {}
     if paid_date:
         body["paid_date"] = paid_date
-    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/mark-paid", json_body=body)
+    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/mark-paid", json_body=body, api_key=api_key)
 
 
 @business_mcp.tool(
     name="documents_regenerate_pdf",
     description="Regenerate the PDF for an existing document (e.g. after template changes).",
 )
-async def business_documents_regenerate_pdf(doc_id: int) -> Dict[str, Any]:
-    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/regenerate-pdf")
+async def business_documents_regenerate_pdf(doc_id: int, api_key: Optional[str] = None) -> Dict[str, Any]:
+    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/regenerate-pdf", api_key=api_key)
 
 
 @business_mcp.tool(
@@ -3255,19 +3364,20 @@ async def business_documents_regenerate_pdf(doc_id: int) -> Dict[str, Any]:
 async def business_documents_send(
     doc_id: int,
     recipient_email: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {}
     if recipient_email:
         body["recipient_email"] = recipient_email
-    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/send", json_body=body)
+    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/send", json_body=body, api_key=api_key)
 
 
 @business_mcp.tool(
     name="documents_cancel",
     description="Cancel a document (status → cancelled).",
 )
-async def business_documents_cancel(doc_id: int) -> Dict[str, Any]:
-    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/cancel")
+async def business_documents_cancel(doc_id: int, api_key: Optional[str] = None) -> Dict[str, Any]:
+    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/cancel", api_key=api_key)
 
 
 # --- Transactions ---
@@ -3282,9 +3392,10 @@ async def business_transactions_list(
     year: Optional[int] = None,
     category: Optional[str] = None,
     limit: int = 100,
+    api_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     params = _clean_params(tx_type=tx_type, year=year, category=category, limit=limit)
-    return await call_business_api("GET", "/api/v1/transactions", params=params)
+    return await call_business_api("GET", "/api/v1/transactions", params=params, api_key=api_key)
 
 
 @business_mcp.tool(
@@ -3300,20 +3411,21 @@ async def business_transactions_create(
     vat_rate: float = 0.0,
     client_id: Optional[int] = None,
     receipt_url: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {"tx_type": tx_type, "amount": amount, "vat_rate": vat_rate}
     for k, v in {"category": category, "description": description, "tx_date": tx_date, "client_id": client_id, "receipt_url": receipt_url}.items():
         if v is not None:
             body[k] = v
-    return await call_business_api("POST", "/api/v1/transactions", json_body=body)
+    return await call_business_api("POST", "/api/v1/transactions", json_body=body, api_key=api_key)
 
 
 @business_mcp.tool(
     name="transactions_delete",
     description="Delete a transaction by ID. Only works for transactions not linked to documents.",
 )
-async def business_transactions_delete(tx_id: int) -> Dict[str, str]:
-    await call_business_api("DELETE", f"/api/v1/transactions/{tx_id}")
+async def business_transactions_delete(tx_id: int, api_key: Optional[str] = None) -> Dict[str, str]:
+    await call_business_api("DELETE", f"/api/v1/transactions/{tx_id}", api_key=api_key)
     return {"status": "deleted", "id": str(tx_id)}
 
 
@@ -3324,9 +3436,9 @@ async def business_transactions_delete(tx_id: int) -> Dict[str, str]:
     name="categories_list",
     description="List transaction categories. Optional filter by cat_type (income/expense).",
 )
-async def business_categories_list(cat_type: Optional[str] = None) -> List[Dict[str, Any]]:
+async def business_categories_list(cat_type: Optional[str] = None, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
     params = _clean_params(cat_type=cat_type)
-    return await call_business_api("GET", "/api/v1/categories", params=params)
+    return await call_business_api("GET", "/api/v1/categories", params=params, api_key=api_key)
 
 
 # --- Service Health ---

@@ -1975,6 +1975,112 @@ async def content_stories_generate_languages(
 
 
 @content_mcp.tool(
+    name="collections_list",
+    description="""List all collections.
+
+    Collections are optional groupings for posts (e.g. by project, topic, or campaign).
+    Returns collections with their post counts.
+    """,
+)
+async def content_collections_list() -> Dict[str, Any]:
+    return await call_content_api("GET", "/api/v1/collections/")
+
+
+@content_mcp.tool(
+    name="collections_get",
+    description="""Get a collection by slug with all its posts.
+
+    Parameters:
+    - slug: Collection slug (e.g. "adic26-defense")
+    """,
+)
+async def content_collections_get(slug: str) -> Dict[str, Any]:
+    return await call_content_api("GET", f"/api/v1/collections/{slug}")
+
+
+@content_mcp.tool(
+    name="collections_create",
+    description="""Create a new collection.
+
+    Parameters:
+    - name: Collection name (required)
+    - description: Optional description
+    - color: Optional hex color (e.g. "#4CAF50")
+    - icon: Optional icon name or emoji
+    """,
+)
+async def content_collections_create(
+    name: str,
+    description: str = "",
+    color: Optional[str] = None,
+    icon: Optional[str] = None,
+) -> Dict[str, Any]:
+    body = _clean_params(name=name, description=description, color=color, icon=icon)
+    return await call_content_api("POST", "/api/v1/collections/", json_body=body)
+
+
+@content_mcp.tool(
+    name="collections_update",
+    description="""Update an existing collection.
+
+    Parameters:
+    - collection_id: Collection ID (required)
+    - name: New name (optional)
+    - description: New description (optional)
+    - color: New color (optional)
+    - icon: New icon (optional)
+    """,
+)
+async def content_collections_update(
+    collection_id: int,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    color: Optional[str] = None,
+    icon: Optional[str] = None,
+) -> Dict[str, Any]:
+    body = _clean_params(name=name, description=description, color=color, icon=icon)
+    return await call_content_api("PUT", f"/api/v1/collections/{collection_id}", json_body=body)
+
+
+@content_mcp.tool(
+    name="collections_delete",
+    description="""Delete a collection. Does NOT delete the posts inside it.
+
+    Parameters:
+    - collection_id: Collection ID to delete
+    """,
+)
+async def content_collections_delete(collection_id: int) -> Dict[str, Any]:
+    return await call_content_api("DELETE", f"/api/v1/collections/{collection_id}")
+
+
+@content_mcp.tool(
+    name="collections_add_post",
+    description="""Add a post to a collection.
+
+    Parameters:
+    - collection_id: Collection ID
+    - post_id: Post ID to add
+    """,
+)
+async def content_collections_add_post(collection_id: int, post_id: int) -> Dict[str, Any]:
+    return await call_content_api("POST", f"/api/v1/collections/{collection_id}/posts/{post_id}")
+
+
+@content_mcp.tool(
+    name="collections_remove_post",
+    description="""Remove a post from a collection.
+
+    Parameters:
+    - collection_id: Collection ID
+    - post_id: Post ID to remove
+    """,
+)
+async def content_collections_remove_post(collection_id: int, post_id: int) -> Dict[str, Any]:
+    return await call_content_api("DELETE", f"/api/v1/collections/{collection_id}/posts/{post_id}")
+
+
+@content_mcp.tool(
     name="service_health",
     description="Health check for the Content API.",
 )

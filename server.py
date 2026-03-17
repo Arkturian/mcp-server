@@ -13,6 +13,7 @@ Exposes MCP endpoint groups over HTTP/SSE with per-tenant isolation:
   • /tree           – Collaborative tree editing with node-level CRUD and real-time sync
   • /business       – Business management: Honorarnoten, Rechnungen, Kunden, Transaktionen
   • /comm           – Unified communication: Email, Telegram, Interventions
+  • /review         – AI-powered multi-perspective review orchestrator
 """
 
 from __future__ import annotations
@@ -99,6 +100,11 @@ COMM_API_KEY = os.getenv("COMM_API_KEY", "")
 
 # Knowledge API
 KNOWLEDGE_API_BASE = os.getenv("KNOWLEDGE_API_BASE", "https://knowledge-api.arkturian.com")
+
+# Review API
+REVIEW_API_BASE = os.getenv("REVIEW_API_BASE", "https://review-api.arkturian.com")
+REVIEW_API_KEY = os.getenv("REVIEW_API_KEY", "")
+REVIEW_PATH = "/review"
 
 # --------------------------------------------------------------------------- #
 # HTTP helpers
@@ -250,6 +256,24 @@ async def call_knowledge_api(
         headers={},
         params=params,
         json_body=json_body,
+    )
+
+
+async def call_review_api(
+    method: str,
+    endpoint: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """Call Review API with API key auth."""
+    return await _fetch_json(
+        method,
+        f"{REVIEW_API_BASE}{endpoint}",
+        headers={"X-API-Key": REVIEW_API_KEY} if REVIEW_API_KEY else {},
+        params=params,
+        json_body=json_body,
+        timeout=180.0,  # Reviews can take a while
     )
 
 
@@ -3147,6 +3171,188 @@ knowledge_app = knowledge_mcp.streamable_http_app()
 app.mount(KNOWLEDGE_PATH, knowledge_app)
 
 # --------------------------------------------------------------------------- #
+# Review MCP - AI-powered multi-perspective review orchestrator
+# --------------------------------------------------------------------------- #
+
+review_mcp = FastMCP(
+    name="review-api",
+    streamable_http_path="/",
+    stateless_http=True,
+    log_level="INFO",
+)
+
+
+def _clean_params(**kwargs: Any) -> Dict[str, Any]:
+    """Remove None values from keyword arguments."""
+    return {k: v for k, v in kwargs.items() if v is not None}
+
+
+@review_mcp.resource(uri="docs://review/guide", name="Review API Guide")
+async def review_guide() -> str:
+    return """# Review Orchestrator - AI Quick Reference
+
+## Quick Start
+1. `reviews_quick_website(url="https://example.com")` - Full website review
+2. `reviews_create(subject_type="document", subject_title="My Doc", perspectives=["structure","clarity"], auto_execute=true)` - Custom review
+3. `reviews_get(review_id=1)` - Check results
+4. `reviews_findings(review_id=1)` - Get detailed findings
+
+## Subject Types
+- website: Web pages and landing pages
+- presentation: Pitch decks, slide decks
+- document: PDFs, DOCX, Markdown documents
+- app_screen: App UI screens and flows
+- api_content: Content from Content API
+- branding: Brand assets and visual identity
+
+## Perspectives
+- design: Visual design, aesthetics, color, typography
+- structure: Information architecture, hierarchy, organization
+- clarity: Readability, comprehension, conciseness
+- storytelling: Narrative flow, audience engagement
+- brand_impact: Brand consistency, memorability
+- consistency: Cross-element consistency
+- ux: User experience, navigation, accessibility
+- content_quality: Writing quality, accuracy, tone
+- developer_readiness: Technical spec, implementation readiness
+
+## Goals
+- improve: General quality improvement suggestions
+- prioritize: Focus on highest-impact changes
+- sharpen: Optimize for specific audience
+- handoff: Prepare for developer/team handoff
+
+## Tips
+- Use `context` parameter to provide additional info (target audience, brand guidelines, etc.)
+- Use `templates_list()` to see predefined review configurations
+- Reviews run in the background - check status with `reviews_get()`
+"""
+
+
+@review_mcp.tool(
+    name="reviews_create",
+    description="Create a new review. Set auto_execute=true to start immediately. Perspectives: design, structure, clarity, storytelling, brand_impact, consistency, ux, content_quality, developer_readiness.",
+)
+async def review_reviews_create(
+    subject_type: str,
+    subject_title: str,
+    perspectives: List[str],
+    subject_url: Optional[str] = None,
+    subject_data: Optional[Dict[str, Any]] = None,
+    goal: str = "improve",
+    context: Optional[str] = None,
+    template_slug: Optional[str] = None,
+    auto_execute: bool = False,
+) -> Dict[str, Any]:
+    return await call_review_api(
+        "POST",
+        "/api/v1/reviews",
+        json_body={
+            "subject_type": subject_type,
+            "subject_title": subject_title,
+            "perspectives": perspectives,
+            "subject_url": subject_url,
+            "subject_data": subject_data or {},
+            "goal": goal,
+            "context": context,
+            "template_slug": template_slug,
+            "auto_execute": auto_execute,
+        },
+    )
+
+
+@review_mcp.tool(
+    name="reviews_list",
+    description="List reviews. Optional filters: status (pending/gathering/analyzing/synthesizing/completed/failed), subject_type, limit.",
+)
+async def review_reviews_list(
+    status: Optional[str] = None,
+    subject_type: Optional[str] = None,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    return await call_review_api(
+        "GET",
+        "/api/v1/reviews",
+        params=_clean_params(status=status, subject_type=subject_type, limit=limit),
+    )
+
+
+@review_mcp.tool(
+    name="reviews_get",
+    description="Get a review with summary, overall score, and priority actions.",
+)
+async def review_reviews_get(review_id: int) -> Dict[str, Any]:
+    return await call_review_api("GET", f"/api/v1/reviews/{review_id}")
+
+
+@review_mcp.tool(
+    name="reviews_findings",
+    description="Get all findings for a review. Optional filters: perspective, severity (critical/warning/info/positive).",
+)
+async def review_reviews_findings(
+    review_id: int,
+    perspective: Optional[str] = None,
+    severity: Optional[str] = None,
+) -> Dict[str, Any]:
+    return await call_review_api(
+        "GET",
+        f"/api/v1/reviews/{review_id}/findings",
+        params=_clean_params(perspective=perspective, severity=severity),
+    )
+
+
+@review_mcp.tool(
+    name="reviews_execute",
+    description="Trigger or re-trigger review execution. The review runs in the background.",
+)
+async def review_reviews_execute(review_id: int) -> Dict[str, Any]:
+    return await call_review_api("POST", f"/api/v1/reviews/{review_id}/execute")
+
+
+@review_mcp.tool(
+    name="reviews_quick_website",
+    description="One-shot website review. Provide a URL and optionally select perspectives and goal.",
+)
+async def review_reviews_quick_website(
+    url: str,
+    perspectives: Optional[List[str]] = None,
+    goal: str = "improve",
+    context: Optional[str] = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"url": url, "goal": goal}
+    if perspectives:
+        body["perspectives"] = perspectives
+    if context:
+        body["context"] = context
+    return await call_review_api("POST", "/api/v1/reviews/quick/website", json_body=body)
+
+
+@review_mcp.tool(
+    name="templates_list",
+    description="List available review templates. Optional filter: subject_type.",
+)
+async def review_templates_list(
+    subject_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    return await call_review_api(
+        "GET",
+        "/api/v1/templates",
+        params=_clean_params(subject_type=subject_type),
+    )
+
+
+@review_mcp.tool(
+    name="templates_get",
+    description="Get a review template by ID.",
+)
+async def review_templates_get(template_id: int) -> Dict[str, Any]:
+    return await call_review_api("GET", f"/api/v1/templates/{template_id}")
+
+
+review_app = review_mcp.streamable_http_app()
+app.mount(REVIEW_PATH, review_app)
+
+# --------------------------------------------------------------------------- #
 # Tarot MCP - Tarot card reading tools
 # --------------------------------------------------------------------------- #
 
@@ -4064,6 +4270,7 @@ _tarot_stack = AsyncExitStack()
 _business_stack = AsyncExitStack()
 _comm_stack = AsyncExitStack()
 _knowledge_stack = AsyncExitStack()
+_review_stack = AsyncExitStack()
 
 
 @app.on_event("startup")
@@ -4104,9 +4311,15 @@ async def startup() -> None:
     await _knowledge_stack.enter_async_context(knowledge_mcp.session_manager.run())
     await knowledge_app.router.startup()
 
+    await _review_stack.enter_async_context(review_mcp.session_manager.run())
+    await review_app.router.startup()
+
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    await review_app.router.shutdown()
+    await _review_stack.aclose()
+
     await knowledge_app.router.shutdown()
     await _knowledge_stack.aclose()
 
@@ -4221,6 +4434,12 @@ async def root() -> Dict[str, Any]:
                 "tools": [tool.name for tool in knowledge_mcp._tool_manager.list_tools()],
                 "upstream": KNOWLEDGE_API_BASE,
                 "description": "AI-powered knowledge extraction, annotated knowledge with visual annotations, and audio generation",
+            },
+            "review": {
+                "path": REVIEW_PATH,
+                "tools": [tool.name for tool in review_mcp._tool_manager.list_tools()],
+                "upstream": REVIEW_API_BASE,
+                "description": "AI-powered multi-perspective review orchestrator for websites, documents, presentations, and content",
             },
         },
     }

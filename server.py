@@ -1152,6 +1152,25 @@ async def artrack_waypoint_get(waypoint_id: int) -> Dict[str, Any]:
 
 
 @artrack_mcp.tool(
+    name="knowledge_get",
+    description="""Get all audio guide narration texts for a track.
+
+    Returns the complete knowledge object with:
+    - config: persona, target_audience, language, tone, background_knowledge
+    - routes: intro/outro narrative texts per route
+    - segments: entry/exit narrative texts per segment
+    - pois: approaching/at_poi narrative texts per POI
+    - Audio cues with storage IDs and durations (if generated)
+
+    Each narrative text includes: text, text_original, edited flag.
+    Data is stored in content-api as doc_type 'artrack_narration'.
+    """,
+)
+async def artrack_knowledge_get(track_id: int) -> Dict[str, Any]:
+    return await call_artrack_api("GET", f"/tracks/{track_id}/knowledge")
+
+
+@artrack_mcp.tool(
     name="service_health",
     description="Health check for the Artrack API.",
 )
@@ -1494,13 +1513,15 @@ content_mcp = FastMCP(
     - created_at, updated_at
     - media count, annotations count, blocks count
 
-    Filters: status (draft|published|archived), author_id, content_type
+    Filters: status, author_id, content_type, doc_type, partner_id
     """,
 )
 async def content_posts_list(
     status: Optional[str] = None,
     author_id: Optional[str] = None,
     content_type: Optional[str] = None,
+    doc_type: Optional[str] = None,
+    partner_id: Optional[str] = None,
     limit: int = 20,
     offset: int = 0,
 ) -> Dict[str, Any]:
@@ -1508,6 +1529,8 @@ async def content_posts_list(
         status=status,
         author_id=author_id,
         content_type=content_type,
+        doc_type=doc_type,
+        partner_id=partner_id,
         limit=limit,
         offset=offset,
     )

@@ -1285,6 +1285,183 @@ async def artrack_knowledge_get(track_id: int) -> Dict[str, Any]:
 
 
 @artrack_mcp.tool(
+    name="waypoint_update",
+    description="""Update a waypoint/POI.
+
+    Parameters:
+    - waypoint_id: ID of the waypoint to update (required)
+    - title: Display name of the POI (stored in metadata_json)
+    - description: Full description text (user_description field)
+    - tags: List of tags (stored in metadata_json)
+    - priority: Display importance from -1.0 to 1.0 (higher = more prominent)
+
+    Only provided fields are updated, others remain unchanged.
+    """,
+)
+async def artrack_waypoint_update(
+    waypoint_id: int,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    priority: Optional[float] = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {}
+    if title is not None:
+        body["title"] = title
+    if description is not None:
+        body["description"] = description
+    if tags is not None:
+        body["tags"] = tags
+    if priority is not None:
+        body["priority"] = priority
+    return await call_artrack_api("PUT", f"/waypoints/{waypoint_id}", json_body=body)
+
+
+@artrack_mcp.tool(
+    name="waypoint_attach_storage",
+    description="""Attach storage media to a waypoint/POI.
+
+    Links one or more Storage API objects (images, audio, video) to a waypoint.
+    Use storage.assets_upload or storage.assets_fetch first to get storage IDs.
+
+    Parameters:
+    - waypoint_id: ID of the waypoint (required)
+    - storage_ids: List of Storage object IDs to attach (required)
+    - media_type: Type hint — 'photo', 'audio', or 'video' (optional)
+    """,
+)
+async def artrack_waypoint_attach_storage(
+    waypoint_id: int,
+    storage_ids: List[int],
+    media_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"storageIds": storage_ids}
+    if media_type:
+        body["mediaType"] = media_type
+    return await call_artrack_api("POST", f"/waypoints/{waypoint_id}/attach-storage", json_body=body)
+
+
+@artrack_mcp.tool(
+    name="route_update",
+    description="""Update a route.
+
+    Parameters:
+    - track_id: Track ID (required)
+    - route_id: Route ID (required)
+    - name: Route display name
+    - color: Route color (hex, e.g. '#FF5733')
+    - description: Route description text
+    - storage_object_ids: List of Storage IDs for route media (cover images etc.)
+
+    Only provided fields are updated.
+    """,
+)
+async def artrack_route_update(
+    track_id: int,
+    route_id: int,
+    name: Optional[str] = None,
+    color: Optional[str] = None,
+    description: Optional[str] = None,
+    storage_object_ids: Optional[List[int]] = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {}
+    if name is not None:
+        body["name"] = name
+    if color is not None:
+        body["color"] = color
+    if description is not None:
+        body["description"] = description
+    if storage_object_ids is not None:
+        body["storage_object_ids"] = storage_object_ids
+    return await call_artrack_api("PATCH", f"/tracks/{track_id}/routes/{route_id}", json_body=body)
+
+
+@artrack_mcp.tool(
+    name="track_update",
+    description="""Update a track.
+
+    Parameters:
+    - track_id: Track ID (required)
+    - name: Track name
+    - description: Track description
+    - visibility: 'public', 'followers', or 'private'
+    - track_type: e.g. 'hiking', 'biking'
+    - tags: List of tags
+    - storage_object_ids: List of Storage IDs for track media
+
+    Only provided fields are updated.
+    """,
+)
+async def artrack_track_update(
+    track_id: int,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    visibility: Optional[str] = None,
+    track_type: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    storage_object_ids: Optional[List[int]] = None,
+) -> Dict[str, Any]:
+    # Need current track data for required fields
+    current = await call_artrack_api("GET", f"/tracks/{track_id}")
+    body: Dict[str, Any] = {
+        "name": name if name is not None else current.get("name", ""),
+        "client_track_id": current.get("client_track_id", ""),
+    }
+    if description is not None:
+        body["description"] = description
+    if visibility is not None:
+        body["visibility"] = visibility
+    if track_type is not None:
+        body["track_type"] = track_type
+    if tags is not None:
+        body["tags"] = tags
+    if storage_object_ids is not None:
+        body["storage_object_ids"] = storage_object_ids
+    return await call_artrack_api("PUT", f"/tracks/{track_id}", json_body=body)
+
+
+@artrack_mcp.tool(
+    name="guide_config_update",
+    description="""Update the audio guide configuration for a track.
+
+    Parameters:
+    - track_id: Track ID (required)
+    - language: Language code (e.g. 'de-AT', 'en-US')
+    - persona: Narrator persona/character description
+    - user_type: Target audience (e.g. 'wanderer', 'family', 'sportler')
+    - narrative_tone: Tone of narration (e.g. 'motivating', 'informative', 'poetic')
+    - user_interests: List of user interests for personalization
+    - default_radius: POI trigger radius in meters (default 15)
+
+    Only provided fields are updated in the guide config.
+    """,
+)
+async def artrack_guide_config_update(
+    track_id: int,
+    language: Optional[str] = None,
+    persona: Optional[str] = None,
+    user_type: Optional[str] = None,
+    narrative_tone: Optional[str] = None,
+    user_interests: Optional[List[str]] = None,
+    default_radius: Optional[int] = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {}
+    if language is not None:
+        body["language"] = language
+    if persona is not None:
+        body["persona"] = persona
+    if user_type is not None:
+        body["userType"] = user_type
+    if narrative_tone is not None:
+        body["narrativeTone"] = narrative_tone
+    if user_interests is not None:
+        body["userInterests"] = user_interests
+    if default_radius is not None:
+        body["defaultRadius"] = default_radius
+    return await call_artrack_api("PUT", f"/guides/{track_id}/guide-config", json_body=body)
+
+
+@artrack_mcp.tool(
     name="service_health",
     description="Health check for the Artrack API.",
 )

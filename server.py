@@ -1038,7 +1038,8 @@ artrack_mcp = FastMCP(
     description="List all tracks for the authenticated user.",
 )
 async def artrack_tracks_list() -> Dict[str, Any]:
-    return await call_artrack_api("GET", "/tracks/")
+    tracks = await call_artrack_api("GET", "/tracks/")
+    return {"tracks": tracks, "total": len(tracks)}
 
 
 @artrack_mcp.tool(

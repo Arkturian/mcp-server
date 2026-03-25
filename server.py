@@ -1294,8 +1294,16 @@ async def artrack_knowledge_get(track_id: int) -> Dict[str, Any]:
     - description: Full description text (user_description field)
     - tags: List of tags (stored in metadata_json)
     - priority: Display importance from -1.0 to 1.0 (higher = more prominent)
+    - metadata_json: Dict to merge into existing metadata. Supports deep merge for nested objects.
+                     Use this for assets, category, subcategory, or any custom fields.
 
     Only provided fields are updated, others remain unchanged.
+
+    Example: Set a POI icon via metadata_json
+      waypoint_update(waypoint_id=24693, metadata_json={"assets": [{"id": 103948, "role": "icon"}]})
+
+    Example: Set category
+      waypoint_update(waypoint_id=24693, metadata_json={"category": "waterfall", "subcategory": "scenic"})
     """,
 )
 async def artrack_waypoint_update(
@@ -1304,6 +1312,7 @@ async def artrack_waypoint_update(
     description: Optional[str] = None,
     tags: Optional[List[str]] = None,
     priority: Optional[float] = None,
+    metadata_json: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {}
     if title is not None:
@@ -1314,6 +1323,8 @@ async def artrack_waypoint_update(
         body["tags"] = tags
     if priority is not None:
         body["priority"] = priority
+    if metadata_json is not None:
+        body["metadata_json"] = metadata_json
     return await call_artrack_api("PUT", f"/waypoints/{waypoint_id}", json_body=body)
 
 

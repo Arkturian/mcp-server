@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+import base64
 from contextlib import AsyncExitStack
 from typing import Any, Dict, List, Optional
 
@@ -159,6 +160,33 @@ async def call_storage_api(
         params=params,
         json_body=json_body,
     )
+
+
+async def call_storage_upload(
+    file_bytes: bytes,
+    filename: str,
+    *,
+    form_fields: Optional[Dict[str, str]] = None,
+) -> Any:
+    """Upload a file to Storage API via multipart form-data."""
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        try:
+            files = {"file": (filename, file_bytes)}
+            data = form_fields or {}
+            response = await client.post(
+                f"{STORAGE_API_BASE}/storage/upload",
+                headers={"X-API-KEY": STORAGE_API_KEY},
+                files=files,
+                data=data,
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as exc:
+            logger.error("Upload error: %s", exc.response.text)
+            raise
+        except httpx.HTTPError as exc:
+            logger.error("Upload request failed: %s", exc)
+            raise
 
 
 async def call_oneal_api(
@@ -669,6 +697,91 @@ async def storage_assets_update_embedding_text(
         f"/storage/objects/{id}/embedding-text",
         json_body={"embedding_text": embedding_text}
     )
+
+
+@storage_mcp.tool(
+    name="assets_upload",
+    description="""Upload a file to Storage via base64-encoded content.
+
+    Accepts file content as a base64 string and uploads it to Storage API.
+    The file is stored, and optionally analyzed by AI (vision, safety, embedding).
+
+    Parameters:
+    - file_base64: Base64-encoded file content (required)
+    - filename: Original filename with extension, e.g. 'photo.jpg' (required)
+    - context: Metadata context tag (e.g. 'product image', 'documentation')
+    - collection_id: Group into a collection (e.g. 'helmets_2026')
+    - link_id: Link related files together
+    - is_public: Make publicly accessible (default false)
+    - ai_mode: AI analysis level — 'none', 'safety' (default), 'vision', 'full'
+
+    Returns the created storage object with id, file_url, thumbnail_url, ai_title, etc.
+
+    Example: Upload a small file
+      assets_upload(file_base64="iVBORw0KGgo...", filename="logo.png", context="branding")
+    """,
+)
+async def storage_assets_upload(
+    file_base64: str,
+    filename: str,
+    context: Optional[str] = None,
+    collection_id: Optional[str] = None,
+    link_id: Optional[str] = None,
+    is_public: bool = False,
+    ai_mode: str = "safety",
+) -> Dict[str, Any]:
+    file_bytes = base64.b64decode(file_base64)
+    form_fields: Dict[str, str] = {"ai_mode": ai_mode, "is_public": str(is_public).lower()}
+    if context:
+        form_fields["context"] = context
+    if collection_id:
+        form_fields["collection_id"] = collection_id
+    if link_id:
+        form_fields["link_id"] = link_id
+    return await call_storage_upload(file_bytes, filename, form_fields=form_fields)
+
+
+@storage_mcp.tool(
+    name="assets_fetch",
+    description="""Import a file from a URL into Storage.
+
+    Downloads the file from the given URL and stores it in Storage API.
+    Useful for importing images/documents from the web without manual download.
+
+    Parameters:
+    - url: Public URL to fetch the file from (required)
+    - context: Metadata context tag
+    - collection_id: Group into a collection
+    - link_id: Link related files together
+    - is_public: Make publicly accessible (default false)
+    - filename: Override filename (auto-derived from URL if omitted)
+    - analyze: Trigger AI analysis (default true)
+
+    Returns the created storage object with id, file_url, thumbnail_url, etc.
+
+    Example: Import an image from a URL
+      assets_fetch(url="https://example.com/photo.jpg", context="imported", collection_id="web_imports")
+    """,
+)
+async def storage_assets_fetch(
+    url: str,
+    context: Optional[str] = None,
+    collection_id: Optional[str] = None,
+    link_id: Optional[str] = None,
+    is_public: bool = False,
+    filename: Optional[str] = None,
+    analyze: bool = True,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"url": url, "is_public": is_public, "analyze": analyze}
+    if context:
+        body["context"] = context
+    if collection_id:
+        body["collection_id"] = collection_id
+    if link_id:
+        body["link_id"] = link_id
+    if filename:
+        body["filename"] = filename
+    return await call_storage_api("POST", "/storage/fetch", json_body=body)
 
 
 # O'Neal MCP ---------------------------------------------------------------

@@ -107,6 +107,10 @@ REVIEW_API_BASE = os.getenv("REVIEW_API_BASE", "https://review-api.arkturian.com
 REVIEW_API_KEY = os.getenv("REVIEW_API_KEY", "")
 REVIEW_PATH = "/review"
 
+# Cloud API (inter-agent communication)
+CLOUD_API_BASE = os.getenv("CLOUD_API_BASE", "http://localhost:8050")
+CLOUD_PATH = "/cloud"
+
 # --------------------------------------------------------------------------- #
 # HTTP helpers
 # --------------------------------------------------------------------------- #
@@ -302,6 +306,23 @@ async def call_review_api(
         params=params,
         json_body=json_body,
         timeout=180.0,  # Reviews can take a while
+    )
+
+
+async def call_cloud_api(
+    method: str,
+    endpoint: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """Call Cloud API for inter-agent communication."""
+    return await _fetch_json(
+        method,
+        f"{CLOUD_API_BASE}{endpoint}",
+        params=params,
+        json_body=json_body,
+        timeout=180.0,
     )
 
 
@@ -4583,6 +4604,69 @@ comm_app = comm_mcp.streamable_http_app()
 app.mount(COMM_PATH, comm_app)
 
 
+# ── Cloud API (Inter-Agent Communication) ──
+
+cloud_mcp = FastMCP(
+    name="cloud-api",
+    streamable_http_path="/",
+    stateless_http=True,
+    auth=None,
+    log_level="INFO",
+)
+
+
+@cloud_mcp.tool(
+    name="send_message",
+    description="Send a message to another Claude Code agent running in a tmux session and wait for the response. Returns the agent's answer.",
+)
+async def cloud_send_message(
+    from_session: str,
+    to_session: str,
+    message: str,
+    timeout: int = 120,
+) -> Dict[str, Any]:
+    return await call_cloud_api(
+        "POST", "/api/agents/send",
+        json_body={"from": from_session, "to": to_session, "message": message, "wait": True, "timeout": timeout},
+    )
+
+
+@cloud_mcp.tool(
+    name="list_sessions",
+    description="List all active tmux sessions (Claude Code agents).",
+)
+async def cloud_list_sessions() -> Dict[str, Any]:
+    return await call_cloud_api("GET", "/api/sessions")
+
+
+@cloud_mcp.tool(
+    name="read_session",
+    description="Read the current screen content of a tmux session (plain text, no ANSI codes).",
+)
+async def cloud_read_session(session_name: str, lines: int = 50) -> Dict[str, Any]:
+    return await call_cloud_api("GET", f"/api/sessions/{session_name}/capture", params={"lines": lines})
+
+
+@cloud_mcp.tool(
+    name="inbox",
+    description="Check your inbox for messages from other agents.",
+)
+async def cloud_inbox(session_name: str) -> Dict[str, Any]:
+    return await call_cloud_api("GET", f"/api/agents/inbox/{session_name}")
+
+
+@cloud_mcp.tool(
+    name="health",
+    description="Check if the Cloud API is running.",
+)
+async def cloud_health() -> Dict[str, Any]:
+    return await call_cloud_api("GET", "/api/health")
+
+
+cloud_app = cloud_mcp.streamable_http_app()
+app.mount(CLOUD_PATH, cloud_app)
+
+
 _storage_stack = AsyncExitStack()
 _oneal_stack = AsyncExitStack()
 _oneal_storage_stack = AsyncExitStack()
@@ -4596,6 +4680,7 @@ _business_stack = AsyncExitStack()
 _comm_stack = AsyncExitStack()
 _knowledge_stack = AsyncExitStack()
 _review_stack = AsyncExitStack()
+_cloud_stack = AsyncExitStack()
 
 
 @app.on_event("startup")
@@ -4639,9 +4724,15 @@ async def startup() -> None:
     await _review_stack.enter_async_context(review_mcp.session_manager.run())
     await review_app.router.startup()
 
+    await _cloud_stack.enter_async_context(cloud_mcp.session_manager.run())
+    await cloud_app.router.startup()
+
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    await cloud_app.router.shutdown()
+    await _cloud_stack.aclose()
+
     await review_app.router.shutdown()
     await _review_stack.aclose()
 

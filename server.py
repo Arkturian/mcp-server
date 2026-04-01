@@ -4623,6 +4623,78 @@ async def comm_service_health() -> Dict[str, Any]:
     return await call_comm_api("GET", "/health")
 
 
+@comm_mcp.tool(
+    name="gmail_list_accounts",
+    description="List configured Gmail accounts with their email addresses.",
+)
+async def comm_gmail_list_accounts() -> Dict[str, Any]:
+    return await call_comm_api("GET", "/api/v1/gmail/accounts")
+
+
+@comm_mcp.tool(
+    name="gmail_list_messages",
+    description=(
+        "List emails for a Gmail account. "
+        "Source: 'apopovic' (apopovic.aut@gmail.com) or 'edera' (a.popovic@edera-safety.com). "
+        "Query examples: 'is:unread', 'from:someone@email.com', 'subject:Rechnung', 'newer_than:1d'."
+    ),
+)
+async def comm_gmail_list_messages(
+    source: str,
+    query: str = "",
+    max_results: int = 10,
+) -> Dict[str, Any]:
+    params = f"?query={query}&max_results={max_results}" if query else f"?max_results={max_results}"
+    return await call_comm_api("GET", f"/api/v1/gmail/{source}/messages{params}")
+
+
+@comm_mcp.tool(
+    name="gmail_get_message",
+    description="Get a single email with full body text. Requires source and message_id.",
+)
+async def comm_gmail_get_message(source: str, message_id: str) -> Dict[str, Any]:
+    return await call_comm_api("GET", f"/api/v1/gmail/{source}/messages/{message_id}")
+
+
+@comm_mcp.tool(
+    name="gmail_latest",
+    description=(
+        "Get the most recent email for a Gmail account. "
+        "Source: 'apopovic' or 'edera'. Optional query filter."
+    ),
+)
+async def comm_gmail_latest(source: str, query: str = "") -> Dict[str, Any]:
+    params = f"?query={query}" if query else ""
+    return await call_comm_api("GET", f"/api/v1/gmail/{source}/latest{params}")
+
+
+@comm_mcp.tool(
+    name="gmail_send",
+    description=(
+        "Send an email via Gmail. "
+        "Source: 'apopovic' (sends from apopovic.aut@gmail.com) or 'edera' (a.popovic@edera-safety.com)."
+    ),
+)
+async def comm_gmail_send(
+    source: str,
+    to: str,
+    subject: str,
+    body: str,
+    html: bool = False,
+) -> Dict[str, Any]:
+    return await call_comm_api("POST", f"/api/v1/gmail/{source}/send", json={
+        "to": to, "subject": subject, "body": body, "html": html
+    })
+
+
+@comm_mcp.tool(
+    name="gmail_mark_read",
+    description="Mark a Gmail message as read.",
+)
+async def comm_gmail_mark_read(source: str, message_id: str) -> Dict[str, Any]:
+    return await call_comm_api("POST", f"/api/v1/gmail/{source}/mark-read/{message_id}")
+
+
 comm_app = comm_mcp.streamable_http_app()
 app.mount(COMM_PATH, comm_app)
 

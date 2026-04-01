@@ -87,6 +87,7 @@ TAROT_PATH = "/tarot"
 BUSINESS_PATH = "/business"
 COMM_PATH = "/comm"
 KNOWLEDGE_PATH = "/knowledge"
+STORY_PATH = "/story"
 
 # Tools API (for Tarot)
 TOOLS_API_BASE = os.getenv("TOOLS_API_BASE", "https://tools-api.arkturian.com")
@@ -98,6 +99,10 @@ BUSINESS_API_KEY = os.getenv("BUSINESS_API_KEY", "")
 # Comm API
 COMM_API_BASE = os.getenv("COMM_API_BASE", "https://comm-api.arkturian.com")
 COMM_API_KEY = os.getenv("COMM_API_KEY", "")
+
+# Story API
+STORY_API_BASE = os.getenv("STORY_API_BASE", "http://localhost:8070")
+STORY_API_KEY = os.getenv("STORY_API_KEY", "story_ark_secret_2025")
 
 # Knowledge API
 KNOWLEDGE_API_BASE = os.getenv("KNOWLEDGE_API_BASE", "https://knowledge-api.arkturian.com")
@@ -416,6 +421,23 @@ async def call_comm_api(
         params=params,
         json_body=json_body,
         timeout=timeout,
+    )
+
+
+async def call_story_api(
+    method: str,
+    endpoint: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """Call Story Architect API for cinematic storyboard management."""
+    return await _fetch_json(
+        method,
+        f"{STORY_API_BASE}{endpoint}",
+        headers={"X-API-KEY": STORY_API_KEY},
+        params=params,
+        json_body=json_body,
     )
 
 
@@ -4604,6 +4626,287 @@ comm_app = comm_mcp.streamable_http_app()
 app.mount(COMM_PATH, comm_app)
 
 
+# ── Story Architect API ──
+
+story_mcp = FastMCP(
+    name="story",
+    streamable_http_path="/",
+    stateless_http=True,
+    auth=None,
+    log_level="INFO",
+)
+
+
+@story_mcp.tool(
+    name="projects_list",
+    description="List all story projects. Optional filters: status (draft/active/archived), genre.",
+)
+async def story_projects_list(
+    status: Optional[str] = None,
+    genre: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    params = _clean_params(status=status, genre=genre, limit=limit, offset=offset)
+    return await call_story_api("GET", "/api/v1/projects/", params=params)
+
+
+@story_mcp.tool(
+    name="projects_get",
+    description="Get a story project with full hierarchy: beats > scenes > shots > media/prompts + characters/locations/artifacts.",
+)
+async def story_projects_get(project_id: int) -> Dict[str, Any]:
+    return await call_story_api("GET", f"/api/v1/projects/{project_id}")
+
+
+@story_mcp.tool(
+    name="projects_create",
+    description="Create a new story project. Required: title. Optional: description, genre, tagline, status, metadata_json.",
+)
+async def story_projects_create(
+    title: str,
+    description: Optional[str] = None,
+    genre: Optional[str] = None,
+    tagline: Optional[str] = None,
+    status: str = "draft",
+    metadata_json: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    body = _clean_params(title=title, description=description, genre=genre, tagline=tagline, status=status, metadata_json=metadata_json)
+    return await call_story_api("POST", "/api/v1/projects/", json_body=body)
+
+
+@story_mcp.tool(
+    name="projects_update",
+    description="Update a story project. All fields optional.",
+)
+async def story_projects_update(
+    project_id: int,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    genre: Optional[str] = None,
+    tagline: Optional[str] = None,
+    status: Optional[str] = None,
+    metadata_json: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    body = _clean_params(title=title, description=description, genre=genre, tagline=tagline, status=status, metadata_json=metadata_json)
+    return await call_story_api("PUT", f"/api/v1/projects/{project_id}", json_body=body)
+
+
+@story_mcp.tool(
+    name="projects_delete",
+    description="Delete a story project and all its content (cascade).",
+)
+async def story_projects_delete(project_id: int) -> Dict[str, Any]:
+    return await call_story_api("DELETE", f"/api/v1/projects/{project_id}")
+
+
+@story_mcp.tool(
+    name="beats_list",
+    description="List all story beats for a project, ordered by position.",
+)
+async def story_beats_list(project_id: int) -> Dict[str, Any]:
+    return await call_story_api("GET", f"/api/v1/projects/{project_id}/beats")
+
+
+@story_mcp.tool(
+    name="beats_create",
+    description="Create a new story beat. Required: project_id, title. Optional: summary, dramatic_function, emotional_effect, position.",
+)
+async def story_beats_create(
+    project_id: int,
+    title: str,
+    summary: Optional[str] = None,
+    dramatic_function: Optional[str] = None,
+    emotional_effect: Optional[str] = None,
+    position: Optional[int] = None,
+) -> Dict[str, Any]:
+    body = _clean_params(title=title, summary=summary, dramatic_function=dramatic_function, emotional_effect=emotional_effect, position=position)
+    return await call_story_api("POST", f"/api/v1/projects/{project_id}/beats", json_body=body)
+
+
+@story_mcp.tool(
+    name="beats_update",
+    description="Update a story beat. All fields optional.",
+)
+async def story_beats_update(
+    beat_id: int,
+    title: Optional[str] = None,
+    summary: Optional[str] = None,
+    dramatic_function: Optional[str] = None,
+    emotional_effect: Optional[str] = None,
+    position: Optional[int] = None,
+) -> Dict[str, Any]:
+    body = _clean_params(title=title, summary=summary, dramatic_function=dramatic_function, emotional_effect=emotional_effect, position=position)
+    return await call_story_api("PUT", f"/api/v1/beats/{beat_id}", json_body=body)
+
+
+@story_mcp.tool(
+    name="scenes_list",
+    description="List all scenes for a beat, ordered by position.",
+)
+async def story_scenes_list(beat_id: int) -> Dict[str, Any]:
+    return await call_story_api("GET", f"/api/v1/beats/{beat_id}/scenes")
+
+
+@story_mcp.tool(
+    name="scenes_create",
+    description="Create a new scene. Required: beat_id, title. Optional: description, purpose, characters, location, time_of_day, transition.",
+)
+async def story_scenes_create(
+    beat_id: int,
+    title: str,
+    description: Optional[str] = None,
+    purpose: Optional[str] = None,
+    characters: Optional[str] = None,
+    location: Optional[str] = None,
+    time_of_day: Optional[str] = None,
+    transition: Optional[str] = None,
+) -> Dict[str, Any]:
+    body = _clean_params(title=title, description=description, purpose=purpose, characters=characters, location=location, time_of_day=time_of_day, transition=transition)
+    return await call_story_api("POST", f"/api/v1/beats/{beat_id}/scenes", json_body=body)
+
+
+@story_mcp.tool(
+    name="scenes_update",
+    description="Update a scene. All fields optional.",
+)
+async def story_scenes_update(
+    scene_id: int,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    purpose: Optional[str] = None,
+    characters: Optional[str] = None,
+    location: Optional[str] = None,
+    time_of_day: Optional[str] = None,
+    transition: Optional[str] = None,
+) -> Dict[str, Any]:
+    body = _clean_params(title=title, description=description, purpose=purpose, characters=characters, location=location, time_of_day=time_of_day, transition=transition)
+    return await call_story_api("PUT", f"/api/v1/scenes/{scene_id}", json_body=body)
+
+
+@story_mcp.tool(
+    name="shots_list",
+    description="List all shots for a scene, ordered by position.",
+)
+async def story_shots_list(scene_id: int) -> Dict[str, Any]:
+    return await call_story_api("GET", f"/api/v1/scenes/{scene_id}/shots")
+
+
+@story_mcp.tool(
+    name="shots_create",
+    description="Create a new shot. Required: scene_id, title. Optional: description, camera_perspective, camera_movement, mood, lighting, duration_sec, audio_hint, voice_over, production_status.",
+)
+async def story_shots_create(
+    scene_id: int,
+    title: str,
+    description: Optional[str] = None,
+    camera_perspective: Optional[str] = None,
+    camera_movement: Optional[str] = None,
+    mood: Optional[str] = None,
+    lighting: Optional[str] = None,
+    duration_sec: Optional[float] = None,
+    audio_hint: Optional[str] = None,
+    voice_over: Optional[str] = None,
+    production_status: str = "planned",
+) -> Dict[str, Any]:
+    body = _clean_params(title=title, description=description, camera_perspective=camera_perspective, camera_movement=camera_movement, mood=mood, lighting=lighting, duration_sec=duration_sec, audio_hint=audio_hint, voice_over=voice_over, production_status=production_status)
+    return await call_story_api("POST", f"/api/v1/scenes/{scene_id}/shots", json_body=body)
+
+
+@story_mcp.tool(
+    name="shots_update",
+    description="Update a shot. All fields optional.",
+)
+async def story_shots_update(
+    shot_id: int,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    camera_perspective: Optional[str] = None,
+    camera_movement: Optional[str] = None,
+    mood: Optional[str] = None,
+    lighting: Optional[str] = None,
+    duration_sec: Optional[float] = None,
+    audio_hint: Optional[str] = None,
+    voice_over: Optional[str] = None,
+    production_status: Optional[str] = None,
+) -> Dict[str, Any]:
+    body = _clean_params(title=title, description=description, camera_perspective=camera_perspective, camera_movement=camera_movement, mood=mood, lighting=lighting, duration_sec=duration_sec, audio_hint=audio_hint, voice_over=voice_over, production_status=production_status)
+    return await call_story_api("PUT", f"/api/v1/shots/{shot_id}", json_body=body)
+
+
+@story_mcp.tool(
+    name="shots_attach_media",
+    description="Attach a media reference (from Storage API) to a shot. Roles: thumbnail, reference, variant, final, keyframe_start, keyframe_end.",
+)
+async def story_shots_attach_media(
+    shot_id: int,
+    storage_id: int,
+    role: str = "reference",
+    caption: Optional[str] = None,
+) -> Dict[str, Any]:
+    body = _clean_params(storage_id=storage_id, role=role, caption=caption)
+    return await call_story_api("POST", f"/api/v1/shots/{shot_id}/media", json_body=body)
+
+
+@story_mcp.tool(
+    name="prompts_create",
+    description="Create a prompt for a shot. Types: image, video, motion, voiceover, music.",
+)
+async def story_prompts_create(
+    shot_id: int,
+    prompt_type: str,
+    prompt_text: str,
+    version: int = 1,
+    is_active: bool = True,
+) -> Dict[str, Any]:
+    body = dict(prompt_type=prompt_type, prompt_text=prompt_text, version=version, is_active=is_active)
+    return await call_story_api("POST", f"/api/v1/shots/{shot_id}/prompts", json_body=body)
+
+
+@story_mcp.tool(
+    name="characters_list",
+    description="List all characters for a project.",
+)
+async def story_characters_list(project_id: int) -> Dict[str, Any]:
+    return await call_story_api("GET", f"/api/v1/projects/{project_id}/characters")
+
+
+@story_mcp.tool(
+    name="characters_create",
+    description="Create a character. Required: project_id, name. Optional: description, origin, powers, symbol, outfit, colors, behavior, mission, prompt_tokens.",
+)
+async def story_characters_create(
+    project_id: int,
+    name: str,
+    description: Optional[str] = None,
+    origin: Optional[str] = None,
+    powers: Optional[str] = None,
+    symbol: Optional[str] = None,
+    outfit: Optional[str] = None,
+    colors: Optional[str] = None,
+    behavior: Optional[str] = None,
+    mission: Optional[str] = None,
+    prompt_tokens: Optional[str] = None,
+) -> Dict[str, Any]:
+    body = _clean_params(name=name, description=description, origin=origin, powers=powers, symbol=symbol, outfit=outfit, colors=colors, behavior=behavior, mission=mission, prompt_tokens=prompt_tokens)
+    return await call_story_api("POST", f"/api/v1/projects/{project_id}/characters", json_body=body)
+
+
+@story_mcp.tool(
+    name="export_project",
+    description="Export a full project. Format: json or markdown.",
+)
+async def story_export_project(
+    project_id: int,
+    format: str = "json",
+) -> Dict[str, Any]:
+    return await call_story_api("GET", f"/api/v1/projects/{project_id}/export", params={"format": format})
+
+
+story_app = story_mcp.streamable_http_app()
+app.mount(STORY_PATH, story_app)
+
+
 # ── Cloud API (Inter-Agent Communication) ──
 
 cloud_mcp = FastMCP(
@@ -4680,6 +4983,7 @@ _business_stack = AsyncExitStack()
 _comm_stack = AsyncExitStack()
 _knowledge_stack = AsyncExitStack()
 _review_stack = AsyncExitStack()
+_story_stack = AsyncExitStack()
 _cloud_stack = AsyncExitStack()
 
 
@@ -4724,6 +5028,9 @@ async def startup() -> None:
     await _review_stack.enter_async_context(review_mcp.session_manager.run())
     await review_app.router.startup()
 
+    await _story_stack.enter_async_context(story_mcp.session_manager.run())
+    await story_app.router.startup()
+
     await _cloud_stack.enter_async_context(cloud_mcp.session_manager.run())
     await cloud_app.router.startup()
 
@@ -4732,6 +5039,9 @@ async def startup() -> None:
 async def shutdown() -> None:
     await cloud_app.router.shutdown()
     await _cloud_stack.aclose()
+
+    await story_app.router.shutdown()
+    await _story_stack.aclose()
 
     await review_app.router.shutdown()
     await _review_stack.aclose()

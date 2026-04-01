@@ -325,6 +325,7 @@ async def call_cloud_api(
     return await _fetch_json(
         method,
         f"{CLOUD_API_BASE}{endpoint}",
+        headers={},
         params=params,
         json_body=json_body,
         timeout=180.0,

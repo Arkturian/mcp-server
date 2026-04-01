@@ -4920,7 +4920,7 @@ cloud_mcp = FastMCP(
 
 @cloud_mcp.tool(
     name="send_message",
-    description="Send a message to another Claude Code agent running in a tmux session and wait for the response. Returns the agent's answer.",
+    description="Send a message to another Claude Code agent on any server (Mac or arkserver) and wait for the response. Auto-routes to the correct server.",
 )
 async def cloud_send_message(
     from_session: str,
@@ -4929,17 +4929,17 @@ async def cloud_send_message(
     timeout: int = 120,
 ) -> Dict[str, Any]:
     return await call_cloud_api(
-        "POST", "/api/agents/send",
+        "POST", "/api/agents/route",
         json_body={"from": from_session, "to": to_session, "message": message, "wait": True, "timeout": timeout},
     )
 
 
 @cloud_mcp.tool(
-    name="list_sessions",
-    description="List all active tmux sessions (Claude Code agents).",
+    name="list_agents",
+    description="List all active agents across all servers (Mac and arkserver). Shows agent name, server location, and status.",
 )
-async def cloud_list_sessions() -> Dict[str, Any]:
-    return await call_cloud_api("GET", "/api/sessions")
+async def cloud_list_agents() -> Dict[str, Any]:
+    return await call_cloud_api("GET", "/api/agents/registry")
 
 
 @cloud_mcp.tool(

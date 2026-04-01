@@ -113,7 +113,7 @@ REVIEW_API_KEY = os.getenv("REVIEW_API_KEY", "")
 REVIEW_PATH = "/review"
 
 # Cloud API (inter-agent communication)
-CLOUD_API_BASE = os.getenv("CLOUD_API_BASE", "https://cloud.arkserver.arkturian.com")
+CLOUD_API_BASE = os.getenv("CLOUD_API_BASE", "http://localhost:8070")
 CLOUD_PATH = "/cloud"
 
 # --------------------------------------------------------------------------- #

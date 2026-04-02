@@ -14,18 +14,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Deploy to server via rsync
-        uses: appleboy/scp-action@v0.1.7
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          port: ${{ secrets.DEPLOY_PORT || 22 }}
-          source: "server.py,requirements.txt"
-          target: "/var/www/mcp.arkturian.com/"
-          overwrite: true
+          python-version: '3.11'
+          cache: 'pip'
 
-      - name: Restart service and health check
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Deploy to server
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -40,36 +38,48 @@ jobs:
 
             cd "$DEPLOY_PATH"
 
-            # Install/update Python dependencies (use system pip or create venv if needed)
+            # Pull latest code from main
+            echo "Fetching latest code..."
+            git fetch origin main
+            git reset --hard origin/main
+
+            # Install/update Python dependencies
+            echo "Installing dependencies..."
             if [ -f "venv/bin/activate" ]; then
               source venv/bin/activate
-              pip install -r requirements.txt --quiet
+            elif [ -f ".venv/bin/activate" ]; then
+              source .venv/bin/activate
             else
-              pip3 install -r requirements.txt --quiet 2>/dev/null || true
+              echo "No virtualenv found, creating one..."
+              python3 -m venv venv
+              source venv/bin/activate
             fi
+            pip install --upgrade pip --quiet
+            pip install -r requirements.txt --quiet
 
-            # Restart the service
+            # Restart service
             echo "Restarting $SERVICE_NAME service..."
             sudo systemctl restart $SERVICE_NAME
 
             # Wait for service to start
-            sleep 5
+            sleep 3
 
             # Health check
             echo "Running health check..."
-            if curl -sf http://localhost:8080/ > /dev/null; then
-              echo "✅ Health check passed!"
+            if curl -sf http://localhost:8080/health > /dev/null; then
+              echo "Health check passed!"
             else
-              echo "⚠️ Health check failed, checking service status..."
-              sudo systemctl status $SERVICE_NAME --no-pager
+              echo "Health check failed, checking service status..."
+              sudo systemctl status $SERVICE_NAME --no-pager -l
+              exit 1
             fi
 
             echo "Deployment completed!"
 
       - name: Notify on success
         if: success()
-        run: echo "✅ Deployment successful for commit ${{ github.sha }}"
+        run: echo "Deployment successful for commit ${{ github.sha }}"
 
       - name: Notify on failure
         if: failure()
-        run: echo "❌ Deployment failed for commit ${{ github.sha }}"
+        run: echo "Deployment failed for commit ${{ github.sha }}"

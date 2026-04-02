@@ -4740,7 +4740,8 @@ async def comm_calendar_list_events(
         "Create a Google Calendar event. "
         "Source: 'apopovic' or 'edera'. "
         "start/end: ISO datetime 'YYYY-MM-DDTHH:MM:SS' or date 'YYYY-MM-DD' for all-day. "
-        "attendees: list of email addresses (optional, sends invite)."
+        "attendees: list of email addresses (optional, sends invite). "
+        "google_meet: set True to auto-generate a Google Meet video link."
     ),
 )
 async def comm_calendar_create_event(
@@ -4752,6 +4753,7 @@ async def comm_calendar_create_event(
     location: str = "",
     attendees: Optional[List[str]] = None,
     timezone: str = "Europe/Vienna",
+    google_meet: bool = False,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "summary": summary,
@@ -4759,6 +4761,7 @@ async def comm_calendar_create_event(
         "end": end,
         "description": description,
         "timezone": timezone,
+        "google_meet": google_meet,
     }
     if location:
         payload["location"] = location

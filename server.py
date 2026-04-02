@@ -4318,6 +4318,19 @@ Used by Business API for document delivery, and directly for notifications.
 - contacts_get(contact_id) — Get contact details
 - incoming_messages(sender, chat_id, limit) — List incoming Telegram messages
 
+### Google Calendar
+- calendar_list_events(source, time_min, time_max, max_results) — List upcoming events
+- calendar_create_event(summary, start, end, source, description, location, attendees, timezone) — Create event
+- calendar_delete_event(event_id, source) — Delete event
+
+### Gmail
+- gmail_list_messages(source, query, max_results) — List emails
+- gmail_get_message(source, message_id) — Get full email
+- gmail_latest(source, query) — Most recent email
+- gmail_send(source, to, subject, body) — Send email via Gmail
+- gmail_mark_read(source, message_id) — Mark as read
+- gmail_mark_unread(source, message_id) — Mark as unread
+
 ### Info
 - list_sources() — Available email/telegram source identities
 - message_history(channel, source, limit) — Sent message log
@@ -4693,6 +4706,76 @@ async def comm_gmail_send(
 )
 async def comm_gmail_mark_read(source: str, message_id: str) -> Dict[str, Any]:
     return await call_comm_api("POST", f"/api/v1/gmail/{source}/mark-read/{message_id}")
+
+
+@comm_mcp.tool(
+    name="gmail_mark_unread",
+    description="Mark a Gmail message as unread.",
+)
+async def comm_gmail_mark_unread(source: str, message_id: str) -> Dict[str, Any]:
+    return await call_comm_api("POST", f"/api/v1/gmail/{source}/mark-unread/{message_id}")
+
+
+@comm_mcp.tool(
+    name="calendar_list_events",
+    description=(
+        "List upcoming Google Calendar events. "
+        "Source: 'apopovic' or 'edera'. "
+        "Optional: time_min/time_max (ISO format), max_results."
+    ),
+)
+async def comm_calendar_list_events(
+    source: str = "apopovic",
+    time_min: Optional[str] = None,
+    time_max: Optional[str] = None,
+    max_results: int = 10,
+) -> Dict[str, Any]:
+    params = _clean_params(time_min=time_min, time_max=time_max, max_results=max_results)
+    return await call_comm_api("GET", f"/api/v1/calendar/{source}/events", params=params)
+
+
+@comm_mcp.tool(
+    name="calendar_create_event",
+    description=(
+        "Create a Google Calendar event. "
+        "Source: 'apopovic' or 'edera'. "
+        "start/end: ISO datetime 'YYYY-MM-DDTHH:MM:SS' or date 'YYYY-MM-DD' for all-day. "
+        "attendees: list of email addresses (optional, sends invite)."
+    ),
+)
+async def comm_calendar_create_event(
+    summary: str,
+    start: str,
+    end: str,
+    source: str = "apopovic",
+    description: str = "",
+    location: str = "",
+    attendees: Optional[List[str]] = None,
+    timezone: str = "Europe/Vienna",
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "summary": summary,
+        "start": start,
+        "end": end,
+        "description": description,
+        "timezone": timezone,
+    }
+    if location:
+        payload["location"] = location
+    if attendees:
+        payload["attendees"] = attendees
+    return await call_comm_api("POST", f"/api/v1/calendar/{source}/events", json=payload)
+
+
+@comm_mcp.tool(
+    name="calendar_delete_event",
+    description="Delete a Google Calendar event by ID.",
+)
+async def comm_calendar_delete_event(
+    event_id: str,
+    source: str = "apopovic",
+) -> Dict[str, Any]:
+    return await call_comm_api("DELETE", f"/api/v1/calendar/{source}/events/{event_id}")
 
 
 comm_app = comm_mcp.streamable_http_app()

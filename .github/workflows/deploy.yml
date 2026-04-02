@@ -34,7 +34,16 @@ jobs:
             set -e
 
             DEPLOY_PATH="/var/www/mcp.arkturian.com"
+            REPO_URL="https://github.com/Arkturian/mcp-server.git"
             SERVICE_NAME="mcp-server"
+
+            # Init git repo if needed (migrating from scp-based deploy)
+            if [ ! -d "$DEPLOY_PATH/.git" ]; then
+              echo "Initializing git repo in deploy path..."
+              cd "$DEPLOY_PATH"
+              git init
+              git remote add origin "$REPO_URL" || git remote set-url origin "$REPO_URL"
+            fi
 
             cd "$DEPLOY_PATH"
 

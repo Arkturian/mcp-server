@@ -5017,10 +5017,10 @@ async def cloud_list_agents() -> Dict[str, Any]:
 
 @cloud_mcp.tool(
     name="read_session",
-    description="Read the current screen content of a tmux session (plain text, no ANSI codes).",
+    description="Read the current screen content of any agent's tmux session across all servers. Returns plain text, no ANSI codes.",
 )
 async def cloud_read_session(session_name: str, lines: int = 50) -> Dict[str, Any]:
-    return await call_cloud_api("GET", f"/api/sessions/{session_name}/capture", params={"lines": lines})
+    return await call_cloud_api("GET", f"/api/agents/read/{session_name}", params={"lines": lines})
 
 
 @cloud_mcp.tool(

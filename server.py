@@ -117,6 +117,38 @@ CLOUD_API_BASE = os.getenv("CLOUD_API_BASE", "http://localhost:8070")
 CLOUD_PATH = "/cloud"
 
 # --------------------------------------------------------------------------- #
+# MCP server filtering — selective deployment
+# --------------------------------------------------------------------------- #
+# Set MCP_SERVERS env var to a comma-separated list of MCP names to enable
+# only those endpoints. Empty/unset = mount all (default behavior).
+# Example: MCP_SERVERS=content  → only content endpoint is mounted
+_mcp_servers_env = os.getenv("MCP_SERVERS", "").strip()
+ENABLED_MCPS: Optional[set] = (
+    {s.strip().lower() for s in _mcp_servers_env.split(",") if s.strip()}
+    if _mcp_servers_env
+    else None
+)
+
+
+def mount_mcp(name: str, path: str, mcp_app) -> bool:
+    """Mount an MCP server only if enabled by ENABLED_MCPS filter.
+
+    Args:
+        name: Logical MCP name (lowercase, e.g. "content", "storage")
+        path: URL path to mount at
+        mcp_app: The streamable_http_app() instance
+
+    Returns:
+        True if mounted, False if filtered out.
+    """
+    if ENABLED_MCPS is not None and name.lower() not in ENABLED_MCPS:
+        print(f"⊘ Skipping MCP mount: {name} (not in MCP_SERVERS={','.join(sorted(ENABLED_MCPS))})")
+        return False
+    app.mount(path, mcp_app)
+    print(f"✓ Mounted MCP: {name} at {path}")
+    return True
+
+# --------------------------------------------------------------------------- #
 # HTTP helpers
 # --------------------------------------------------------------------------- #
 
@@ -3211,13 +3243,13 @@ artrack_app = artrack_mcp.streamable_http_app()
 codepilot_app = codepilot_mcp.streamable_http_app()
 content_app = content_mcp.streamable_http_app()
 tree_app = tree_mcp.streamable_http_app()
-app.mount(STORAGE_PATH, storage_app)
-app.mount(ONEAL_PATH, oneal_app)
-app.mount(ONEAL_STORAGE_PATH, oneal_storage_app)
-app.mount(ARTRACK_PATH, artrack_app)
-app.mount(CODEPILOT_PATH, codepilot_app)
-app.mount(CONTENT_PATH, content_app)
-app.mount(TREE_PATH, tree_app)
+mount_mcp("storage", STORAGE_PATH, storage_app)
+mount_mcp("oneal", ONEAL_PATH, oneal_app)
+mount_mcp("oneal-storage", ONEAL_STORAGE_PATH, oneal_storage_app)
+mount_mcp("artrack", ARTRACK_PATH, artrack_app)
+mount_mcp("codepilot", CODEPILOT_PATH, codepilot_app)
+mount_mcp("content", CONTENT_PATH, content_app)
+mount_mcp("tree", TREE_PATH, tree_app)
 ai_mcp = FastMCP(
     name="ai-api",
     streamable_http_path="/",
@@ -3341,7 +3373,7 @@ async def ai_genimage(
 
 
 ai_app = ai_mcp.streamable_http_app()
-app.mount(AI_PATH, ai_app)
+mount_mcp("ai", AI_PATH, ai_app)
 
 # --------------------------------------------------------------------------- #
 # Knowledge MCP – AI-powered knowledge extraction from Storage objects
@@ -3537,7 +3569,7 @@ async def knowledge_service_health() -> Dict[str, Any]:
 
 
 knowledge_app = knowledge_mcp.streamable_http_app()
-app.mount(KNOWLEDGE_PATH, knowledge_app)
+mount_mcp("knowledge", KNOWLEDGE_PATH, knowledge_app)
 
 # --------------------------------------------------------------------------- #
 # Review MCP - AI-powered multi-perspective review orchestrator
@@ -3719,7 +3751,7 @@ async def review_templates_get(template_id: int) -> Dict[str, Any]:
 
 
 review_app = review_mcp.streamable_http_app()
-app.mount(REVIEW_PATH, review_app)
+mount_mcp("review", REVIEW_PATH, review_app)
 
 # --------------------------------------------------------------------------- #
 # Tarot MCP - Tarot card reading tools
@@ -3786,7 +3818,7 @@ async def tarot_deck_info() -> Dict[str, Any]:
 
 
 tarot_app = tarot_mcp.streamable_http_app()
-app.mount(TAROT_PATH, tarot_app)
+mount_mcp("tarot", TAROT_PATH, tarot_app)
 
 # --------------------------------------------------------------------------- #
 # Business API MCP – Invoicing, Clients, Transactions, Documents
@@ -4277,7 +4309,7 @@ async def business_service_health() -> Dict[str, Any]:
 
 
 business_app = business_mcp.streamable_http_app()
-app.mount(BUSINESS_PATH, business_app)
+mount_mcp("business", BUSINESS_PATH, business_app)
 
 
 # Comm API MCP -----------------------------------------------------------
@@ -4782,7 +4814,7 @@ async def comm_calendar_delete_event(
 
 
 comm_app = comm_mcp.streamable_http_app()
-app.mount(COMM_PATH, comm_app)
+mount_mcp("comm", COMM_PATH, comm_app)
 
 
 # ── Story Architect API ──
@@ -5063,7 +5095,7 @@ async def story_export_project(
 
 
 story_app = story_mcp.streamable_http_app()
-app.mount(STORY_PATH, story_app)
+mount_mcp("story", STORY_PATH, story_app)
 
 
 # ── Cloud API (Inter-Agent Communication) ──
@@ -5118,6 +5150,35 @@ async def cloud_inbox(session_name: str) -> Dict[str, Any]:
 
 
 @cloud_mcp.tool(
+    name="create_session",
+    description="Create a new Claude Code tmux session. Returns the session name. Use agent='claude' (default), 'codex', or 'gemini'. Set pretty=True for JSON chat mode (queue/widget agents).",
+)
+async def cloud_create_session(
+    name: str,
+    pretty: bool = False,
+    agent: str = "claude",
+) -> Dict[str, Any]:
+    return await call_cloud_api(
+        "POST", "/api/sessions",
+        json_body={"name": name, "pretty": pretty, "agent": agent},
+    )
+
+
+@cloud_mcp.tool(
+    name="reply",
+    description="Reply to an IACP message by its ID. Use this instead of just responding in the terminal — it delivers instantly without polling. The msg_id is in the [IACP:msg_id:sender] marker of the incoming message.",
+)
+async def cloud_reply(
+    msg_id: str,
+    response: str,
+) -> Dict[str, Any]:
+    return await call_cloud_api(
+        "POST", "/api/agents/reply",
+        json_body={"id": msg_id, "response": response},
+    )
+
+
+@cloud_mcp.tool(
     name="health",
     description="Check if the Cloud API is running.",
 )
@@ -5126,7 +5187,7 @@ async def cloud_health() -> Dict[str, Any]:
 
 
 cloud_app = cloud_mcp.streamable_http_app()
-app.mount(CLOUD_PATH, cloud_app)
+mount_mcp("cloud", CLOUD_PATH, cloud_app)
 
 
 _storage_stack = AsyncExitStack()

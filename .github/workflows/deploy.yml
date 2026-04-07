@@ -7,6 +7,9 @@ on:
   workflow_dispatch:
 
 jobs:
+  # ─────────────────────────────────────────
+  # Production: arkserver — full MCP stack
+  # ─────────────────────────────────────────
   build-and-deploy:
     runs-on: ubuntu-latest
 
@@ -92,3 +95,93 @@ jobs:
       - name: Notify on failure
         if: failure()
         run: echo "Deployment failed for commit ${{ github.sha }}"
+
+  # ─────────────────────────────────────────
+  # Production: pdrei (jascha) — content only
+  # ─────────────────────────────────────────
+  deploy-pdrei:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to pdrei
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PDREI_DEPLOY_HOST }}
+          username: ${{ secrets.PDREI_DEPLOY_USER }}
+          key: ${{ secrets.PDREI_DEPLOY_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+
+            DEPLOY_PATH="/var/www/mcp-server"
+            REPO_URL="https://github.com/Arkturian/mcp-server.git"
+            SERVICE_NAME="mcp-server"
+
+            # Init git repo if needed
+            if [ ! -d "$DEPLOY_PATH/.git" ]; then
+              echo "Initializing git repo in deploy path..."
+              cd "$DEPLOY_PATH"
+              git init
+              git remote add origin "$REPO_URL" || git remote set-url origin "$REPO_URL"
+            fi
+
+            cd "$DEPLOY_PATH"
+
+            # Pull latest code from main
+            echo "Fetching latest code..."
+            git fetch origin main
+            git reset --hard origin/main
+
+            # Setup venv
+            if [ ! -d "venv" ]; then
+              python3 -m venv venv
+            fi
+            source venv/bin/activate
+            pip install --upgrade pip --quiet
+            pip install -r requirements.txt --quiet
+
+            # Ensure systemd unit exists with MCP_SERVERS=content
+            if [ ! -f /etc/systemd/system/${SERVICE_NAME}.service ]; then
+              echo "Creating systemd unit for $SERVICE_NAME..."
+              sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null <<'UNIT'
+            [Unit]
+            Description=MCP Server (content only)
+            After=network.target
+
+            [Service]
+            Type=simple
+            User=jascha
+            WorkingDirectory=/var/www/mcp-server
+            Environment="MCP_SERVERS=content"
+            Environment="HOST=127.0.0.1"
+            Environment="PORT=8080"
+            Environment="CONTENT_API_BASE=http://127.0.0.1:8015"
+            ExecStart=/var/www/mcp-server/venv/bin/python /var/www/mcp-server/server.py
+            Restart=on-failure
+            RestartSec=5
+
+            [Install]
+            WantedBy=multi-user.target
+            UNIT
+              sudo systemctl daemon-reload
+              sudo systemctl enable ${SERVICE_NAME}
+            fi
+
+            echo "Restarting $SERVICE_NAME..."
+            sudo systemctl restart ${SERVICE_NAME}
+            sleep 5
+
+            # Health check
+            if curl -sf http://localhost:8080/health > /dev/null; then
+              echo "✅ Health check passed!"
+              echo "Mounted endpoints:"
+              sudo journalctl -u ${SERVICE_NAME} -n 30 --no-pager | grep -E "(✓ Mounted|⊘ Skipping)" || true
+            else
+              echo "⚠️ Health check failed"
+              sudo systemctl status ${SERVICE_NAME} --no-pager
+              sudo journalctl -u ${SERVICE_NAME} -n 50 --no-pager
+              exit 1
+            fi

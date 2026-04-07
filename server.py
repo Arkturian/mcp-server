@@ -2033,7 +2033,7 @@ async def content_posts_delete(post_id: int) -> Dict[str, Any]:
     - created_at
     """,
 )
-async def content_media_list(post_id: int) -> Dict[str, Any]:
+async def content_media_list(post_id: int) -> List[Dict[str, Any]]:
     return await call_content_api("GET", f"/api/v1/posts/{post_id}/media/")
 
 
@@ -2079,7 +2079,7 @@ async def content_media_delete(post_id: int, media_id: int) -> Dict[str, Any]:
     Returns: id, annotation_type, target_selector, body_json, created_at
     """,
 )
-async def content_annotations_list(post_id: int) -> Dict[str, Any]:
+async def content_annotations_list(post_id: int) -> List[Dict[str, Any]]:
     return await call_content_api("GET", f"/api/v1/posts/{post_id}/annotations/")
 
 
@@ -2122,7 +2122,7 @@ async def content_annotations_delete(post_id: int, annotation_id: int) -> Dict[s
     Returns: id, block_type, position, data_json, created_at
     """,
 )
-async def content_blocks_list(post_id: int) -> Dict[str, Any]:
+async def content_blocks_list(post_id: int) -> List[Dict[str, Any]]:
     return await call_content_api("GET", f"/api/v1/posts/{post_id}/blocks/")
 
 
@@ -2184,7 +2184,7 @@ async def content_blocks_delete(post_id: int, block_id: int) -> Dict[str, Any]:
     References are ordered by ref_number.
     """,
 )
-async def content_references_list(post_id: int) -> Dict[str, Any]:
+async def content_references_list(post_id: int) -> List[Dict[str, Any]]:
     return await call_content_api("GET", f"/api/v1/posts/{post_id}/references/")
 
 
@@ -2462,7 +2462,7 @@ async def content_stories_generate_languages(
     Returns collections with their post counts.
     """,
 )
-async def content_collections_list() -> Dict[str, Any]:
+async def content_collections_list() -> List[Dict[str, Any]]:
     return await call_content_api("GET", "/api/v1/collections/")
 
 

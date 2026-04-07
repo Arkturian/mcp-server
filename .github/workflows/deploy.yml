@@ -173,11 +173,30 @@ jobs:
             # Always (re)write nginx vhost — Host header workaround for FastMCP
             # FastMCP enables DNS rebinding protection on localhost; nginx must
             # forward Host=localhost:PORT and strip Origin so the proxy passes through
-            echo "Writing nginx vhost..."
+            # SSL cert is shared with content.pdrei + pdrei (issued via certbot multi-domain)
+            echo "Writing nginx vhost with SSL..."
+            CERT_PATH="/etc/letsencrypt/live/mcp.pdrei.arkturian.com"
+            if [ ! -d "$CERT_PATH" ]; then
+              echo "ERROR: SSL cert not found at $CERT_PATH"
+              echo "Run: sudo certbot --nginx -d mcp.pdrei.arkturian.com -d content.pdrei.arkturian.com -d pdrei.arkturian.com"
+              exit 1
+            fi
+
             sudo tee /etc/nginx/sites-available/${DOMAIN} > /dev/null <<NGINX
             server {
                 listen 80;
                 server_name ${DOMAIN};
+                return 301 https://\$host\$request_uri;
+            }
+
+            server {
+                listen 443 ssl http2;
+                server_name ${DOMAIN};
+
+                ssl_certificate ${CERT_PATH}/fullchain.pem;
+                ssl_certificate_key ${CERT_PATH}/privkey.pem;
+                include /etc/letsencrypt/options-ssl-nginx.conf;
+                ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
                 location / {
                     proxy_pass http://127.0.0.1:${UPSTREAM_PORT};
@@ -194,11 +213,6 @@ jobs:
             }
             NGINX
             sudo ln -sf /etc/nginx/sites-available/${DOMAIN} /etc/nginx/sites-enabled/${DOMAIN}
-
-            # Reapply HTTPS via certbot if cert exists (idempotent — only modifies vhost)
-            if [ -d /etc/letsencrypt/live/${DOMAIN} ]; then
-              sudo certbot --nginx -d ${DOMAIN} --non-interactive --agree-tos --email apopovic.aut@gmail.com --redirect 2>&1 | tail -5 || true
-            fi
 
             sudo nginx -t && sudo systemctl reload nginx
 

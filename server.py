@@ -129,6 +129,9 @@ REVIEW_PATH = "/review"
 # Cloud API (inter-agent communication)
 CLOUD_API_BASE = os.getenv("CLOUD_API_BASE", "http://localhost:8070")
 CLOUD_PATH = "/cloud"
+# Shared secret for cross-node IACP role addressing. Must match IACP_TOKEN
+# env on every cloud-api in the federation. Used by send_to_role().
+IACP_TOKEN = os.getenv("IACP_TOKEN", "").strip()
 
 # --------------------------------------------------------------------------- #
 # MCP server filtering — selective deployment
@@ -5231,6 +5234,48 @@ async def cloud_reply(
 )
 async def cloud_health() -> Dict[str, Any]:
     return await call_cloud_api("GET", "/api/health")
+
+
+@cloud_mcp.tool(
+    name="list_roles",
+    description=(
+        "List IACP roles available across the cloud-api federation. "
+        "Returns {role, node, session, running, owner} for every public session "
+        "on every reachable node. Use this to discover who fulfills the "
+        "'main-architect' role before calling send_to_role."
+    ),
+)
+async def cloud_list_roles() -> Dict[str, Any]:
+    return await call_cloud_api("GET", "/api/iacp/roles")
+
+
+@cloud_mcp.tool(
+    name="send_to_role",
+    description=(
+        "Send an IACP message to whichever cloud-api session currently fills "
+        "a role (e.g. 'main-architect'). The local cloud-api resolves the role "
+        "via /api/public-sessions across the federation, forwards the message "
+        "to the owning node, and queues it on that node's session. "
+        "Fire-and-forget: returns {id, status, node, session}. "
+        "Use this when you (an agent on a remote node) need help from the "
+        "main system architect — bug reports, infrastructure issues, "
+        "questions about cross-system behavior."
+    ),
+)
+async def cloud_send_to_role(
+    role: str,
+    text: str,
+    user_id: str = "iacp",
+) -> Dict[str, Any]:
+    if not IACP_TOKEN:
+        return {"error": "IACP_TOKEN env not configured on this MCP server"}
+    return await _fetch_json(
+        "POST",
+        f"{CLOUD_API_BASE}/api/iacp/send/{role}",
+        headers={"X-IACP-Token": IACP_TOKEN},
+        json_body={"text": text, "user_id": user_id},
+        timeout=30.0,
+    )
 
 
 cloud_app = cloud_mcp.streamable_http_app()

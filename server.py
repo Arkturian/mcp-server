@@ -18,6 +18,7 @@ Exposes MCP endpoint groups over HTTP/SSE with per-tenant isolation:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -197,8 +198,25 @@ async def _fetch_json(
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as exc:
-            logger.error("HTTP error %s %s: %s", method, url, exc.response.text)
-            raise
+            # Surface the upstream response body to the caller — the default
+            # HTTPStatusError.__str__ only carries the status line, which
+            # strips away structured FastAPI detail payloads. Agents should
+            # see the actual server error message ("URL could not be
+            # fetched", "document too large", etc.) not a bare 500.
+            body_text = (exc.response.text or "").strip()
+            detail = body_text
+            try:
+                body_json = exc.response.json()
+                if isinstance(body_json, dict) and "detail" in body_json:
+                    detail = body_json["detail"]
+                    if not isinstance(detail, str):
+                        detail = json.dumps(detail)
+            except Exception:
+                pass
+            logger.error("HTTP error %s %s: %s", method, url, body_text)
+            raise RuntimeError(
+                f"Upstream {exc.response.status_code} from {method} {url}: {detail or 'no detail'}"
+            ) from exc
         except httpx.HTTPError as exc:
             logger.error("Request to %s failed: %s", url, exc)
             raise
@@ -4471,14 +4489,25 @@ async def comm_send_telegram(
     name="send_telegram_document",
     description=(
         "Send a document (PDF, invoice, any file) via Telegram. "
-        "Pass exactly one of `url` (public URL Telegram fetches itself — "
-        "fastest, no bandwidth through this API) or `data_base64` (raw bytes "
-        "as standard base64 — use when you already have the bytes in hand, "
-        "e.g. from gmail_get_attachment). "
-        "Addressing: `to` resolves a contact name fuzzily, or `chat_id` "
-        "sends to a specific numeric id. Falls back to admin chat if neither "
-        "is set. Optional `caption` adds text below the document. "
-        "Telegram limit: 50 MB per document."
+        "Pass EXACTLY ONE of `url` or `data_base64`:\n"
+        "\n"
+        "  url: A REAL, PUBLICLY REACHABLE HTTPS URL that returns the "
+        "document directly (no auth, no HTML page). Telegram's servers fetch "
+        "it themselves. DO NOT make up a URL or construct one from an MCP "
+        "base path — if you don't have an actual public URL on hand, upload "
+        "the file to Storage API first (POST /storage/upload with is_public=true) "
+        "and use the returned file_url, or use data_base64 instead.\n"
+        "\n"
+        "  data_base64: Raw bytes as standard base64. Use when you already "
+        "have the bytes (e.g. from gmail_get_attachment, or you read a local "
+        "file with `base64 -w0 file.pdf`).\n"
+        "\n"
+        "Addressing: `to` resolves a contact name fuzzily, or `chat_id` sends "
+        "to a specific numeric id. Falls back to admin chat if neither is set. "
+        "Optional `caption` adds text below the document. "
+        "Telegram limit: 50 MB per document. "
+        "On error you get a 400 with the exact Telegram reason (bad URL, too "
+        "large, invalid chat) — read it, don't retry blindly."
     ),
 )
 async def comm_send_telegram_document(

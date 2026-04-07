@@ -51,6 +51,7 @@ ARTRACK_API_KEY = os.getenv("ARTRACK_API_KEY", "")
 
 # Content API
 CONTENT_API_BASE = os.getenv("CONTENT_API_BASE", "https://content-api.arkturian.com")
+CONTENT_API_KEY = os.getenv("CONTENT_API_KEY", "").strip()
 
 # Tree API
 TREE_API_BASE = os.getenv("TREE_API_BASE", "https://tree-api.arkturian.com")
@@ -405,11 +406,17 @@ async def call_content_api(
     params: Optional[Dict[str, Any]] = None,
     json_body: Optional[Dict[str, Any]] = None,
 ) -> Any:
-    """Call Content API for posts, media, annotations, and blocks."""
+    """Call Content API for posts, media, annotations, and blocks.
+
+    Sends X-API-KEY header if CONTENT_API_KEY env var is set.
+    """
+    headers: Dict[str, str] = {}
+    if CONTENT_API_KEY:
+        headers["X-API-KEY"] = CONTENT_API_KEY
     return await _fetch_json(
         method,
         f"{CONTENT_API_BASE}{endpoint}",
-        headers={},  # No auth required for public endpoints
+        headers=headers,
         params=params,
         json_body=json_body,
     )

@@ -108,11 +108,14 @@ jobs:
 
       - name: Deploy to pdrei
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          CONTENT_API_KEY: ${{ secrets.PDREI_CONTENT_API_KEY }}
         with:
           host: ${{ secrets.PDREI_DEPLOY_HOST }}
           username: ${{ secrets.PDREI_DEPLOY_USER }}
           key: ${{ secrets.PDREI_DEPLOY_SSH_KEY }}
           port: 22
+          envs: CONTENT_API_KEY
           script: |
             set -e
 
@@ -160,6 +163,7 @@ jobs:
             Environment="MCP_HOST=127.0.0.1"
             Environment="MCP_PORT=${UPSTREAM_PORT}"
             Environment="CONTENT_API_BASE=http://127.0.0.1:8015"
+            Environment="CONTENT_API_KEY=${CONTENT_API_KEY}"
             ExecStart=${DEPLOY_PATH}/venv/bin/python ${DEPLOY_PATH}/server.py
             Restart=on-failure
             RestartSec=5

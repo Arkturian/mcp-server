@@ -4468,6 +4468,47 @@ async def comm_send_telegram(
 
 
 @comm_mcp.tool(
+    name="send_telegram_document",
+    description=(
+        "Send a document (PDF, invoice, any file) via Telegram. "
+        "Pass exactly one of `url` (public URL Telegram fetches itself — "
+        "fastest, no bandwidth through this API) or `data_base64` (raw bytes "
+        "as standard base64 — use when you already have the bytes in hand, "
+        "e.g. from gmail_get_attachment). "
+        "Addressing: `to` resolves a contact name fuzzily, or `chat_id` "
+        "sends to a specific numeric id. Falls back to admin chat if neither "
+        "is set. Optional `caption` adds text below the document. "
+        "Telegram limit: 50 MB per document."
+    ),
+)
+async def comm_send_telegram_document(
+    filename: str,
+    to: Optional[str] = None,
+    chat_id: Optional[str] = None,
+    caption: Optional[str] = None,
+    url: Optional[str] = None,
+    data_base64: Optional[str] = None,
+) -> Dict[str, Any]:
+    if not url and not data_base64:
+        return {"error": "Either url or data_base64 must be provided"}
+    if url and data_base64:
+        return {"error": "Provide only one of url or data_base64, not both"}
+
+    json_body: Dict[str, Any] = {"filename": filename}
+    if to:
+        json_body["to"] = to
+    if chat_id:
+        json_body["chat_id"] = chat_id
+    if caption:
+        json_body["caption"] = caption
+    if url:
+        json_body["url"] = url
+    if data_base64:
+        json_body["data"] = data_base64
+    return await call_comm_api("POST", "/api/v1/telegram/send-document", json_body=json_body)
+
+
+@comm_mcp.tool(
     name="send_message",
     description="""Send a message via any channel (unified endpoint).
 

@@ -67,9 +67,22 @@ HOST = os.getenv("MCP_HOST", "127.0.0.1")
 PORT = int(os.getenv("MCP_PORT", "8080"))
 HTTP_TIMEOUT = float(os.getenv("MCP_HTTP_TIMEOUT", "30.0"))
 
-if not STORAGE_API_KEY:
+# Optional MCP filter — defined here early so validation can use it
+_mcp_servers_env_early = os.getenv("MCP_SERVERS", "").strip()
+_enabled_early: Optional[set] = (
+    {s.strip().lower() for s in _mcp_servers_env_early.split(",") if s.strip()}
+    if _mcp_servers_env_early
+    else None
+)
+
+def _requires(name: str) -> bool:
+    """Check if an MCP is enabled (or all are enabled if no filter)."""
+    return _enabled_early is None or name in _enabled_early
+
+# Only enforce keys for enabled MCPs
+if _requires("storage") and not STORAGE_API_KEY:
     raise RuntimeError("ARKTURIAN_API_KEY environment variable must be set.")
-if not ONEAL_STORAGE_API_KEY:
+if _requires("oneal-storage") and not ONEAL_STORAGE_API_KEY:
     raise RuntimeError("ONEAL_STORAGE_API_KEY environment variable must be set.")
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")

@@ -2042,6 +2042,56 @@ async def content_posts_delete(post_id: int) -> Dict[str, Any]:
 
 
 @content_mcp.tool(
+    name="posts_export_pdf",
+    description="""Export a post as a PDF document.
+
+    Renders the post (title, metadata, markdown/json/txt content) and optional
+    media gallery to PDF via WeasyPrint and returns it as base64.
+
+    Args:
+        post_id: ID of the post to export
+        include_media: Whether to append the media gallery section (default True)
+
+    Returns:
+        dict with:
+        - post_id, filename, mime_type, size_bytes
+        - pdf_base64: base64-encoded PDF content
+        - download_url: direct URL to the PDF endpoint
+    """,
+)
+async def content_posts_export_pdf(
+    post_id: int,
+    include_media: bool = True,
+) -> Dict[str, Any]:
+    url = f"{CONTENT_API_BASE}/api/v1/posts/{post_id}/export.pdf"
+    headers: Dict[str, str] = {}
+    if CONTENT_API_KEY:
+        headers["X-API-KEY"] = CONTENT_API_KEY
+    params = {"include_media": "true" if include_media else "false"}
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.get(url, headers=headers, params=params)
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"Upstream {response.status_code} from GET {url}: {response.text[:200]}"
+            )
+        pdf_bytes = response.content
+        disposition = response.headers.get("content-disposition", "")
+        filename = f"post-{post_id}.pdf"
+        if "filename=" in disposition:
+            filename = disposition.split("filename=", 1)[1].strip().strip('"')
+
+    return {
+        "post_id": post_id,
+        "filename": filename,
+        "mime_type": "application/pdf",
+        "size_bytes": len(pdf_bytes),
+        "pdf_base64": base64.b64encode(pdf_bytes).decode("ascii"),
+        "download_url": url,
+    }
+
+
+@content_mcp.tool(
     name="media_list",
     description="""List media attachments for a post.
 

@@ -5220,100 +5220,55 @@ _story_stack = AsyncExitStack()
 _cloud_stack = AsyncExitStack()
 
 
+# Track which MCP sessions were started (for shutdown ordering)
+_started_mcps: List[Any] = []
+
+
+def _all_mcps():
+    """All MCP definitions in mount order: (name, stack, mcp_instance)."""
+    return [
+        ("storage", _storage_stack, storage_mcp),
+        ("oneal", _oneal_stack, oneal_mcp),
+        ("oneal-storage", _oneal_storage_stack, oneal_storage_mcp),
+        ("artrack", _artrack_stack, artrack_mcp),
+        ("codepilot", _codepilot_stack, codepilot_mcp),
+        ("content", _content_stack, content_mcp),
+        ("tree", _tree_stack, tree_mcp),
+        ("ai", _ai_stack, ai_mcp),
+        ("tarot", _tarot_stack, tarot_mcp),
+        ("business", _business_stack, business_mcp),
+        ("comm", _comm_stack, comm_mcp),
+        ("knowledge", _knowledge_stack, knowledge_mcp),
+        ("review", _review_stack, review_mcp),
+        ("story", _story_stack, story_mcp),
+        ("cloud", _cloud_stack, cloud_mcp),
+    ]
+
+
 @app.on_event("startup")
 async def startup() -> None:
-    await _storage_stack.enter_async_context(storage_mcp.session_manager.run())
-    await storage_app.router.startup()
+    """Initialize session managers for all enabled MCPs.
 
-    await _oneal_stack.enter_async_context(oneal_mcp.session_manager.run())
-    await oneal_app.router.startup()
-
-    await _oneal_storage_stack.enter_async_context(oneal_storage_mcp.session_manager.run())
-    await oneal_storage_app.router.startup()
-
-    await _artrack_stack.enter_async_context(artrack_mcp.session_manager.run())
-    await artrack_app.router.startup()
-
-    await _codepilot_stack.enter_async_context(codepilot_mcp.session_manager.run())
-    await codepilot_app.router.startup()
-
-    await _content_stack.enter_async_context(content_mcp.session_manager.run())
-    await content_app.router.startup()
-
-    await _tree_stack.enter_async_context(tree_mcp.session_manager.run())
-    await tree_app.router.startup()
-
-    await _ai_stack.enter_async_context(ai_mcp.session_manager.run())
-    await ai_app.router.startup()
-
-    await _tarot_stack.enter_async_context(tarot_mcp.session_manager.run())
-    await tarot_app.router.startup()
-
-    await _business_stack.enter_async_context(business_mcp.session_manager.run())
-    await business_app.router.startup()
-
-    await _comm_stack.enter_async_context(comm_mcp.session_manager.run())
-    await comm_app.router.startup()
-
-    await _knowledge_stack.enter_async_context(knowledge_mcp.session_manager.run())
-    await knowledge_app.router.startup()
-
-    await _review_stack.enter_async_context(review_mcp.session_manager.run())
-    await review_app.router.startup()
-
-    await _story_stack.enter_async_context(story_mcp.session_manager.run())
-    await story_app.router.startup()
-
-    await _cloud_stack.enter_async_context(cloud_mcp.session_manager.run())
-    await cloud_app.router.startup()
+    Compatible with both old (0.27.x) and new (1.x) Starlette versions.
+    Respects MCP_SERVERS filter — only initializes enabled MCPs.
+    """
+    for name, stack, mcp in _all_mcps():
+        if ENABLED_MCPS is not None and name not in ENABLED_MCPS:
+            continue
+        await stack.enter_async_context(mcp.session_manager.run())
+        _started_mcps.append((name, stack))
+        logger.info("Started MCP session: %s", name)
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
-    await cloud_app.router.shutdown()
-    await _cloud_stack.aclose()
-
-    await story_app.router.shutdown()
-    await _story_stack.aclose()
-
-    await review_app.router.shutdown()
-    await _review_stack.aclose()
-
-    await knowledge_app.router.shutdown()
-    await _knowledge_stack.aclose()
-
-    await comm_app.router.shutdown()
-    await _comm_stack.aclose()
-
-    await business_app.router.shutdown()
-    await _business_stack.aclose()
-
-    await tarot_app.router.shutdown()
-    await _tarot_stack.aclose()
-
-    await ai_app.router.shutdown()
-    await _ai_stack.aclose()
-
-    await tree_app.router.shutdown()
-    await _tree_stack.aclose()
-
-    await content_app.router.shutdown()
-    await _content_stack.aclose()
-
-    await codepilot_app.router.shutdown()
-    await _codepilot_stack.aclose()
-
-    await artrack_app.router.shutdown()
-    await _artrack_stack.aclose()
-
-    await oneal_storage_app.router.shutdown()
-    await _oneal_storage_stack.aclose()
-
-    await oneal_app.router.shutdown()
-    await _oneal_stack.aclose()
-
-    await storage_app.router.shutdown()
-    await _storage_stack.aclose()
+    """Shut down session managers in reverse order."""
+    for name, stack in reversed(_started_mcps):
+        try:
+            await stack.aclose()
+            logger.info("Stopped MCP session: %s", name)
+        except Exception as e:
+            logger.warning("Error stopping MCP %s: %s", name, e)
 
 
 @app.get("/")

@@ -176,7 +176,7 @@ jobs:
             # SSL cert is shared with content.pdrei + pdrei (issued via certbot multi-domain)
             echo "Writing nginx vhost with SSL..."
             CERT_PATH="/etc/letsencrypt/live/mcp.pdrei.arkturian.com"
-            if [ ! -d "$CERT_PATH" ]; then
+            if ! sudo test -d "$CERT_PATH"; then
               echo "ERROR: SSL cert not found at $CERT_PATH"
               echo "Run: sudo certbot --nginx -d mcp.pdrei.arkturian.com -d content.pdrei.arkturian.com -d pdrei.arkturian.com"
               exit 1

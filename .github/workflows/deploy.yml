@@ -166,6 +166,7 @@ jobs:
             Environment="CONTENT_API_BASE=http://127.0.0.1:8015"
             Environment="CONTENT_API_KEY=${CONTENT_API_KEY}"
             Environment="STORAGE_API_BASE=http://127.0.0.1:8090"
+            Environment="ARKTURIAN_API_KEY=local-pdrei-no-auth"
             Environment="COMM_API_BASE=http://127.0.0.1:8030"
             Environment="CLOUD_API_BASE=http://127.0.0.1:8055"
             ExecStart=${DEPLOY_PATH}/venv/bin/python ${DEPLOY_PATH}/server.py

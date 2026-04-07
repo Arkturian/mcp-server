@@ -4715,10 +4715,35 @@ async def comm_gmail_list_messages(
 
 @comm_mcp.tool(
     name="gmail_get_message",
-    description="Get a single email with full body text. Requires source and message_id.",
+    description=(
+        "Get a single email with full body text and attachment metadata. "
+        "Returns body plus an `attachments` list with "
+        "{filename, mime_type, attachment_id, size}. "
+        "Use gmail_get_attachment to download a specific attachment's bytes."
+    ),
 )
 async def comm_gmail_get_message(source: str, message_id: str) -> Dict[str, Any]:
     return await call_comm_api("GET", f"/api/v1/gmail/{source}/messages/{message_id}")
+
+
+@comm_mcp.tool(
+    name="gmail_get_attachment",
+    description=(
+        "Download an email attachment as base64. "
+        "Use gmail_get_message first to discover attachment_ids. "
+        "Returns {account, message_id, attachment_id, size, data} where "
+        "`data` is standard base64 (decode with base64.b64decode to get bytes)."
+    ),
+)
+async def comm_gmail_get_attachment(
+    source: str,
+    message_id: str,
+    attachment_id: str,
+) -> Dict[str, Any]:
+    return await call_comm_api(
+        "GET",
+        f"/api/v1/gmail/{source}/messages/{message_id}/attachments/{attachment_id}",
+    )
 
 
 @comm_mcp.tool(

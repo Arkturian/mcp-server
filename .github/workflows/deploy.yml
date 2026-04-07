@@ -164,6 +164,7 @@ jobs:
             Environment="MCP_HOST=127.0.0.1"
             Environment="MCP_PORT=${UPSTREAM_PORT}"
             Environment="CONTENT_API_BASE=http://127.0.0.1:8015"
+            Environment="CONTENT_API_PUBLIC_BASE=https://content-api.pdrei.arkturian.com"
             Environment="CONTENT_API_KEY=${CONTENT_API_KEY}"
             Environment="STORAGE_API_BASE=http://127.0.0.1:8090"
             Environment="ARKTURIAN_API_KEY=local-pdrei-no-auth"

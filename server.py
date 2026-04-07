@@ -52,6 +52,10 @@ ARTRACK_API_KEY = os.getenv("ARTRACK_API_KEY", "")
 
 # Content API
 CONTENT_API_BASE = os.getenv("CONTENT_API_BASE", "https://content-api.arkturian.com")
+# Public-facing URL for share links / Telegram / browser downloads.
+# Falls back to CONTENT_API_BASE when not explicitly set. Set this when
+# CONTENT_API_BASE points at an internal address (e.g. http://127.0.0.1:8015).
+CONTENT_API_PUBLIC_BASE = os.getenv("CONTENT_API_PUBLIC_BASE", CONTENT_API_BASE)
 CONTENT_API_KEY = os.getenv("CONTENT_API_KEY", "").strip()
 
 # Tree API
@@ -2043,37 +2047,45 @@ async def content_posts_delete(post_id: int) -> Dict[str, Any]:
 
 @content_mcp.tool(
     name="posts_export_pdf",
-    description="""Export a post as a PDF document.
+    description="""Export a post as a PDF document via WeasyPrint.
 
-    Renders the post (title, metadata, markdown/json/txt content) and optional
-    media gallery to PDF via WeasyPrint and returns it as base64.
+    Returns metadata + a publicly fetchable download_url. Set include_base64=True
+    only when you really need the bytes inline (small posts only — large PDFs
+    blow past the tool result token limit).
+
+    Published posts: download_url is publicly accessible (shareable).
+    Draft/archived: download_url requires the X-API-KEY header.
 
     Args:
         post_id: ID of the post to export
-        include_media: Whether to append the media gallery section (default True)
+        include_media: Append the media gallery section (default True)
+        include_base64: Inline the full PDF as base64 (default False — use the
+                        download_url for sharing/large files)
 
     Returns:
         dict with:
-        - post_id, filename, mime_type, size_bytes
-        - pdf_base64: base64-encoded PDF content
-        - download_url: direct URL to the PDF endpoint
+        - post_id, filename, mime_type, size_bytes, is_published
+        - download_url: PUBLIC URL to the PDF endpoint (auth-free for published posts)
+        - pdf_base64: base64 PDF content (only if include_base64=True)
     """,
 )
 async def content_posts_export_pdf(
     post_id: int,
     include_media: bool = True,
+    include_base64: bool = False,
 ) -> Dict[str, Any]:
-    url = f"{CONTENT_API_BASE}/api/v1/posts/{post_id}/export.pdf"
+    # Render via internal address (fast, no SSL handshake)
+    internal_url = f"{CONTENT_API_BASE}/api/v1/posts/{post_id}/export.pdf"
     headers: Dict[str, str] = {}
     if CONTENT_API_KEY:
         headers["X-API-KEY"] = CONTENT_API_KEY
     params = {"include_media": "true" if include_media else "false"}
 
     async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.get(url, headers=headers, params=params)
+        response = await client.get(internal_url, headers=headers, params=params)
         if response.status_code != 200:
             raise RuntimeError(
-                f"Upstream {response.status_code} from GET {url}: {response.text[:200]}"
+                f"Upstream {response.status_code} from GET {internal_url}: {response.text[:200]}"
             )
         pdf_bytes = response.content
         disposition = response.headers.get("content-disposition", "")
@@ -2081,14 +2093,31 @@ async def content_posts_export_pdf(
         if "filename=" in disposition:
             filename = disposition.split("filename=", 1)[1].strip().strip('"')
 
-    return {
+    # Public URL — works for sharing via Telegram / browser / etc.
+    public_url = (
+        f"{CONTENT_API_PUBLIC_BASE}/api/v1/posts/{post_id}/export.pdf"
+        f"?include_media={'true' if include_media else 'false'}"
+    )
+
+    # Look up published status so caller knows if URL is auth-free
+    try:
+        post_meta = await call_content_api("GET", f"/api/v1/posts/{post_id}")
+        is_published = post_meta.get("status") == "published"
+    except Exception:
+        is_published = False
+
+    result: Dict[str, Any] = {
         "post_id": post_id,
         "filename": filename,
         "mime_type": "application/pdf",
         "size_bytes": len(pdf_bytes),
-        "pdf_base64": base64.b64encode(pdf_bytes).decode("ascii"),
-        "download_url": url,
+        "download_url": public_url,
+        "is_published": is_published,
+        "auth_required": not is_published,
     }
+    if include_base64:
+        result["pdf_base64"] = base64.b64encode(pdf_bytes).decode("ascii")
+    return result
 
 
 @content_mcp.tool(

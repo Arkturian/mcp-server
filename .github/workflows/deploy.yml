@@ -119,6 +119,8 @@ jobs:
             DEPLOY_PATH="/var/www/mcp-server"
             REPO_URL="https://github.com/Arkturian/mcp-server.git"
             SERVICE_NAME="mcp-server"
+            DOMAIN="mcp.pdrei.arkturian.com"
+            UPSTREAM_PORT=8080
 
             # Init git repo if needed
             if [ ! -d "$DEPLOY_PATH/.git" ]; then
@@ -143,10 +145,9 @@ jobs:
             pip install --upgrade pip --quiet
             pip install -r requirements.txt --quiet
 
-            # Ensure systemd unit exists with MCP_SERVERS=content
-            if [ ! -f /etc/systemd/system/${SERVICE_NAME}.service ]; then
-              echo "Creating systemd unit for $SERVICE_NAME..."
-              sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null <<'UNIT'
+            # Always (re)write systemd unit so changes propagate
+            echo "Writing systemd unit..."
+            sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null <<UNIT
             [Unit]
             Description=MCP Server (content only)
             After=network.target
@@ -154,29 +155,60 @@ jobs:
             [Service]
             Type=simple
             User=jascha
-            WorkingDirectory=/var/www/mcp-server
+            WorkingDirectory=${DEPLOY_PATH}
             Environment="MCP_SERVERS=content"
-            Environment="HOST=127.0.0.1"
-            Environment="PORT=8080"
+            Environment="MCP_HOST=127.0.0.1"
+            Environment="MCP_PORT=${UPSTREAM_PORT}"
             Environment="CONTENT_API_BASE=http://127.0.0.1:8015"
-            ExecStart=/var/www/mcp-server/venv/bin/python /var/www/mcp-server/server.py
+            ExecStart=${DEPLOY_PATH}/venv/bin/python ${DEPLOY_PATH}/server.py
             Restart=on-failure
             RestartSec=5
 
             [Install]
             WantedBy=multi-user.target
             UNIT
-              sudo systemctl daemon-reload
-              sudo systemctl enable ${SERVICE_NAME}
+            sudo systemctl daemon-reload
+            sudo systemctl enable ${SERVICE_NAME}
+
+            # Always (re)write nginx vhost — Host header workaround for FastMCP
+            # FastMCP enables DNS rebinding protection on localhost; nginx must
+            # forward Host=localhost:PORT and strip Origin so the proxy passes through
+            echo "Writing nginx vhost..."
+            sudo tee /etc/nginx/sites-available/${DOMAIN} > /dev/null <<NGINX
+            server {
+                listen 80;
+                server_name ${DOMAIN};
+
+                location / {
+                    proxy_pass http://127.0.0.1:${UPSTREAM_PORT};
+                    proxy_http_version 1.1;
+                    # FastMCP DNS rebinding protection: only allows localhost:* host
+                    proxy_set_header Host localhost:${UPSTREAM_PORT};
+                    proxy_set_header Origin "";
+                    proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto \$scheme;
+                    proxy_read_timeout 300s;
+                    proxy_buffering off;
+                }
+            }
+            NGINX
+            sudo ln -sf /etc/nginx/sites-available/${DOMAIN} /etc/nginx/sites-enabled/${DOMAIN}
+
+            # Reapply HTTPS via certbot if cert exists (idempotent — only modifies vhost)
+            if [ -d /etc/letsencrypt/live/${DOMAIN} ]; then
+              sudo certbot --nginx -d ${DOMAIN} --non-interactive --agree-tos --email apopovic.aut@gmail.com --redirect 2>&1 | tail -5 || true
             fi
+
+            sudo nginx -t && sudo systemctl reload nginx
 
             echo "Restarting $SERVICE_NAME..."
             sudo systemctl restart ${SERVICE_NAME}
             sleep 5
 
             # Health check
-            if curl -sf http://localhost:8080/health > /dev/null; then
-              echo "✅ Health check passed!"
+            if curl -sf http://localhost:${UPSTREAM_PORT}/ > /dev/null; then
+              echo "✅ Local health check passed!"
               echo "Mounted endpoints:"
               sudo journalctl -u ${SERVICE_NAME} -n 30 --no-pager | grep -E "(✓ Mounted|⊘ Skipping)" || true
             else
@@ -184,4 +216,11 @@ jobs:
               sudo systemctl status ${SERVICE_NAME} --no-pager
               sudo journalctl -u ${SERVICE_NAME} -n 50 --no-pager
               exit 1
+            fi
+
+            # Verify HTTPS endpoint
+            if curl -sf https://${DOMAIN}/ > /dev/null; then
+              echo "✅ HTTPS endpoint reachable"
+            else
+              echo "⚠️ HTTPS endpoint check failed (DNS / cert?)"
             fi

@@ -4482,11 +4482,28 @@ Available templates (pass as 'template' param):
     name="send_email",
     description="""Send an email through the Comm API.
 
+    Source identities depend on the comm-api instance:
+
+    - arkturian box: "arkturian" (SMTP, alex@arkturian.com),
+      "apopovic" (Gmail API, apopovic.aut@gmail.com),
+      "edera" (Gmail API, a.popovic@edera-safety.com), plus any other
+      source configured via SOURCES + GMAIL_REFRESH_TOKEN_* env vars.
+
+    - pdrei box: only "jascha" (Gmail API,
+      jascha.popovic@bellevue-living.net) is wired. pdrei BLOCKS
+      outbound SMTP (Linode), so sending with a non-Gmail source will
+      TIMEOUT with a 502 from the comm-api.
+
+    If you omit source, the instance's configured default is used
+    (env COMM_DEFAULT_SOURCE, falls back to "arkturian"). On pdrei
+    that default is "jascha" so send_email without an explicit source
+    Just Works and routes via Gmail API.
+
     Args:
         to: Recipient email address
         subject: Email subject
         body: Plain text body
-        source: Source identity (default: "arkturian"). Options: "arkturian", "spreadyourwings"
+        source: Optional source identity. Omit to use instance default.
         template: Optional template name (e.g. "honorarnote_send", "invoice_send", "payment_reminder", "notification")
         template_data: Optional dict of data for template rendering
     """,
@@ -4495,16 +4512,17 @@ async def comm_send_email(
     to: str,
     subject: str,
     body: str = "",
-    source: str = "arkturian",
+    source: Optional[str] = None,
     template: Optional[str] = None,
     template_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     json_body: Dict[str, Any] = {
-        "source": source,
         "to": to,
         "subject": subject,
         "body": body,
     }
+    if source:
+        json_body["source"] = source
     if template:
         json_body["template"] = template
     if template_data:

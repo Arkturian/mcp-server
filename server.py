@@ -4737,7 +4737,9 @@ async def comm_gmail_latest(source: str, query: str = "") -> Dict[str, Any]:
     name="gmail_send",
     description=(
         "Send an email via Gmail. "
-        "Source: 'apopovic' (sends from apopovic.aut@gmail.com) or 'edera' (a.popovic@edera-safety.com)."
+        "Source identifies which Gmail account sends. Available sources depend on the deployment "
+        "(e.g. 'apopovic' = apopovic.aut@gmail.com, 'edera' = a.popovic@edera-safety.com, "
+        "'jascha' = jascha.popovic@bellevue-living.net on pdrei)."
     ),
 )
 async def comm_gmail_send(
@@ -4747,7 +4749,7 @@ async def comm_gmail_send(
     body: str,
     html: bool = False,
 ) -> Dict[str, Any]:
-    return await call_comm_api("POST", f"/api/v1/gmail/{source}/send", json={
+    return await call_comm_api("POST", f"/api/v1/gmail/{source}/send", json_body={
         "to": to, "subject": subject, "body": body, "html": html
     })
 

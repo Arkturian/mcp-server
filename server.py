@@ -2647,19 +2647,67 @@ async def content_stories_generate_languages(
 
 @content_mcp.tool(
     name="collections_list",
-    description="""List all collections.
+    description="""List collections (hierarchical tree support).
 
-    Collections are optional groupings for posts (e.g. by project, topic, or campaign).
-    Returns collections with their post counts.
+    Collections are hierarchical groupings for posts. Each collection has an
+    optional parent (parent_id) — a collection without parent_id is top-level.
+    Each collection knows post_count and children_count.
+
+    Parameters:
+    - parent_id: List only collections directly under this parent (int)
+    - root_only: List only top-level collections (no parent). Default: false
+
+    Common usage:
+    - root_only=True               → top-level overview
+    - parent_id=42                 → direct children of collection #42
+    - (no params)                  → flat list of all collections (use for tree assembly)
     """,
 )
-async def content_collections_list() -> List[Dict[str, Any]]:
-    return await call_content_api("GET", "/api/v1/collections/")
+async def content_collections_list(
+    parent_id: Optional[int] = None,
+    root_only: bool = False,
+) -> List[Dict[str, Any]]:
+    params: Dict[str, Any] = {}
+    if parent_id is not None:
+        params["parent_id"] = parent_id
+    if root_only:
+        params["root_only"] = "true"
+    return await call_content_api("GET", "/api/v1/collections/", params=params or None)
+
+
+@content_mcp.tool(
+    name="collections_tree",
+    description="""Return the entire collection hierarchy as a nested tree.
+
+    Convenience wrapper that calls collections_list with no filter and assembles
+    a tree view (children nested under each parent). Each node carries:
+    id, parent_id, name, slug, description, color, icon, position,
+    post_count, children_count, children (list of child nodes).
+
+    Use this when you want a single call to understand the full taxonomy.
+    """,
+)
+async def content_collections_tree() -> List[Dict[str, Any]]:
+    flat = await call_content_api("GET", "/api/v1/collections/")
+    if not isinstance(flat, list):
+        return []
+    nodes: Dict[int, Dict[str, Any]] = {}
+    for c in flat:
+        nodes[c["id"]] = {**c, "children": []}
+    roots: List[Dict[str, Any]] = []
+    for c in flat:
+        node = nodes[c["id"]]
+        parent_id = c.get("parent_id")
+        if parent_id and parent_id in nodes:
+            nodes[parent_id]["children"].append(node)
+        else:
+            roots.append(node)
+    return roots
 
 
 @content_mcp.tool(
     name="collections_get",
-    description="""Get a collection by slug with all its posts.
+    description="""Get a collection by slug with all its posts and direct children.
 
     Parameters:
     - slug: Collection slug (e.g. "adic26-defense")
@@ -2671,22 +2719,37 @@ async def content_collections_get(slug: str) -> Dict[str, Any]:
 
 @content_mcp.tool(
     name="collections_create",
-    description="""Create a new collection.
+    description="""Create a new collection — optionally as a child of another collection.
+
+    Pass parent_id to nest the new collection under an existing one. Without
+    parent_id the collection becomes top-level. Use this to build hierarchies
+    like Engineering → Architecture → Decisions.
 
     Parameters:
     - name: Collection name (required)
+    - parent_id: Parent collection ID — omit to create at top level
     - description: Optional description
     - color: Optional hex color (e.g. "#4CAF50")
     - icon: Optional icon name or emoji
+    - position: Sort position within siblings (default 0)
     """,
 )
 async def content_collections_create(
     name: str,
+    parent_id: Optional[int] = None,
     description: str = "",
     color: Optional[str] = None,
     icon: Optional[str] = None,
+    position: Optional[int] = None,
 ) -> Dict[str, Any]:
-    body = _clean_params(name=name, description=description, color=color, icon=icon)
+    body = _clean_params(
+        name=name,
+        parent_id=parent_id,
+        description=description,
+        color=color,
+        icon=icon,
+        position=position,
+    )
     return await call_content_api("POST", "/api/v1/collections/", json_body=body)
 
 
@@ -2694,22 +2757,41 @@ async def content_collections_create(
     name="collections_update",
     description="""Update an existing collection.
 
+    Use parent_id to MOVE a collection in the hierarchy (set to null to make
+    it top-level, set to another id to nest it under that parent).
+
     Parameters:
     - collection_id: Collection ID (required)
     - name: New name (optional)
+    - parent_id: New parent — pass an id to re-parent, or 0 / null to detach
     - description: New description (optional)
     - color: New color (optional)
     - icon: New icon (optional)
+    - position: New sort position within siblings (optional)
     """,
 )
 async def content_collections_update(
     collection_id: int,
     name: Optional[str] = None,
+    parent_id: Optional[int] = None,
     description: Optional[str] = None,
     color: Optional[str] = None,
     icon: Optional[str] = None,
+    position: Optional[int] = None,
 ) -> Dict[str, Any]:
-    body = _clean_params(name=name, description=description, color=color, icon=icon)
+    body = _clean_params(
+        name=name,
+        description=description,
+        color=color,
+        icon=icon,
+        position=position,
+    )
+    # parent_id needs special handling: explicit null means "detach to root",
+    # so we keep the key even when value is None — but only if caller
+    # explicitly passed it. Since FastMCP can't distinguish "not passed" from
+    # "passed as None", treat 0 as the explicit-null sentinel.
+    if parent_id is not None:
+        body["parent_id"] = None if parent_id == 0 else parent_id
     return await call_content_api("PUT", f"/api/v1/collections/{collection_id}", json_body=body)
 
 

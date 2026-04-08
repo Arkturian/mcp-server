@@ -4811,6 +4811,12 @@ async def comm_contacts_get(
     name="incoming_messages",
     description="""List incoming Telegram messages received by the bot.
 
+    Each message includes a `message_type` ("text", "photo", "document",
+    "video", "voice", "audio", "sticker"). For media messages the response
+    also carries `file_id`, `mime_type`, `file_size`, and `file_name`.
+    Use `telegram_get_file(file_id)` to fetch the actual bytes when you
+    need to process a photo/document/video.
+
     Optional filters:
     - sender: Filter by sender name (fuzzy match)
     - chat_id: Filter by chat ID
@@ -4824,6 +4830,23 @@ async def comm_incoming_messages(
 ) -> Dict[str, Any]:
     params = _clean_params(sender=sender, chat_id=chat_id, limit=limit)
     return await call_comm_api("GET", "/api/v1/contacts/incoming", params=params)
+
+
+@comm_mcp.tool(
+    name="telegram_get_file",
+    description="""Resolve a Telegram file_id to its actual content.
+
+    Pass a `file_id` from `incoming_messages` (for photo/document/video/
+    voice/audio/sticker rows) and get back the file metadata plus the raw
+    bytes as base64. Use this to actually load the photo/document/video
+    that arrived via Telegram into your processing pipeline.
+
+    Returns: {file_id, file_unique_id, file_path, file_size, mime_type, data}
+    where `data` is the base64-encoded raw bytes.
+    """,
+)
+async def comm_telegram_get_file(file_id: str) -> Dict[str, Any]:
+    return await call_comm_api("GET", f"/api/v1/telegram/files/{file_id}")
 
 
 # --- Info ---

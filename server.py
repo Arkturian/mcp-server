@@ -1338,6 +1338,100 @@ async def artrack_pois_pretty(
 
 
 @artrack_mcp.tool(
+    name="pois_near",
+    description="""GPS-based POI lookup with route snapping. Optimized for AI audio guides.
+
+    Given a GPS position (lat, lng), returns nearby POIs sorted by distance with rich metadata
+    (knowledge texts, audio_id, illustration_id, category) and route-snapping info
+    (snapped position + along_meters on the route).
+
+    This is the recommended way to find POIs for context-aware audio guides — no need to
+    download all POIs and filter client-side.
+
+    Parameters:
+    - track_id: Track to search (e.g. 30 for Tscheppaschlucht)
+    - lat, lng: User's current GPS position
+    - radius_m: Max distance in meters (default 200)
+    - limit: Max POIs to return (default 10)
+    - route_id: Optional - constrain to a specific route
+    - direction: "ahead" | "behind" | None (None = all). Requires user to be on a route.
+    - include_text: Include knowledge texts (default true; set false for smaller payload)
+
+    Returns:
+    {
+      track_id, query, snap (snapped pos + along_meters), total_found,
+      pois: [{id, name, lat, lng, distance_m, along_meters, ahead, knowledge,
+              audio_id, illustration_id, ...}]
+    }
+
+    Example use cases:
+    - Audio guide: "Bin ich nah bei einem POI? Gib mir die Texte zum Vorlesen."
+    - Story trigger: "Welcher Story Point ist als nächstes auf meiner Route?"
+    - Navigation hint: "Was ist 100m vor mir interessant?"
+    """,
+)
+async def artrack_pois_near(
+    track_id: int,
+    lat: float,
+    lng: float,
+    radius_m: int = 200,
+    limit: int = 10,
+    route_id: Optional[int] = None,
+    direction: Optional[str] = None,
+    include_text: bool = True,
+) -> Dict[str, Any]:
+    params = _clean_params(
+        lat=lat,
+        lng=lng,
+        radius_m=radius_m,
+        limit=limit,
+        route_id=route_id,
+        direction=direction,
+        include_text=include_text,
+    )
+    return await call_artrack_api("GET", f"/tracks/{track_id}/pois-near", params=params)
+
+
+@artrack_mcp.tool(
+    name="pois_near_pretty",
+    description="""GPS-based POI lookup formatted as compact text for AI consumption.
+
+    Same as pois_near but returns a token-efficient plain-text summary instead of JSON.
+    Includes all 3 intelligence layers (Route, POI, Story) + Screen Points.
+
+    Use this when you want to feed the result directly into an LLM prompt without
+    parsing JSON. The format is structured Markdown that LLMs can easily reason about.
+
+    Returns sections:
+    - Route Intelligence (where on route, progress, next POI)
+    - POI Intelligence (manual waypoints with knowledge texts)
+    - Story Intelligence (story points + POIs with attached stories)
+    - Screen Points / Media (videos, photos)
+    """,
+)
+async def artrack_pois_near_pretty(
+    track_id: int,
+    lat: float,
+    lng: float,
+    radius_m: int = 200,
+    limit: int = 5,
+    route_id: Optional[int] = None,
+) -> str:
+    params = _clean_params(
+        lat=lat, lng=lng, radius_m=radius_m, limit=limit, route_id=route_id,
+    )
+    # Plain-text endpoint — fetch as text directly
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        response = await client.get(
+            f"{ARTRACK_API_BASE}/tracks/{track_id}/pois-near-pretty",
+            headers={"X-API-KEY": ARTRACK_API_KEY},
+            params=params,
+        )
+        response.raise_for_status()
+        return response.text
+
+
+@artrack_mcp.tool(
     name="segments_pretty",
     description="""Get human-readable list of all segments for a track.
 

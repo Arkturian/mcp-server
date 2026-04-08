@@ -1393,6 +1393,45 @@ async def artrack_pois_near(
 
 
 @artrack_mcp.tool(
+    name="pois_near_pretty",
+    description="""GPS-based POI lookup formatted as compact text for AI consumption.
+
+    Same as pois_near but returns a token-efficient plain-text summary instead of JSON.
+    Includes all 3 intelligence layers (Route, POI, Story) + Screen Points.
+
+    Use this when you want to feed the result directly into an LLM prompt without
+    parsing JSON. The format is structured Markdown that LLMs can easily reason about.
+
+    Returns sections:
+    - Route Intelligence (where on route, progress, next POI)
+    - POI Intelligence (manual waypoints with knowledge texts)
+    - Story Intelligence (story points + POIs with attached stories)
+    - Screen Points / Media (videos, photos)
+    """,
+)
+async def artrack_pois_near_pretty(
+    track_id: int,
+    lat: float,
+    lng: float,
+    radius_m: int = 200,
+    limit: int = 5,
+    route_id: Optional[int] = None,
+) -> str:
+    params = _clean_params(
+        lat=lat, lng=lng, radius_m=radius_m, limit=limit, route_id=route_id,
+    )
+    # Plain-text endpoint — fetch as text directly
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        response = await client.get(
+            f"{ARTRACK_API_BASE}/tracks/{track_id}/pois-near-pretty",
+            headers={"X-API-KEY": ARTRACK_API_KEY},
+            params=params,
+        )
+        response.raise_for_status()
+        return response.text
+
+
+@artrack_mcp.tool(
     name="segments_pretty",
     description="""Get human-readable list of all segments for a track.
 

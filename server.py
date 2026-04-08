@@ -5382,20 +5382,6 @@ async def cloud_create_session(
 
 
 @cloud_mcp.tool(
-    name="reply",
-    description="Reply to an IACP message by its ID. Use this instead of just responding in the terminal — it delivers instantly without polling. The msg_id is in the [IACP:msg_id:sender] marker of the incoming message.",
-)
-async def cloud_reply(
-    msg_id: str,
-    response: str,
-) -> Dict[str, Any]:
-    return await call_cloud_api(
-        "POST", "/api/agents/reply",
-        json_body={"id": msg_id, "response": response},
-    )
-
-
-@cloud_mcp.tool(
     name="health",
     description="Check if the Cloud API is running.",
 )

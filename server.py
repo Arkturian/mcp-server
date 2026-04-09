@@ -40,7 +40,7 @@ from mcp.server.fastmcp import FastMCP
 STORAGE_API_BASE = os.getenv("ARKTURIAN_API_BASE", "https://api-storage.arkturian.com")
 STORAGE_API_KEY = os.getenv("ARKTURIAN_API_KEY", "")
 
-ONEAL_API_BASE = os.getenv("ONEAL_API_BASE", "https://gsgbot.arkturian.com/oneal-api")
+ONEAL_API_BASE = os.getenv("ONEAL_API_BASE", "http://127.0.0.1:8014")
 ONEAL_API_KEY = os.getenv("ONEAL_API_KEY", "oneal_demo_token")
 
 # O'Neal Storage API (same base URL as Arkturian, different API key for tenant isolation)

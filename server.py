@@ -40,7 +40,7 @@ from mcp.server.fastmcp import FastMCP
 STORAGE_API_BASE = os.getenv("ARKTURIAN_API_BASE", "https://api-storage.arkturian.com")
 STORAGE_API_KEY = os.getenv("ARKTURIAN_API_KEY", "")
 
-ONEAL_API_BASE = os.getenv("ONEAL_API_BASE", "https://oneal-api.arkturian.com")
+ONEAL_API_BASE = os.getenv("ONEAL_API_BASE", "https://gsgbot.arkturian.com/oneal-api")
 ONEAL_API_KEY = os.getenv("ONEAL_API_KEY", "oneal_demo_token")
 
 # O'Neal Storage API (same base URL as Arkturian, different API key for tenant isolation)
@@ -944,7 +944,7 @@ async def oneal_products_list(
         limit=limit,
         offset=offset,
     )
-    return await call_storage_api("GET", "/storage/oneal/products", params=params)
+    return await call_oneal_api("GET", "/v1/products", params=params)
 
 
 @oneal_mcp.tool(
@@ -979,7 +979,7 @@ async def oneal_products_list(
     """,
 )
 async def oneal_products_get(product_id: str) -> Dict[str, Any]:
-    return await call_storage_api("GET", f"/storage/oneal/products/{product_id}")
+    return await call_oneal_api("GET", f"/v1/products/{product_id}")
 
 
 @oneal_mcp.tool(

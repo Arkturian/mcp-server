@@ -5630,6 +5630,174 @@ async def cloud_send_to_role(
     )
 
 
+# ---------------------------------------------------------------------------
+# Pool Management
+# ---------------------------------------------------------------------------
+
+@cloud_mcp.tool(
+    name="list_pools",
+    description=(
+        "List all session pools across the federation. Shows pool name, size, agent, model, "
+        "effort, idle timeout, and per-instance status (running, available, acquired). "
+        "Pools hold N pre-warmed bot instances with acquire/release lifecycle."
+    ),
+)
+async def cloud_list_pools() -> Dict[str, Any]:
+    return await call_cloud_api("GET", "/api/pools/all")
+
+
+@cloud_mcp.tool(
+    name="create_pool",
+    description=(
+        "Create a new session pool with N pre-warmed bot instances. "
+        "Instances are ephemeral: auto-cleanup on disconnect, history wiped on release. "
+        "The watchdog starts instances automatically within 30 seconds. "
+        "Example: create_pool('guide', size=3, agent='claude', model='sonnet', effort='low')"
+    ),
+)
+async def cloud_create_pool(
+    name: str,
+    size: int = 3,
+    agent: str = "claude",
+    model: str = "",
+    effort: str = "high",
+    idle_timeout_minutes: int = 30,
+) -> Dict[str, Any]:
+    return await call_cloud_api(
+        "POST", "/api/pools",
+        json_body={
+            "name": name, "size": size, "agent": agent,
+            "model": model, "effort": effort,
+            "idle_timeout_minutes": idle_timeout_minutes,
+        },
+    )
+
+
+@cloud_mcp.tool(
+    name="delete_pool",
+    description="Delete a session pool and kill all its instances.",
+)
+async def cloud_delete_pool(name: str) -> Dict[str, Any]:
+    return await call_cloud_api("DELETE", f"/api/pools/{name}")
+
+
+@cloud_mcp.tool(
+    name="pool_config",
+    description=(
+        "Update pool configuration. Changeable fields: size (number of instances), "
+        "idle_timeout_minutes (auto-release acquired instances after N minutes idle)."
+    ),
+)
+async def cloud_pool_config(
+    name: str,
+    size: int | None = None,
+    idle_timeout_minutes: int | None = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {}
+    if size is not None:
+        body["size"] = size
+    if idle_timeout_minutes is not None:
+        body["idle_timeout_minutes"] = idle_timeout_minutes
+    return await call_cloud_api("PATCH", f"/api/pools/{name}/config", json_body=body)
+
+
+@cloud_mcp.tool(
+    name="acquire_pool",
+    description=(
+        "Acquire a free instance from a pool for a user. Returns the instance name. "
+        "The instance is marked as in-use and won't be given to another caller. "
+        "Auto-releases after idle_timeout_minutes or WebSocket disconnect + grace period."
+    ),
+)
+async def cloud_acquire_pool(
+    pool_name: str,
+    user_id: str = "",
+) -> Dict[str, Any]:
+    return await call_cloud_api(
+        "POST", f"/api/pools/{pool_name}/acquire",
+        json_body={"user_id": user_id},
+    )
+
+
+@cloud_mcp.tool(
+    name="release_pool",
+    description=(
+        "Release an acquired pool instance. Kills the session, wipes conversation history, "
+        "and sets status to registered. The watchdog will start a fresh instance within 30s."
+    ),
+)
+async def cloud_release_pool(
+    pool_name: str,
+    instance_name: str,
+) -> Dict[str, Any]:
+    return await call_cloud_api("POST", f"/api/pools/{pool_name}/release/{instance_name}")
+
+
+# ---------------------------------------------------------------------------
+# Session Lifecycle
+# ---------------------------------------------------------------------------
+
+@cloud_mcp.tool(
+    name="session_lifecycle",
+    description=(
+        "Get lifecycle settings for a session: ephemeral flag, WS grace period, "
+        "idle timeout, wipe-on-cleanup, auto-restart, current WebSocket status, "
+        "pool membership, and acquisition state."
+    ),
+)
+async def cloud_session_lifecycle(session_name: str) -> Dict[str, Any]:
+    return await call_cloud_api("GET", f"/api/sessions/{session_name}/lifecycle")
+
+
+@cloud_mcp.tool(
+    name="session_config",
+    description=(
+        "Update session lifecycle configuration. Fields: ephemeral (bool), "
+        "ws_grace_seconds (int, delay after WS disconnect before cleanup), "
+        "wipe_on_cleanup (bool, delete history on cleanup), "
+        "max_idle_minutes (int, 0=never), auto_restart (bool), "
+        "effort (str: high/low), model (str)."
+    ),
+)
+async def cloud_session_config(
+    session_name: str,
+    ephemeral: bool | None = None,
+    ws_grace_seconds: int | None = None,
+    wipe_on_cleanup: bool | None = None,
+    max_idle_minutes: int | None = None,
+    auto_restart: bool | None = None,
+    effort: str | None = None,
+    model: str | None = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {}
+    if ephemeral is not None:
+        body["ephemeral"] = ephemeral
+    if ws_grace_seconds is not None:
+        body["ws_grace_seconds"] = ws_grace_seconds
+    if wipe_on_cleanup is not None:
+        body["wipe_on_cleanup"] = wipe_on_cleanup
+    if max_idle_minutes is not None:
+        body["max_idle_minutes"] = max_idle_minutes
+    if auto_restart is not None:
+        body["auto_restart"] = auto_restart
+    if effort is not None:
+        body["effort"] = effort
+    if model is not None:
+        body["model"] = model
+    return await call_cloud_api("PATCH", f"/api/sessions/{session_name}/config", json_body=body)
+
+
+@cloud_mcp.tool(
+    name="system_memory",
+    description=(
+        "Get system memory info: total/used/free RAM, swap, bot RAM usage, "
+        "max_concurrent sessions, running count, and whether a new session can start."
+    ),
+)
+async def cloud_system_memory() -> Dict[str, Any]:
+    return await call_cloud_api("GET", "/api/system/memory")
+
+
 cloud_app = cloud_mcp.streamable_http_app()
 mount_mcp("cloud", CLOUD_PATH, cloud_app)
 

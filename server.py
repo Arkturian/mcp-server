@@ -1688,6 +1688,58 @@ async def artrack_guide_config_update(
 
 
 @artrack_mcp.tool(
+    name="osm_nearby",
+    description="""Query nearby real-world features from OpenStreetMap within a radius.
+
+    Returns buildings, restaurants, shops, churches, parks, historic sites etc.
+    that actually exist near the given GPS position. Use this to ground your
+    narration in real surroundings — reference actual places instead of guessing.
+
+    Results are server-side cached (1h, ~110m grid) so repeated calls are fast.
+
+    Parameters:
+    - lat, lng: GPS position to search around
+    - radius_m: Search radius in meters (10-2000, default 200)
+
+    Returns compact text: "Café Mozart (cafe, 15m) | Stadtpark (park, 45m) | ..."
+
+    When to use:
+    - User is walking/biking and you want to mention real nearby places
+    - You need to verify if a building/shop/landmark actually exists nearby
+    - User asks "what's around me?" and you want facts, not hallucinations
+    """,
+)
+async def artrack_osm_nearby(
+    lat: float,
+    lng: float,
+    radius_m: int = 200,
+) -> Dict[str, Any]:
+    return await call_artrack_api(
+        "GET", "/osm/nearby/compact",
+        params={"lat": lat, "lng": lng, "radius_m": min(radius_m, 2000)},
+    )
+
+
+@artrack_mcp.tool(
+    name="osm_nearby_full",
+    description="""Query nearby OSM features with full detail (JSON with coordinates).
+
+    Same data as osm_nearby but returns structured JSON with lat/lng per feature.
+    Use when you need coordinates for map display or distance calculations.
+    """,
+)
+async def artrack_osm_nearby_full(
+    lat: float,
+    lng: float,
+    radius_m: int = 200,
+) -> Dict[str, Any]:
+    return await call_artrack_api(
+        "GET", "/osm/nearby",
+        params={"lat": lat, "lng": lng, "radius_m": min(radius_m, 2000)},
+    )
+
+
+@artrack_mcp.tool(
     name="service_health",
     description="Health check for the Artrack API.",
 )
@@ -3521,7 +3573,7 @@ async def tree_service_health() -> Any:
 # FastAPI wrapper
 # --------------------------------------------------------------------------- #
 
-app = FastAPI(title="arkturian-mcp", version="2.9.0", description="Arkturian MCP Aggregator with AI generation, Content API, Tree API, Business API, and Comm API")
+app = FastAPI(title="arkturian-mcp", version="3.0.0", description="Arkturian MCP Aggregator with RBAC authentication")
 
 app.add_middleware(
     CORSMiddleware,
@@ -3530,6 +3582,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# JWT Authentication Middleware — validates agent tokens from Auth-API
+from auth import JWTAuthMiddleware
+app.add_middleware(JWTAuthMiddleware)
 
 # Mount MCP transports
 storage_app = storage_mcp.streamable_http_app()

@@ -133,7 +133,15 @@ REVIEW_PATH = "/review"
 
 # Cloud API (inter-agent communication)
 CLOUD_API_BASE = os.getenv("CLOUD_API_BASE", "http://localhost:8070")
+
+# Conversation API — cross-channel conversation tracking + agent dispatch
+CONVERSATION_API_BASE = os.getenv(
+    "CONVERSATION_API_BASE",
+    "https://conversation-api.arkserver.arkturian.com",
+)
+CONVERSATION_API_KEY = os.getenv("CONVERSATION_API_KEY", "").strip()
 CLOUD_PATH = "/cloud"
+CONVERSATION_PATH = "/conversation"
 # Shared secret for cross-node IACP role addressing. Must match IACP_TOKEN
 # env on every cloud-api in the federation. Used by send_to_role().
 IACP_TOKEN = os.getenv("IACP_TOKEN", "").strip()
@@ -418,6 +426,29 @@ async def call_codepilot_api(
     return await _fetch_json(
         method,
         f"{CODEPILOT_API_BASE}{endpoint}",
+        headers=headers,
+        params=params,
+        json_body=json_body,
+    )
+
+
+async def call_conversation_api(
+    method: str,
+    endpoint: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """Call Conversation API for cross-channel thread tracking + agent dispatch.
+
+    Sends X-API-KEY header if CONVERSATION_API_KEY env var is set.
+    """
+    headers: Dict[str, str] = {}
+    if CONVERSATION_API_KEY:
+        headers["X-API-KEY"] = CONVERSATION_API_KEY
+    return await _fetch_json(
+        method,
+        f"{CONVERSATION_API_BASE}{endpoint}",
         headers=headers,
         params=params,
         json_body=json_body,
@@ -5858,6 +5889,303 @@ cloud_app = cloud_mcp.streamable_http_app()
 mount_mcp("cloud", CLOUD_PATH, cloud_app)
 
 
+# ═══════════════════════════════════════════════════════════════════
+# Conversation API — threads, events, persons, agent actions
+# ═══════════════════════════════════════════════════════════════════
+
+conversation_mcp = FastMCP(
+    name="conversation-api",
+    streamable_http_path="/",
+    stateless_http=True,
+    auth=None,
+    log_level="INFO",
+)
+
+
+@conversation_mcp.tool(
+    name="list",
+    description="""List conversations (threaded email/messaging threads).
+
+    Returns most recent real (non-noise) conversations by default. Each
+    conversation has: id, topic_summary, topic_clean, status, ball_with,
+    last_activity_at, participants[], event_count, open_item_count,
+    auto_close_decision, auto_close_confidence.
+
+    Parameters:
+    - status (optional): filter — open | waiting_me | waiting_them | stalled | closed
+    - include_noise (default False): also include newsletters/notifications
+      that the heuristic classifier marked as non-conversation.
+    - limit (default 50): maximum number of conversations.
+
+    Use this to scan the user's ongoing threads. Follow up with `get` on a
+    specific conversation_id for the full event body.
+    """,
+)
+async def conversation_list(
+    status: Optional[str] = None,
+    include_noise: bool = False,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"limit": limit}
+    if status:
+        params["status"] = status
+    if include_noise:
+        params["include_noise"] = "true"
+    return await call_conversation_api("GET", "/api/v1/conversations", params=params)
+
+
+@conversation_mcp.tool(
+    name="get",
+    description="""Get a single conversation with full details.
+
+    Returns: id, topic_summary, topic_clean, status, ball_with,
+    opened_at, last_activity_at, closed_at, is_real_conversation,
+    auto_close_decision/confidence/reasoning, participants[], events[],
+    open_items[].
+
+    Parameters:
+    - conversation_id (required): e.g. 'c_abc123def456'
+    - include_body (default True): include each event's full content_full
+      (the raw email body). Set False for a lightweight metadata-only view.
+
+    Events come chronological, newest at the end. Each event has direction
+    (in/out), channel, source_account, subject, summary, content_full (when
+    included), sender (name+org), and LLM-derived flags addressed_to_me /
+    requires_response / llm_intent.
+    """,
+)
+async def conversation_get(
+    conversation_id: str,
+    include_body: bool = True,
+) -> Dict[str, Any]:
+    params = {"include_body": "true" if include_body else "false"}
+    return await call_conversation_api(
+        "GET", f"/api/v1/conversations/{conversation_id}", params=params,
+    )
+
+
+@conversation_mcp.tool(
+    name="event",
+    description="""Get a single event (message) with its full body.
+
+    Useful when you only need one specific email out of a large thread and
+    want to skip loading the rest. Returns: id, conversation_id, timestamp,
+    direction (in/out), channel, source_account, subject, summary,
+    content_full, raw_from, raw_to, sender_name, sender_org,
+    message_type (conversation|notification|marketing|etc.),
+    addressed_to_me, requires_response, llm_intent, labels,
+    external_message_id, external_thread_id.
+
+    Parameters:
+    - conversation_id: parent conversation id
+    - event_id: the event (e.g. 'e_abc123def456')
+    """,
+)
+async def conversation_event(
+    conversation_id: str, event_id: str,
+) -> Dict[str, Any]:
+    return await call_conversation_api(
+        "GET", f"/api/v1/conversations/{conversation_id}/events/{event_id}",
+    )
+
+
+@conversation_mcp.tool(
+    name="timeline",
+    description="""Return conversations + their events in a compact timeline shape.
+
+    Optimised for chronological overview / visualisation; each conversation
+    carries its event list flat. Parameters mirror `list`:
+    - status (optional)
+    - channel (optional): filter events by channel (gmail|imap|telegram|...)
+    - min_events (default 1): skip conversations with fewer events
+    - include_noise (default False)
+    - limit (default 200)
+
+    Also returns `time_range` (min/max timestamps across all events returned).
+    """,
+)
+async def conversation_timeline(
+    status: Optional[str] = None,
+    channel: Optional[str] = None,
+    min_events: int = 1,
+    include_noise: bool = False,
+    limit: int = 200,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"min_events": min_events, "limit": limit}
+    if status:
+        params["status"] = status
+    if channel:
+        params["channel"] = channel
+    if include_noise:
+        params["include_noise"] = "true"
+    return await call_conversation_api("GET", "/api/v1/timeline", params=params)
+
+
+@conversation_mcp.tool(
+    name="graph",
+    description="""Return the person-relationship graph backing the force-directed view.
+
+    Nodes are persons (one synthetic 'me' plus all peers), links are
+    conversations (one edge per conversation between me and the peer, with
+    topic, event_count, status, ball_with).
+
+    Parameters:
+    - status (optional): filter by conversation status
+    - include_noise (default False)
+
+    Use when you want to reason about who the user communicates with most
+    intensively and on which topics.
+    """,
+)
+async def conversation_graph(
+    status: Optional[str] = None,
+    include_noise: bool = False,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {}
+    if status:
+        params["status"] = status
+    if include_noise:
+        params["include_noise"] = "true"
+    return await call_conversation_api("GET", "/api/v1/graph", params=params)
+
+
+@conversation_mcp.tool(
+    name="persons_list",
+    description="""List all known persons across conversations.
+
+    Each person has: id, canonical_name, org, role, is_owner, id_count,
+    event_count, conv_count, identifiers[] (channel+value pairs covering
+    email and — later — telegram/whatsapp).
+
+    Owner (the user themselves) appears first, then peers sorted by
+    conversation count descending.
+    """,
+)
+async def conversation_persons_list() -> Dict[str, Any]:
+    return await call_conversation_api("GET", "/api/v1/persons")
+
+
+@conversation_mcp.tool(
+    name="person_get",
+    description="""Get one person with their identifiers and counts.
+
+    Parameters:
+    - person_id (required): e.g. 'p_abc123def456'
+    """,
+)
+async def conversation_person_get(person_id: str) -> Dict[str, Any]:
+    return await call_conversation_api("GET", f"/api/v1/persons/{person_id}")
+
+
+@conversation_mcp.tool(
+    name="person_threads",
+    description="""All conversations involving one peer, with their events + participants.
+
+    Returns {person, conversations: [...]}  where each conversation has
+    events[], participants[], and status/ball_with metadata.
+
+    Parameters:
+    - person_id (required)
+
+    Use this when the user says 'show me everything I have with Thomas' —
+    single call gets the full per-person picture.
+    """,
+)
+async def conversation_person_threads(person_id: str) -> Dict[str, Any]:
+    return await call_conversation_api(
+        "GET", f"/api/v1/persons/{person_id}/threads",
+    )
+
+
+@conversation_mcp.tool(
+    name="actions_list",
+    description="""List agent actions (dispatches) attached to a conversation.
+
+    Each action: id, agent_name, user_prompt, status (pending|sent|done|
+    error|accepted|dismissed), response, error_msg, created_at, resolved_at,
+    parent_action_id (for threaded replies).
+
+    Parameters:
+    - conversation_id (required)
+    """,
+)
+async def conversation_actions_list(conversation_id: str) -> Dict[str, Any]:
+    return await call_conversation_api(
+        "GET", f"/api/v1/conversations/{conversation_id}/actions",
+    )
+
+
+@conversation_mcp.tool(
+    name="dispatch",
+    description="""Dispatch an instruction to an agent from within a conversation context.
+
+    Creates an agent_action row, posts to cloud-api's /api/queue with the
+    full conversation context bundle (topic, open items, recent events,
+    latest event body), and returns the queue_id. The agent processes async;
+    poll `actions_list` or `get` to see the response land in the conversation.
+
+    Parameters:
+    - conversation_id (required): conversation to act on
+    - agent_name (required, unless parent_action_id): target agent session name
+    - prompt (required): what to tell the agent (e.g. 'draft a reply declining politely')
+    - parent_action_id (optional): integer id of an existing action — if set,
+      this is a threaded REPLY continuation; agent_name is inherited from the
+      parent if omitted, and the context bundle is trimmed (agent already has
+      prior context in its session).
+
+    Returns: {action_id, agent_name, parent_action_id, send_result: {ok, queue_id, status, attempts}}
+    """,
+)
+async def conversation_dispatch(
+    conversation_id: str,
+    prompt: str,
+    agent_name: Optional[str] = None,
+    parent_action_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"prompt": prompt}
+    if agent_name:
+        payload["agent_name"] = agent_name
+    if parent_action_id is not None:
+        payload["parent_action_id"] = parent_action_id
+    return await call_conversation_api(
+        "POST",
+        f"/api/v1/conversations/{conversation_id}/dispatch",
+        json_body=payload,
+    )
+
+
+@conversation_mcp.tool(
+    name="action_accept",
+    description="""Mark an agent action as accepted (user is happy with the response).
+
+    Parameters:
+    - action_id (required): integer id of the agent_action
+    """,
+)
+async def conversation_action_accept(action_id: int) -> Dict[str, Any]:
+    return await call_conversation_api(
+        "POST", f"/api/v1/agent_actions/{action_id}/accept",
+    )
+
+
+@conversation_mcp.tool(
+    name="action_dismiss",
+    description="""Mark an agent action as dismissed (ignore the response, don't act on it).
+
+    Parameters:
+    - action_id (required)
+    """,
+)
+async def conversation_action_dismiss(action_id: int) -> Dict[str, Any]:
+    return await call_conversation_api(
+        "POST", f"/api/v1/agent_actions/{action_id}/dismiss",
+    )
+
+
+conversation_app = conversation_mcp.streamable_http_app()
+mount_mcp("conversation", CONVERSATION_PATH, conversation_app)
+
+
 _storage_stack = AsyncExitStack()
 _oneal_stack = AsyncExitStack()
 _oneal_storage_stack = AsyncExitStack()
@@ -5873,6 +6201,7 @@ _knowledge_stack = AsyncExitStack()
 _review_stack = AsyncExitStack()
 _story_stack = AsyncExitStack()
 _cloud_stack = AsyncExitStack()
+_conversation_stack = AsyncExitStack()
 
 
 # Track which MCP sessions were started (for shutdown ordering)
@@ -5897,6 +6226,7 @@ def _all_mcps():
         ("review", _review_stack, review_mcp),
         ("story", _story_stack, story_mcp),
         ("cloud", _cloud_stack, cloud_mcp),
+        ("conversation", _conversation_stack, conversation_mcp),
     ]
 
 

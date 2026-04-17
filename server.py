@@ -5614,17 +5614,18 @@ cloud_mcp = FastMCP(
 
 @cloud_mcp.tool(
     name="send_message",
-    description="Send a message to another Claude Code agent on any server (Mac or arkserver) and wait for the response. Auto-routes to the correct server.",
+    description="Send a message to another Claude Code agent on any server (Mac or arkserver). Auto-routes to the correct server. Default is fire-and-forget: message is delivered to the agent's tmux, you get back {id, status: 'sent'} immediately. The other agent's response will appear in YOUR tmux pane later as an [IACP:...] marker — you'll see it next time you're active. You do NOT need to wait. Only set wait=true for rare cases where you need the response inline (short queries, <30s expected).",
 )
 async def cloud_send_message(
     from_session: str,
     to_session: str,
     message: str,
-    timeout: int = 120,
+    timeout: int = 30,
+    wait: bool = False,
 ) -> Dict[str, Any]:
     return await call_cloud_api(
         "POST", "/api/agents/route",
-        json_body={"from": from_session, "to": to_session, "message": message, "wait": True, "timeout": timeout},
+        json_body={"from": from_session, "to": to_session, "message": message, "wait": wait, "timeout": timeout},
     )
 
 

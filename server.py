@@ -684,13 +684,9 @@ async def storage_media_preview(
 
 @storage_mcp.tool(
     name="media_as_data_url",
-    description="""Load a media asset and return it as a Base64 Data URL.
-
-    This is useful for displaying images in environments with Content Security Policy restrictions
-    (like Claude Web Artifacts) that don't allow external image URLs.
-
-    Returns a data URL like: data:image/png;base64,iVBORw0KGgo...
-    """,
+    description="""DISABLED — base64 image loading causes context overflow (215KB+ payloads).
+    Use media_preview instead to get the direct URL, then use Read tool to view the image.
+    Example: media_preview(id=123) → url, then Read(url) to see the image.""",
 )
 async def storage_media_as_data_url(
     id: int,  # noqa: A002
@@ -699,38 +695,11 @@ async def storage_media_as_data_url(
     format: Optional[str] = None,
     quality: Optional[int] = None,
 ) -> Dict[str, Any]:
-    import base64
-
-    # Build URL with optional parameters
-    options = _clean_params(
-        width=width,
-        height=height,
-        format=format,
-        quality=quality,
-    )
-    url = httpx.URL(f"{STORAGE_API_BASE}/storage/media/{id}").copy_with(params=options)
-
-    # Fetch the image
-    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
-        response = await client.get(str(url))
-        response.raise_for_status()
-
-        # Get content type
-        content_type = response.headers.get("content-type", "image/png")
-
-        # Convert to base64
-        image_bytes = response.content
-        base64_data = base64.b64encode(image_bytes).decode('utf-8')
-
-        # Create data URL
-        data_url = f"data:{content_type};base64,{base64_data}"
-
-        return {
-            "data_url": data_url,
-            "content_type": content_type,
-            "size_bytes": len(image_bytes),
-            "size_kb": round(len(image_bytes) / 1024, 2),
-        }
+    return {
+        "error": "media_as_data_url is disabled — base64 payloads exceed context limits. "
+                 f"Use media_preview(id={id}) to get the URL, then Read the URL to view the image.",
+        "alternative": f"{STORAGE_API_BASE}/storage/media/{id}",
+    }
 
 
 @storage_mcp.tool(
@@ -1122,13 +1091,8 @@ async def oneal_storage_media_preview(
 
 @oneal_storage_mcp.tool(
     name="media_as_data_url",
-    description="""Load an O'Neal media asset and return it as a Base64 Data URL.
-
-    This is useful for displaying images in environments with Content Security Policy restrictions
-    (like Claude Web Artifacts) that don't allow external image URLs.
-
-    Returns a data URL like: data:image/png;base64,iVBORw0KGgo...
-    """,
+    description="""DISABLED — base64 image loading causes context overflow.
+    Use media_preview instead to get the direct URL, then use Read tool to view the image.""",
 )
 async def oneal_storage_media_as_data_url(
     id: int,  # noqa: A002
@@ -1137,38 +1101,10 @@ async def oneal_storage_media_as_data_url(
     format: Optional[str] = None,
     quality: Optional[int] = None,
 ) -> Dict[str, Any]:
-    import base64
-
-    # Build URL with optional parameters
-    options = _clean_params(
-        width=width,
-        height=height,
-        format=format,
-        quality=quality,
-    )
-    url = httpx.URL(f"{STORAGE_API_BASE}/storage/media/{id}").copy_with(params=options)
-
-    # Fetch the image
-    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
-        response = await client.get(str(url))
-        response.raise_for_status()
-
-        # Get content type
-        content_type = response.headers.get("content-type", "image/png")
-
-        # Convert to base64
-        image_bytes = response.content
-        base64_data = base64.b64encode(image_bytes).decode('utf-8')
-
-        # Create data URL
-        data_url = f"data:{content_type};base64,{base64_data}"
-
-        return {
-            "data_url": data_url,
-            "content_type": content_type,
-            "size_bytes": len(image_bytes),
-            "size_kb": round(len(image_bytes) / 1024, 2),
-        }
+    return {
+        "error": "media_as_data_url is disabled — base64 payloads exceed context limits. "
+                 f"Use media_preview(id={id}) to get the URL, then Read the URL to view the image.",
+    }
 
 
 @oneal_storage_mcp.tool(

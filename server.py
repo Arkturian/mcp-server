@@ -2245,6 +2245,9 @@ async def content_posts_export_pdf(
     Args:
         post_id: ID of the post to export
         theme: Visual theme (default, minimal, technical, business, arkturian)
+        logo_url: Optional logo URL for branding (overrides post.logo_url).
+                  Can be a Storage URL (e.g. https://api-storage.arkturian.com/storage/media/12345)
+                  or any public image URL.
         include_base64: Inline the full PDF as base64 (default False)
 
     Returns:
@@ -2257,13 +2260,16 @@ async def content_posts_export_pdf(
 async def content_posts_export_themed_pdf(
     post_id: int,
     theme: str = "default",
+    logo_url: Optional[str] = None,
     include_base64: bool = False,
 ) -> Dict[str, Any]:
     internal_url = f"{CONTENT_API_BASE}/api/v1/posts/{post_id}/export-themed.pdf"
     headers: Dict[str, str] = {}
     if CONTENT_API_KEY:
         headers["X-API-KEY"] = CONTENT_API_KEY
-    params = {"theme": theme}
+    params: Dict[str, str] = {"theme": theme}
+    if logo_url:
+        params["logo_url"] = logo_url
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.get(internal_url, headers=headers, params=params)

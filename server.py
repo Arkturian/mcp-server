@@ -2234,6 +2234,76 @@ async def content_posts_export_pdf(
 
 
 @content_mcp.tool(
+    name="posts_export_themed_pdf",
+    description="""Export a post as a themed PDF via the markdown-api.
+
+    Available themes: default, minimal, technical, business, arkturian.
+    The markdown-api renders the post with professional styling and typography.
+
+    Returns metadata + a publicly fetchable download_url.
+
+    Args:
+        post_id: ID of the post to export
+        theme: Visual theme (default, minimal, technical, business, arkturian)
+        include_base64: Inline the full PDF as base64 (default False)
+
+    Returns:
+        dict with:
+        - post_id, theme, filename, mime_type, size_bytes, is_published
+        - download_url: PUBLIC URL to the themed PDF endpoint
+        - pdf_base64: base64 PDF content (only if include_base64=True)
+    """,
+)
+async def content_posts_export_themed_pdf(
+    post_id: int,
+    theme: str = "default",
+    include_base64: bool = False,
+) -> Dict[str, Any]:
+    internal_url = f"{CONTENT_API_BASE}/api/v1/posts/{post_id}/export-themed.pdf"
+    headers: Dict[str, str] = {}
+    if CONTENT_API_KEY:
+        headers["X-API-KEY"] = CONTENT_API_KEY
+    params = {"theme": theme}
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.get(internal_url, headers=headers, params=params)
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"Upstream {response.status_code}: {response.text[:200]}"
+            )
+        pdf_bytes = response.content
+        disposition = response.headers.get("content-disposition", "")
+        filename = f"post-{post_id}-{theme}.pdf"
+        if "filename=" in disposition:
+            filename = disposition.split("filename=", 1)[1].strip().strip('"')
+
+    public_url = (
+        f"{CONTENT_API_PUBLIC_BASE}/api/v1/posts/{post_id}/export-themed.pdf"
+        f"?theme={theme}"
+    )
+
+    try:
+        post_meta = await call_content_api("GET", f"/api/v1/posts/{post_id}")
+        is_published = post_meta.get("status") == "published"
+    except Exception:
+        is_published = False
+
+    result: Dict[str, Any] = {
+        "post_id": post_id,
+        "theme": theme,
+        "filename": filename,
+        "mime_type": "application/pdf",
+        "size_bytes": len(pdf_bytes),
+        "download_url": public_url,
+        "is_published": is_published,
+        "auth_required": not is_published,
+    }
+    if include_base64:
+        result["pdf_base64"] = base64.b64encode(pdf_bytes).decode("ascii")
+    return result
+
+
+@content_mcp.tool(
     name="media_list",
     description="""List media attachments for a post.
 

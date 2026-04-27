@@ -2198,6 +2198,59 @@ async def content_posts_update(
 
 
 @content_mcp.tool(
+    name="posts_content_patch",
+    description="""Patch post content with line-level operations instead of full replacement.
+
+    Much more efficient than posts_update for small changes — only sends the diff.
+
+    Operations:
+    - replace: Replace lines start_line..end_line with new text
+    - insert: Insert text after start_line (use 0 for before first line)
+    - delete: Remove lines start_line..end_line
+    - find/replace: Find text within line range and replace it
+
+    Example — make line 5 bold:
+      posts_content_patch(post_id=587, operations=[
+        {"op": "replace", "start_line": 5, "end_line": 5, "text": "**This line is now bold**"}
+      ])
+
+    Example — find and replace text in lines 10-20:
+      posts_content_patch(post_id=587, operations=[
+        {"op": "replace", "start_line": 10, "end_line": 20, "find": "old text", "replace_with": "new text"}
+      ])
+
+    Example — insert a new paragraph after line 8:
+      posts_content_patch(post_id=587, operations=[
+        {"op": "insert", "start_line": 8, "text": "\\nNew paragraph here.\\n"}
+      ])
+
+    Args:
+        post_id: ID of the post to patch
+        operations: List of patch operations (each has op, start_line, end_line, text, find, replace_with)
+        author_id: Who made the change
+        author_name: Display name of editor
+
+    Returns:
+        Updated post with new content
+    """,
+)
+async def content_posts_content_patch(
+    post_id: int,
+    operations: List[Dict[str, Any]],
+    author_id: Optional[str] = None,
+    author_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    body = {
+        "operations": operations,
+    }
+    if author_id:
+        body["author_id"] = author_id
+    if author_name:
+        body["author_name"] = author_name
+    return await call_content_api("PATCH", f"/api/v1/posts/{post_id}/content-patch", json_body=body)
+
+
+@content_mcp.tool(
     name="posts_delete",
     description="Delete a post by ID. Returns success status.",
 )
@@ -2268,6 +2321,82 @@ async def content_posts_export_pdf(
 
     result: Dict[str, Any] = {
         "post_id": post_id,
+        "filename": filename,
+        "mime_type": "application/pdf",
+        "size_bytes": len(pdf_bytes),
+        "download_url": public_url,
+        "is_published": is_published,
+        "auth_required": not is_published,
+    }
+    if include_base64:
+        result["pdf_base64"] = base64.b64encode(pdf_bytes).decode("ascii")
+    return result
+
+
+@content_mcp.tool(
+    name="posts_export_themed_pdf",
+    description="""Export a post as a themed PDF via the markdown-api.
+
+    Available themes: default, minimal, technical, business, arkturian.
+    The markdown-api renders the post with professional styling and typography.
+
+    Returns metadata + a publicly fetchable download_url.
+
+    Args:
+        post_id: ID of the post to export
+        theme: Visual theme (default, minimal, technical, business, arkturian)
+        logo_url: Optional logo URL for branding (overrides post.logo_url).
+                  Can be a Storage URL (e.g. https://api-storage.arkturian.com/storage/media/12345)
+                  or any public image URL.
+        include_base64: Inline the full PDF as base64 (default False)
+
+    Returns:
+        dict with:
+        - post_id, theme, filename, mime_type, size_bytes, is_published
+        - download_url: PUBLIC URL to the themed PDF endpoint
+        - pdf_base64: base64 PDF content (only if include_base64=True)
+    """,
+)
+async def content_posts_export_themed_pdf(
+    post_id: int,
+    theme: str = "default",
+    logo_url: Optional[str] = None,
+    include_base64: bool = False,
+) -> Dict[str, Any]:
+    internal_url = f"{CONTENT_API_BASE}/api/v1/posts/{post_id}/export-themed.pdf"
+    headers: Dict[str, str] = {}
+    if CONTENT_API_KEY:
+        headers["X-API-KEY"] = CONTENT_API_KEY
+    params: Dict[str, str] = {"theme": theme}
+    if logo_url:
+        params["logo_url"] = logo_url
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.get(internal_url, headers=headers, params=params)
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"Upstream {response.status_code}: {response.text[:200]}"
+            )
+        pdf_bytes = response.content
+        disposition = response.headers.get("content-disposition", "")
+        filename = f"post-{post_id}-{theme}.pdf"
+        if "filename=" in disposition:
+            filename = disposition.split("filename=", 1)[1].strip().strip('"')
+
+    public_url = (
+        f"{CONTENT_API_PUBLIC_BASE}/api/v1/posts/{post_id}/export-themed.pdf"
+        f"?theme={theme}"
+    )
+
+    try:
+        post_meta = await call_content_api("GET", f"/api/v1/posts/{post_id}")
+        is_published = post_meta.get("status") == "published"
+    except Exception:
+        is_published = False
+
+    result: Dict[str, Any] = {
+        "post_id": post_id,
+        "theme": theme,
         "filename": filename,
         "mime_type": "application/pdf",
         "size_bytes": len(pdf_bytes),

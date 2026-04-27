@@ -2151,6 +2151,59 @@ async def content_posts_update(
 
 
 @content_mcp.tool(
+    name="posts_content_patch",
+    description="""Patch post content with line-level operations instead of full replacement.
+
+    Much more efficient than posts_update for small changes — only sends the diff.
+
+    Operations:
+    - replace: Replace lines start_line..end_line with new text
+    - insert: Insert text after start_line (use 0 for before first line)
+    - delete: Remove lines start_line..end_line
+    - find/replace: Find text within line range and replace it
+
+    Example — make line 5 bold:
+      posts_content_patch(post_id=587, operations=[
+        {"op": "replace", "start_line": 5, "end_line": 5, "text": "**This line is now bold**"}
+      ])
+
+    Example — find and replace text in lines 10-20:
+      posts_content_patch(post_id=587, operations=[
+        {"op": "replace", "start_line": 10, "end_line": 20, "find": "old text", "replace_with": "new text"}
+      ])
+
+    Example — insert a new paragraph after line 8:
+      posts_content_patch(post_id=587, operations=[
+        {"op": "insert", "start_line": 8, "text": "\\nNew paragraph here.\\n"}
+      ])
+
+    Args:
+        post_id: ID of the post to patch
+        operations: List of patch operations (each has op, start_line, end_line, text, find, replace_with)
+        author_id: Who made the change
+        author_name: Display name of editor
+
+    Returns:
+        Updated post with new content
+    """,
+)
+async def content_posts_content_patch(
+    post_id: int,
+    operations: List[Dict[str, Any]],
+    author_id: Optional[str] = None,
+    author_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    body = {
+        "operations": operations,
+    }
+    if author_id:
+        body["author_id"] = author_id
+    if author_name:
+        body["author_name"] = author_name
+    return await call_content_api("PATCH", f"/api/v1/posts/{post_id}/content-patch", json_body=body)
+
+
+@content_mcp.tool(
     name="posts_delete",
     description="Delete a post by ID. Returns success status.",
 )

@@ -922,6 +922,26 @@ oneal_mcp = FastMCP(
     Returns paginated list of O'Neal products enriched with storage.media_url fields.
     Each product includes transformable media URLs with automatic caching.
 
+    Filter parameters (all optional, AND-combined):
+    - search: whitespace-separated tokens; each must substring-match name OR product_code (AND across tokens)
+    - category: category slug (e.g. "helmets-mx", "protection-mtb"). Use facets_list to discover slugs.
+    - price_min / price_max: price range in EUR
+    - target_group: "Erwachsene" or "Jugendliche" (use this for "Kinder"/"Youth" queries)
+    - body_part: "Kopf", "Hand", "Knie", "Ellbogen", etc.
+    - product_type: "Helm", "Jersey", "Pant", etc.
+    - product_function: "Schutz", "Bekleidung", etc.
+    - sport: "MX" or "MTB"
+    - color: substring match on color name (English or German), e.g. "blue"/"blau"
+    - include_discontinued: false to exclude discontinued products (default true)
+    - sort: one of "name", "price", "code", "updated"
+    - order: "asc" (default) or "desc"
+    - limit / offset: pagination
+
+    Strategy for natural-language queries:
+    1. Map user terms via facets_list (slugs/colors/sizes) FIRST
+    2. Combine multiple structured filters in ONE call rather than guessing free-text
+    3. Use products_get only for individual deep-dives, not for bulk filtering
+
     Use storage.media_url + transformation parameters to get optimized images.
     See products_get for full transformation parameter documentation.
     """,
@@ -929,18 +949,34 @@ oneal_mcp = FastMCP(
 async def oneal_products_list(
     search: Optional[str] = None,
     category: Optional[str] = None,
-    season: Optional[int] = None,
-    cert: Optional[str] = None,
     price_min: Optional[float] = None,
     price_max: Optional[float] = None,
+    target_group: Optional[str] = None,
+    body_part: Optional[str] = None,
+    product_type: Optional[str] = None,
+    product_function: Optional[str] = None,
+    sport: Optional[str] = None,
+    color: Optional[str] = None,
+    include_discontinued: Optional[bool] = None,
     sort: Optional[str] = None,
-    order: str = "asc",
+    order: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    format: Optional[str] = None,
 ) -> Dict[str, Any]:
     params = _clean_params(
         search=search,
+        category=category,
+        price_min=price_min,
+        price_max=price_max,
+        target_group=target_group,
+        body_part=body_part,
+        product_type=product_type,
+        product_function=product_function,
+        sport=sport,
+        color=color,
+        include_discontinued=include_discontinued,
+        sort=sort,
+        order=order,
         limit=limit,
         offset=offset,
     )
@@ -984,7 +1020,18 @@ async def oneal_products_get(product_id: str) -> Dict[str, Any]:
 
 @oneal_mcp.tool(
     name="facets_list",
-    description="List product facets (categories, certifications, etc.).",
+    description="""List product facets to discover filterable values.
+
+    Returns:
+    - categories: list of {slug, name, count} — use slug as `category` param in products_list
+    - colors: list of {name, count} — note: products_list does NOT yet support color filter,
+      but the values here are useful for building search terms or for products_get inspection
+    - sizes: list of {name, count}
+    - price_range: {min, max, currency}
+
+    Always call this first when the user query mentions a category, color, or price range
+    so you use the correct slugs/values that actually exist in the catalog.
+    """,
 )
 async def oneal_facets_list() -> Dict[str, Any]:
     return await call_oneal_api("GET", "/v1/facets")

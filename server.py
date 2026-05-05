@@ -4379,10 +4379,18 @@ paypal_status()                          → token + webhook health
 paypal_events_list(limit=20)             → last events received from PayPal
 paypal_events_list(process_status="error") → events that failed to process
 paypal_sync()                            → re-process pending events into transactions
+paypal_transactions(days=30)             → recent settled transactions (Reporting API)
+paypal_transactions(direction="out", limit=10) → last debits ("Abbuchungen")
+paypal_transactions(transaction_id="X")  → one specific transaction
+paypal_balance()                         → current PayPal balance per currency
 ```
 PayPal captures + paid invoices auto-create income transactions
 (category="paypal", external_provider="paypal", external_id=<capture_id>).
 The (tenant_id, external_provider, external_id) tuple is unique → safe to retry.
+
+NOTE: paypal_transactions/balance hit PayPal's Reporting API and only see
+SETTLED transactions. Pending entries shown in the consumer Dashboard
+Activity view are not visible until they clear (1-3 business days).
 
 ## Data Model
 
@@ -4857,6 +4865,55 @@ async def business_paypal_sync(
     return await call_business_api(
         "POST", "/api/v1/paypal/sync", params=params, api_key=api_key
     )
+
+
+@business_mcp.tool(
+    name="paypal_transactions",
+    description=(
+        "List PayPal transactions from the merchant's account via the Reporting "
+        "API. Use this to answer 'what came in / went out on PayPal?'. Default "
+        "window is the last 30 days (max 31, PayPal API limit). "
+        "direction='in' for credits, 'out' for debits, omit for both. "
+        "transaction_status: S (success), P (pending), V (voided), D (denied). "
+        "Pending Activity entries from the consumer Dashboard usually do not "
+        "appear here until they settle. Each row: transaction_id, date, amount, "
+        "currency, direction, fee, status, counterparty, subject."
+    ),
+)
+async def business_paypal_transactions(
+    days: int = 30,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    direction: Optional[str] = None,
+    transaction_status: Optional[str] = None,
+    transaction_id: Optional[str] = None,
+    limit: int = 100,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    params = _clean_params(
+        days=days,
+        start_date=start_date,
+        end_date=end_date,
+        direction=direction,
+        transaction_status=transaction_status,
+        transaction_id=transaction_id,
+        limit=limit,
+    )
+    return await call_business_api(
+        "GET", "/api/v1/paypal/transactions", params=params, api_key=api_key
+    )
+
+
+@business_mcp.tool(
+    name="paypal_balance",
+    description=(
+        "Current PayPal balance(s) on the merchant account. One entry per "
+        "currency held. Returns {account_number, as_of, balances:[{currency, "
+        "available, total, primary}]}."
+    ),
+)
+async def business_paypal_balance(api_key: Optional[str] = None) -> Dict[str, Any]:
+    return await call_business_api("GET", "/api/v1/paypal/balance", api_key=api_key)
 
 
 # --- Service Health ---

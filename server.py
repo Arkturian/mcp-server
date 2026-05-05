@@ -4373,6 +4373,17 @@ dashboard_summary()                      → YTD/MTD income, expenses, profit
 dashboard_cashflow(year=2026)            → monthly breakdown
 ```
 
+### 5. PayPal — Visibility on incoming payments
+```
+paypal_status()                          → token + webhook health
+paypal_events_list(limit=20)             → last events received from PayPal
+paypal_events_list(process_status="error") → events that failed to process
+paypal_sync()                            → re-process pending events into transactions
+```
+PayPal captures + paid invoices auto-create income transactions
+(category="paypal", external_provider="paypal", external_id=<capture_id>).
+The (tenant_id, external_provider, external_id) tuple is unique → safe to retry.
+
 ## Data Model
 
 ### Clients
@@ -4790,6 +4801,62 @@ async def business_transactions_delete(tx_id: int, api_key: Optional[str] = None
 async def business_categories_list(cat_type: Optional[str] = None, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
     params = _clean_params(cat_type=cat_type)
     return await call_business_api("GET", "/api/v1/categories", params=params, api_key=api_key)
+
+
+# --- PayPal ---
+
+
+@business_mcp.tool(
+    name="paypal_status",
+    description=(
+        "PayPal integration health: OAuth token reachable? Mode (sandbox/live)? "
+        "Webhook registered? Returns {mode, configured, token_ok, webhook_id, registered_webhooks}."
+    ),
+)
+async def business_paypal_status(api_key: Optional[str] = None) -> Dict[str, Any]:
+    return await call_business_api("GET", "/api/v1/paypal/status", api_key=api_key)
+
+
+@business_mcp.tool(
+    name="paypal_events_list",
+    description=(
+        "List PayPal webhook events received by the business-api. Filter by "
+        "process_status (received/ignored/processed/error) or event_type "
+        "(e.g. PAYMENT.CAPTURE.COMPLETED). Use this to answer 'what came in?'."
+    ),
+)
+async def business_paypal_events_list(
+    process_status: Optional[str] = None,
+    event_type: Optional[str] = None,
+    limit: int = 50,
+    api_key: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    params = _clean_params(
+        process_status=process_status,
+        event_type=event_type,
+        limit=limit,
+    )
+    return await call_business_api(
+        "GET", "/api/v1/paypal/events", params=params, api_key=api_key
+    )
+
+
+@business_mcp.tool(
+    name="paypal_sync",
+    description=(
+        "Re-process pending PayPal events (those still in 'received' or 'error' "
+        "state) and fold them into the transactions ledger. Returns counts of "
+        "processed/skipped/errored events plus the IDs of created transactions."
+    ),
+)
+async def business_paypal_sync(
+    limit: int = 50,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    params = _clean_params(limit=limit)
+    return await call_business_api(
+        "POST", "/api/v1/paypal/sync", params=params, api_key=api_key
+    )
 
 
 # --- Service Health ---

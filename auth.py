@@ -272,8 +272,17 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             mcp_server = _extract_mcp_server_from_path(request.url.path)
             if mcp_server:
                 # 1. Server-level: does agent have ANY permission on this MCP?
+                # Recognized claims:
+                #   "*"                       — global wildcard
+                #   "mcp:*"                   — all MCPs (2-part)
+                #   "mcp:*:*"                 — all MCPs (3-part, architect)
+                #   "mcp:<server>:*"          — full access to this MCP
+                #   "mcp:<server>:<tool>"     — any specific tool on this MCP
+                # The literal 2-part vs 3-part mismatch (mcp:* vs mcp:*:*)
+                # silently broke architect-role agents — both forms now valid.
+                server_prefix = f"mcp:{mcp_server}:"
                 has_any = any(
-                    p == "*" or p == "mcp:*" or p.startswith(f"mcp:{mcp_server}:")
+                    p == "*" or p == "mcp:*" or p == "mcp:*:*" or p.startswith(server_prefix)
                     for p in agent.permissions
                 )
                 if not has_any:

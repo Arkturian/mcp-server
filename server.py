@@ -5356,6 +5356,88 @@ async def knowledge_collection_ask(
     )
 
 
+@knowledge_mcp.tool(
+    name="knowledge_species_list",
+    description="""List every species in the FloraFauna knowledge collection.
+
+    Light-weight — one entry per species with scientific name, German common
+    name, thumbnail, category and flags. Cache this client-side at app start.
+
+    Parameters:
+    - only_with_binom: drop entries without a scientific name (default true)
+    - kind: "plant" | "animal" — optional category filter
+    """,
+)
+async def knowledge_species_list(
+    only_with_binom: bool = True,
+    kind: Optional[str] = None,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"only_with_binom": only_with_binom}
+    if kind:
+        params["kind"] = kind
+    return await call_knowledge_api(
+        "GET",
+        "/api/v1/knowledge/species",
+        params=params,
+    )
+
+
+@knowledge_mcp.tool(
+    name="knowledge_species_get",
+    description="""Full species record by scientific name (binomen).
+
+    Returns the complete Knowledge entry: description, facts, annotations,
+    media (illustration + field photos + 3D + audio), and all observation
+    locations.
+
+    Parameters:
+    - binom: scientific name, e.g. "Lilium carniolicum"
+    """,
+)
+async def knowledge_species_get(binom: str) -> Dict[str, Any]:
+    return await call_knowledge_api(
+        "GET",
+        f"/api/v1/knowledge/species/{binom}",
+    )
+
+
+@knowledge_mcp.tool(
+    name="knowledge_near",
+    description="""Find species observed within `radius_m` of a GPS point.
+
+    Returns species sorted by closest-observation distance, each with binom,
+    German name, short description, wiki URL, distance in meters, top media,
+    and the nearest observation location.
+
+    Typical use: GuideDevBot gets a GPS update -> asks "what's here?" -> gets
+    list of nearby flora/fauna with everything needed for an in-place
+    description.
+
+    Parameters:
+    - lat: query latitude
+    - lon: query longitude
+    - radius_m: search radius in meters (1-10000, default 30)
+    - kind: "plant" | "animal" — optional category filter
+    - limit: max results (1-100, default 20)
+    """,
+)
+async def knowledge_near(
+    lat: float,
+    lon: float,
+    radius_m: float = 30.0,
+    kind: Optional[str] = None,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"lat": lat, "lon": lon, "radius_m": radius_m, "limit": limit}
+    if kind:
+        params["kind"] = kind
+    return await call_knowledge_api(
+        "GET",
+        "/api/v1/knowledge/near",
+        params=params,
+    )
+
+
 knowledge_app = knowledge_mcp.streamable_http_app()
 mount_mcp("knowledge", KNOWLEDGE_PATH, knowledge_app)
 

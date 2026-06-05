@@ -7748,7 +7748,27 @@ async def cloud_create_session(
     department: str = "engineering",
     role: str = "developer",
     auto_restart: bool = True,
+    model: str = "",
+    effort: str = "",
+    tenant_id: str = "",
+    ephemeral: bool = False,
+    claude_md_source: str = "",
 ) -> Dict[str, Any]:
+    """Spawn a new agent session in cloud-api.
+
+    Beyond the basics, the optional fields let you tune the new bot:
+      model         claude only — 'opus' | 'sonnet' | 'haiku'
+      effort        claude only — 'low' | 'medium' | 'high'
+      tenant_id     auth-api tenant slug, e.g. 'arkturian'
+      ephemeral     true = auto-cleanup on disconnect, no auto_restart
+      claude_md_source  persona-template source. Two schemas:
+                    - filesystem path to a markdown file (legacy)
+                    - 'post:<id>'  → content-API post id whose body
+                      becomes the bot's CLAUDE.md template
+                    Either is rendered through the normal compose
+                    pipeline (identity-block + memory + fragments
+                    still apply on top).
+    """
     body: Dict[str, Any] = {
         "name": name,
         "pretty": pretty,
@@ -7761,6 +7781,16 @@ async def cloud_create_session(
         body["node"] = node.lower()
     if owner_email:
         body["owner_email"] = owner_email
+    if model:
+        body["model"] = model
+    if effort:
+        body["effort"] = effort
+    if tenant_id:
+        body["tenant_id"] = tenant_id
+    if ephemeral:
+        body["ephemeral"] = True
+    if claude_md_source:
+        body["claude_md_source"] = claude_md_source
     return await call_cloud_api("POST", "/api/sessions", json_body=body)
 
 

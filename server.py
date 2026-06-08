@@ -7972,6 +7972,41 @@ async def cloud_release_pool(
     return await call_cloud_api("POST", f"/api/pools/{pool_name}/release/{instance_name}")
 
 
+@cloud_mcp.tool(
+    name="pool_get_collection_subscriptions",
+    description=(
+        "Return the collection-ids subscribed at the pool level. Pool subscriptions are "
+        "the canonical place to configure the prompt knowledge of every member of a pool "
+        "(guide-1..guide-5 etc.) — instance-level subscriptions extend, never reduce the "
+        "pool baseline, and survive pool-recycles whereas instance-level subs die with "
+        "the recycle. Use this from an agent like GuideDevBot when curating the prompt "
+        "set programmatically."
+    ),
+)
+async def cloud_pool_get_collection_subscriptions(pool_name: str) -> Dict[str, Any]:
+    return await call_cloud_api("GET", f"/api/pools/{pool_name}/collection-subscriptions")
+
+
+@cloud_mcp.tool(
+    name="pool_set_collection_subscriptions",
+    description=(
+        "Replace the collection-ids subscribed at the pool level. Takes effect on the "
+        "next compose_persona call of any pool member — for immediate propagation, "
+        "restart each member (kill+respawn). Use this to wrap an entire pool with the "
+        "fragments it needs and trim the ones it doesn't, rather than editing each "
+        "instance one at a time."
+    ),
+)
+async def cloud_pool_set_collection_subscriptions(
+    pool_name: str,
+    collection_ids: List[int],
+) -> Dict[str, Any]:
+    return await call_cloud_api(
+        "POST", f"/api/pools/{pool_name}/collection-subscriptions",
+        json_body={"collection_ids": list(collection_ids)},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Session Lifecycle
 # ---------------------------------------------------------------------------

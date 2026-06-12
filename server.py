@@ -5022,6 +5022,158 @@ async def ai_genimage(
     return await call_ai_api("POST", "/ai/genimage", json_body=body)
 
 
+@ai_mcp.tool(
+    name="m3_text",
+    description="""Call AI API /ai/m3 — MiniMax M3 text model (pay-as-you-go).
+
+    BILLING: API-billed. Calls are rejected unless confirm_api_billing=true
+    (shared federation cost cap applies, default-deny protects against
+    accidental spend).
+
+    Params: prompt (required), system?, max_tokens?, temperature?,
+    confirm_api_billing (must be true to actually run).
+    """,
+)
+async def ai_m3_text(
+    prompt: str,
+    system: Optional[str] = None,
+    max_tokens: Optional[int] = 1000,
+    temperature: Optional[float] = 0.7,
+    confirm_api_billing: bool = False,
+) -> Dict[str, Any]:
+    body = {
+        "prompt": prompt,
+        "system": system,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "confirm_api_billing": confirm_api_billing,
+    }
+    return await call_ai_api("POST", "/ai/m3", json_body=body)
+
+
+@ai_mcp.tool(
+    name="music",
+    description="""Generate music via AI API /ai/music (MiniMax Music 2.6).
+
+    BILLING: API-billed — requires confirm_api_billing=true (default-deny,
+    shared federation cost cap).
+
+    Params: prompt (style/mood description, required), lyrics (required —
+    use "[instrumental]" for no vocals), mode (full|...), duration (sec,
+    default 30), reference_audio_url?, wait_for_result (default true =
+    sync; false returns request_id for music_status polling),
+    collection_id (storage collection, default ai-generated-music),
+    link_id?, confirm_api_billing.
+
+    Returns {request_id, status, audio_url?, storage_object_id?, ...}.
+    """,
+)
+async def ai_music(
+    prompt: str,
+    lyrics: str,
+    mode: Optional[str] = "full",
+    duration: Optional[int] = 30,
+    reference_audio_url: Optional[str] = None,
+    wait_for_result: bool = True,
+    collection_id: Optional[str] = "ai-generated-music",
+    link_id: Optional[str] = None,
+    confirm_api_billing: bool = False,
+) -> Dict[str, Any]:
+    body = {
+        "prompt": prompt,
+        "lyrics": lyrics,
+        "mode": mode,
+        "duration": duration,
+        "wait_for_result": wait_for_result,
+        "collection_id": collection_id,
+        "confirm_api_billing": confirm_api_billing,
+    }
+    if reference_audio_url:
+        body["reference_audio_url"] = reference_audio_url
+    if link_id:
+        body["link_id"] = link_id
+    return await call_ai_api("POST", "/ai/music", json_body=body)
+
+
+@ai_mcp.tool(
+    name="music_status",
+    description="""Poll an async music generation via AI API
+    GET /ai/music/status/{request_id}.
+
+    Params: request_id (from music(wait_for_result=false)),
+    save_on_complete? (persist to storage when finished),
+    collection_id?, link_id?.
+    """,
+)
+async def ai_music_status(
+    request_id: str,
+    save_on_complete: Optional[bool] = None,
+    collection_id: Optional[str] = None,
+    link_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    from urllib.parse import urlencode, quote
+    qs = {}
+    if save_on_complete is not None:
+        qs["save_on_complete"] = str(save_on_complete).lower()
+    if collection_id:
+        qs["collection_id"] = collection_id
+    if link_id:
+        qs["link_id"] = link_id
+    endpoint = f"/ai/music/status/{quote(request_id, safe='')}"
+    if qs:
+        endpoint += "?" + urlencode(qs)
+    return await call_ai_api("GET", endpoint)
+
+
+@ai_mcp.tool(
+    name="tts_minimax",
+    description="""Text-to-speech via AI API /ai/tts/minimax (MiniMax
+    Speech-02).
+
+    BILLING: API-billed — requires confirm_api_billing=true (default-deny,
+    shared federation cost cap).
+
+    Params: text (required), voice_id (default male-qn-qingse), model
+    (default speech-02-hd), speed (default 1.0), emotion?, language
+    (default auto), collection_id (default tts-audio), link_id?,
+    confirm_api_billing.
+    """,
+)
+async def ai_tts_minimax(
+    text: str,
+    voice_id: Optional[str] = "male-qn-qingse",
+    model: Optional[str] = "speech-02-hd",
+    speed: Optional[float] = 1.0,
+    emotion: Optional[str] = None,
+    language: Optional[str] = "auto",
+    collection_id: Optional[str] = "tts-audio",
+    link_id: Optional[str] = None,
+    confirm_api_billing: bool = False,
+) -> Dict[str, Any]:
+    body = {
+        "text": text,
+        "voice_id": voice_id,
+        "model": model,
+        "speed": speed,
+        "language": language,
+        "collection_id": collection_id,
+        "confirm_api_billing": confirm_api_billing,
+    }
+    if emotion:
+        body["emotion"] = emotion
+    if link_id:
+        body["link_id"] = link_id
+    return await call_ai_api("POST", "/ai/tts/minimax", json_body=body)
+
+
+# NOTE deliberately NOT exposed as MCP tools:
+#   /ai/tts/clone          — multipart/form-data file upload; needs a
+#                            file-relay path (download-then-forward) that
+#                            doesn't exist in call_ai_api. Bots can use
+#                            Bash+curl until a proper relay is designed.
+#   /internal/*            — federation-internal (X-Internal-Auth),
+#                            never tool-exposed (AiApi IACP a906c786 §2).
+
 ai_app = ai_mcp.streamable_http_app()
 mount_mcp("ai", AI_PATH, ai_app)
 

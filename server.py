@@ -5052,6 +5052,43 @@ async def ai_m3_text(
 
 
 @ai_mcp.tool(
+    name="deepseek_text",
+    description="""Call AI API /ai/deepseek — DeepSeek V4 text model (pay-as-you-go).
+
+    BILLING: API-billed. Calls are rejected unless confirm_api_billing=true
+    (25 EUR/month shared federation cost cap, default-deny protects against
+    accidental spend).
+
+    Params: prompt (required), system?, max_tokens?, temperature?,
+    model (deepseek-v4-flash [default] | deepseek-v4-pro),
+    confirm_api_billing (must be true to actually run).
+    """,
+)
+async def ai_deepseek_text(
+    prompt: str,
+    system: Optional[str] = None,
+    max_tokens: Optional[int] = 1000,
+    temperature: Optional[float] = 0.7,
+    model: Optional[str] = None,
+    confirm_api_billing: bool = False,
+) -> Dict[str, Any]:
+    body = {
+        "prompt": prompt,
+        "system": system,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "confirm_api_billing": confirm_api_billing,
+    }
+    # /ai/deepseek takes the model as a QUERY param (verified against the
+    # live openapi 2026-06-14), default flash server-side.
+    endpoint = "/ai/deepseek"
+    if model:
+        from urllib.parse import urlencode
+        endpoint += "?" + urlencode({"model": model})
+    return await call_ai_api("POST", endpoint, json_body=body)
+
+
+@ai_mcp.tool(
     name="music",
     description="""Generate music via AI API /ai/music (MiniMax Music 2.6).
 

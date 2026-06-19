@@ -7945,15 +7945,23 @@ async def cloud_create_session(
     effort: str = "",
     tenant_id: str = "",
     ephemeral: bool = False,
+    ttl_hours: float = 0,
     claude_md_source: str = "",
 ) -> Dict[str, Any]:
     """Spawn a new agent session in cloud-api.
 
     Beyond the basics, the optional fields let you tune the new bot:
-      model         claude only — 'opus' | 'sonnet' | 'haiku'
+      model         claude only — 'opus' | 'sonnet' | 'haiku' | a third-party
+                    string ('MiniMax-M3', 'deepseek-v4-pro', …) — runs as a
+                    claude agent via provider env-swap
       effort        claude only — 'low' | 'medium' | 'high'
       tenant_id     auth-api tenant slug, e.g. 'arkturian'
       ephemeral     true = auto-cleanup on disconnect, no auto_restart
+      ttl_hours     ephemeral only — TIME-based auto-kill safety-net (default
+                    24h when ephemeral). Kills the agent after this many hours
+                    even with no WS viewer (IACP/MCP-spawned solo agents have
+                    none, so the disconnect-cleanup never fires otherwise).
+                    0 = no time-TTL.
       claude_md_source  persona-template source. Two schemas:
                     - filesystem path to a markdown file (legacy)
                     - 'post:<id>'  → content-API post id whose body
@@ -7982,6 +7990,8 @@ async def cloud_create_session(
         body["tenant_id"] = tenant_id
     if ephemeral:
         body["ephemeral"] = True
+    if ttl_hours and ttl_hours > 0:
+        body["ttl_hours"] = ttl_hours
     if claude_md_source:
         body["claude_md_source"] = claude_md_source
     return await call_cloud_api("POST", "/api/sessions", json_body=body)

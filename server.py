@@ -7994,6 +7994,54 @@ async def cloud_create_session(
 
 
 @cloud_mcp.tool(
+    name="clone_session",
+    description=(
+        "Clone an existing agent's full config under a new name, federation-aware. "
+        "Copies model/effort/agent/persona(claude_md_source)/mcp_servers/allowed_tools/"
+        "department/role/avatar/subscriptions verbatim and resets runtime state. "
+        "Returns {status:'cloned', name, node, started, ...}. "
+        "The clone lands on the node where the source lives (use migrate to relocate). "
+        "Set clone_history=True to deep-copy the conversation transcripts so the clone "
+        "resumes the source's chat (default: fresh empty conversation). "
+        "new_owner reassigns ownership; ephemeral+ttl_hours make a throwaway clone."
+    ),
+)
+async def cloud_clone_session(
+    source: str,
+    new_name: str,
+    new_owner: str = "",
+    clone_history: bool = False,
+    ephemeral: bool = False,
+    ttl_hours: float = 0,
+    start: bool = True,
+    tenant_id: str = "",
+) -> Dict[str, Any]:
+    """Clone `source` agent's config to `new_name`.
+
+    clone_history  False (default) = fresh empty conversation; True = copy the
+                   source's bot-home incl. transcripts so --continue resumes it.
+    new_owner      reassign ownership (default: inherit source owner).
+    ephemeral      make the clone a throwaway (auto-cleanup, no auto_restart).
+    ttl_hours      ephemeral only — time-based auto-kill (default 24h when ephemeral).
+    start          spawn the clone immediately (default True).
+    """
+    body: Dict[str, Any] = {
+        "new_name": new_name,
+        "clone_history": clone_history,
+        "start": start,
+    }
+    if new_owner:
+        body["new_owner"] = new_owner
+    if ephemeral:
+        body["ephemeral"] = True
+    if ttl_hours and ttl_hours > 0:
+        body["ttl_hours"] = ttl_hours
+    if tenant_id:
+        body["tenant_id"] = tenant_id
+    return await call_cloud_api("POST", f"/api/sessions/{source}/clone", json_body=body)
+
+
+@cloud_mcp.tool(
     name="self_restart",
     description=(
         "Restart your own session. Use this as a last-resort self-heal when "

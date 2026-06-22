@@ -7995,6 +7995,30 @@ async def cloud_read_session(session_name: str, lines: int = 50) -> Dict[str, An
 
 
 @cloud_mcp.tool(
+    name="read_history",
+    description=(
+        "Load a paginated region of another agent's DURABLE conversation history "
+        "— not just the live tmux scrape (read_session), but the full persisted "
+        "transcript, unbounded + page-able. Returns settled turns "
+        "{id, uuid, timestamp, user, source, sections:[{kind:text|tool}]} ordered "
+        "oldest->newest, plus {next_cursor, has_more, hash}. Pass before=<uuid of "
+        "the oldest turn you already have> to page further back; limit default 50, "
+        "max 200. Pass your OWN session name as from_session. Access is gated: you "
+        "can read agents that share your owner or tenant (a bot may also opt out "
+        "via a .no_history_share marker)."
+    ),
+)
+async def cloud_read_history(
+    from_session: str, session_name: str, before: str = "", limit: int = 50
+) -> Dict[str, Any]:
+    return await call_cloud_api(
+        "GET",
+        f"/api/sessions/{session_name}/history",
+        params={"before": before, "limit": limit, "requester": from_session},
+    )
+
+
+@cloud_mcp.tool(
     name="inbox",
     description="Check your inbox for messages from other agents.",
 )

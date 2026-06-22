@@ -3031,6 +3031,91 @@ async def content_doc_apply_text(
     )
 
 
+@content_mcp.tool(
+    name="refine_phrase",
+    description="""Word-level refinement: find a phrase + replace it, drift-
+    stable + authorship-preserving. Wrapper über `replace_range` ohne dass
+    der Caller block_id + char offsets selbst ausrechnen muss.
+
+    Use this for typo-fixes, single-word edits, precise phrase rewordings
+    inside an existing paragraph WITHOUT rewriting the whole paragraph.
+    Authorship_runs (V2.3) get sauber gesplittet — der ersetzte Span wird
+    dem Caller zugeschrieben, der Rest des Paragraphen behält den
+    Original-Autor. Result: "buntes Schachbrett" auf Word-Level statt
+    paragraph-uniformer Authorship.
+
+    ## Scope-Resolution (most-stable first)
+
+      - `block_id`: pin to ONE specific paragraph (UUID from
+        `doc_get_structured`). Drift-stable über parallele Edits.
+      - `section_id`: narrow to one section's paragraphs.
+      - kein Scope: ganzes Doc.
+
+    ## Fail-closed rules (Spec aus Content-Post #1202)
+
+      - 0 Treffer im Scope → 404 `phrase_not_found`
+      - mehrere Treffer in verschiedenen Paragraphen → 409
+        `cross_paragraph_match_unsupported` (v1: nur Single-Paragraph)
+      - mehrere Treffer im selben Paragraph ohne `occurrence` → 409
+        `ambiguous_phrase` mit Trefferliste (block_id, paragraph_index,
+        start, end, snippet)
+      - `occurrence` ohne `block_id` → 400 `occurrence_requires_block_id`
+        (occurrence ist nicht drift-stabil ohne Paragraph-Pin)
+
+    ## Optimistic Lock
+
+    `expected_text` defaultet auf den tatsächlich gefundenen Text (NFC-
+    aware). Bei parallelem Edit, der den Match verändert hat → 409
+    `expected_text_mismatch`. Override mit explizitem `expected_text`
+    möglich (z.B. um auf einen früheren Stand zu locken).
+
+    Args:
+        post_id: collab-text post id
+        find: substring to locate (NFC-normalized for match)
+        replace: replacement text (empty string = pure delete)
+        section_id: optional scope narrow
+        block_id: optional paragraph pin (most stable)
+        occurrence: 1-based pick of n-th match within block_id (requires
+            block_id)
+        expected_text: optimistic-lock — default = the actually-found text
+
+    Returns:
+        matches_replaced: int (always 1 on success; multi-match needs
+            separate calls)
+        paragraph_index: where the edit landed
+        block_id: paragraph block_id
+        section_id: parent section if any
+        start, end: codepoint offsets within paragraph
+        matched_text: the text that was found + replaced
+        replacement: the new text
+    """,
+)
+async def content_refine_phrase(
+    post_id: int,
+    find: str,
+    replace: str,
+    section_id: Optional[str] = None,
+    block_id: Optional[str] = None,
+    occurrence: Optional[int] = None,
+    expected_text: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Word-level refinement wrapper über replace_range."""
+    body: Dict[str, Any] = {"find": find, "replace": replace}
+    if section_id is not None:
+        body["section_id"] = section_id
+    if block_id is not None:
+        body["block_id"] = block_id
+    if occurrence is not None:
+        body["occurrence"] = occurrence
+    if expected_text is not None:
+        body["expected_text"] = expected_text
+    return await call_content_api(
+        "POST",
+        f"/api/v1/posts/{post_id}/refine_phrase",
+        json_body=body,
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Whiteboard Doc-Komm-System — typed Sections in collab docs.
 # Section-API is REST-only on content-api; these wrappers spare every

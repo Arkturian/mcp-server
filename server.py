@@ -8113,9 +8113,10 @@ async def cloud_create_session(
         "Copies model/effort/agent/persona(claude_md_source)/mcp_servers/allowed_tools/"
         "department/role/avatar/subscriptions verbatim and resets runtime state. "
         "Returns {status:'cloned', name, node, started, ...}. "
-        "The clone lands on the node where the source lives (use migrate to relocate). "
         "Set clone_history=True to deep-copy the conversation transcripts so the clone "
         "resumes the source's chat (default: fresh empty conversation). "
+        "from_tag clones the conversation only UP TO a history tag (branch at that turn). "
+        "node relocates the clone to a target federation node in the same call. "
         "new_owner reassigns ownership; ephemeral+ttl_hours make a throwaway clone."
     ),
 )
@@ -8124,6 +8125,8 @@ async def cloud_clone_session(
     new_name: str,
     new_owner: str = "",
     clone_history: bool = False,
+    from_tag: str = "",
+    node: str = "",
     ephemeral: bool = False,
     ttl_hours: float = 0,
     start: bool = True,
@@ -8133,6 +8136,10 @@ async def cloud_clone_session(
 
     clone_history  False (default) = fresh empty conversation; True = copy the
                    source's bot-home incl. transcripts so --continue resumes it.
+    from_tag       clone conversation only up to a history tag (branch at the
+                   tagged turn as the clone's session). Implies clone_history.
+    node           target federation node — clone, then relocate there in one
+                   call (default: stay where the source lives).
     new_owner      reassign ownership (default: inherit source owner).
     ephemeral      make the clone a throwaway (auto-cleanup, no auto_restart).
     ttl_hours      ephemeral only — time-based auto-kill (default 24h when ephemeral).
@@ -8145,6 +8152,10 @@ async def cloud_clone_session(
     }
     if new_owner:
         body["new_owner"] = new_owner
+    if from_tag:
+        body["from_tag"] = from_tag
+    if node:
+        body["node"] = node
     if ephemeral:
         body["ephemeral"] = True
     if ttl_hours and ttl_hours > 0:

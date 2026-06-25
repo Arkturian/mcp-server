@@ -7095,8 +7095,18 @@ Available templates (pass as 'template' param):
     Args:
         to: Recipient email address
         subject: Email subject
-        body: Plain text body
+        body: Plain text body (or HTML — set `html=True` if so, or pass via `html` arg)
         source: Optional source identity. Omit to use instance default.
+        html: When True the body is treated as HTML. Mutually exclusive with `body` being plain text.
+        cc: Optional list of additional recipient email addresses (visible to all recipients).
+        bcc: Optional list of blind-carbon-copy recipients (not visible in headers).
+        reply_to: Optional reply-to address. When the recipient hits "Reply" the response lands here.
+        attachments: Optional list of attachments. Each item is a dict with EITHER `url` (comm-api fetches
+            server-side — preferred for files already in Storage, e.g.
+            `{"url": "https://api-storage.arkturian.com/storage/media/123", "filename": "invoice.pdf", "content_type": "application/pdf"}`)
+            OR `data` (base64-encoded inline bytes,
+            e.g. `{"data": "<base64>", "filename": "invoice.pdf", "content_type": "application/pdf"}`).
+            DO NOT pass local filesystem paths — comm-api runs on a different host and cannot read them.
         template: Optional template name (e.g. "honorarnote_send", "invoice_send", "payment_reminder", "notification")
         template_data: Optional dict of data for template rendering
     """,
@@ -7106,16 +7116,36 @@ async def comm_send_email(
     subject: str,
     body: str = "",
     source: Optional[str] = None,
+    html: bool = False,
+    cc: Optional[List[str]] = None,
+    bcc: Optional[List[str]] = None,
+    reply_to: Optional[str] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
     template: Optional[str] = None,
     template_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    # Backend EmailSendRequest carries `html` as Optional[str] — when an
+    # MCP caller signals "this is HTML", we pass the body in the html
+    # field so the comm-api flips its Gmail send into html=True mode.
     json_body: Dict[str, Any] = {
         "to": to,
         "subject": subject,
-        "body": body,
     }
+    if html:
+        json_body["html"] = body
+        json_body["body"] = ""
+    else:
+        json_body["body"] = body
     if source:
         json_body["source"] = source
+    if cc:
+        json_body["cc"] = cc
+    if bcc:
+        json_body["bcc"] = bcc
+    if reply_to:
+        json_body["reply_to"] = reply_to
+    if attachments:
+        json_body["attachments"] = attachments
     if template:
         json_body["template"] = template
     if template_data:
@@ -7565,9 +7595,18 @@ async def comm_gmail_latest(source: str, query: str = "") -> Dict[str, Any]:
         "Send an email via Gmail. "
         "Source identifies which Gmail account sends. Available sources depend on the deployment: "
         "arkturian: 'apopovic' = apopovic.aut@gmail.com, 'edera' = a.popovic@edera-safety.com, "
-        "'tsaier' = t.saier@edera-safety.com. "
+        "'tsaier' = t.saier@edera-safety.com, 'accounting' = accounting@edera-safety.com. "
         "pdrei: 'jascha' = jascha.popovic@bellevue-living.net. "
-        "Use gmail_list_accounts to see what's currently configured."
+        "Use gmail_list_accounts to see what's currently configured.\n\n"
+        "Optional parameters:\n"
+        "- cc, bcc: lists of additional recipient addresses\n"
+        "- reply_to: redirect Reply-clicks to a different address\n"
+        "- attachments: list of dicts, each with EITHER `url` (comm-api fetches server-side, "
+        "preferred for Storage-hosted files: "
+        "`{\"url\": \"https://api-storage.arkturian.com/storage/media/123\", \"filename\": \"invoice.pdf\", \"content_type\": \"application/pdf\"}`) "
+        "OR `data` (base64-encoded bytes: "
+        "`{\"data\": \"<base64>\", \"filename\": \"invoice.pdf\", \"content_type\": \"application/pdf\"}`). "
+        "DO NOT pass local filesystem paths — comm-api runs on a different host and cannot read them."
     ),
 )
 async def comm_gmail_send(
@@ -7576,10 +7615,26 @@ async def comm_gmail_send(
     subject: str,
     body: str,
     html: bool = False,
+    cc: Optional[List[str]] = None,
+    bcc: Optional[List[str]] = None,
+    reply_to: Optional[str] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    return await call_comm_api("POST", f"/api/v1/gmail/{source}/send", json_body={
-        "to": to, "subject": subject, "body": body, "html": html
-    })
+    json_body: Dict[str, Any] = {
+        "to": to,
+        "subject": subject,
+        "body": body,
+        "html": html,
+    }
+    if cc:
+        json_body["cc"] = cc
+    if bcc:
+        json_body["bcc"] = bcc
+    if reply_to:
+        json_body["reply_to"] = reply_to
+    if attachments:
+        json_body["attachments"] = attachments
+    return await call_comm_api("POST", f"/api/v1/gmail/{source}/send", json_body=json_body)
 
 
 @comm_mcp.tool(

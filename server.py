@@ -8884,7 +8884,10 @@ async def issue_create(
     Required: title, description.
     Optional: severity (critical|major|minor|cosmetic, default minor),
       component, tags, file_pointer, assignee, status (default open),
-      goal_id (parent Goal in three-tier work model).
+      goal_id (parent Goal in three-tier work model),
+      process_template (opt-in Phase-A gating, e.g. "design-impl-test" —
+      when set, the issue cannot be resolved to `fixed` until all stages
+      are done; stages enforce strict sequential ordering).
     """,
 )
 async def issue_create_structured(
@@ -8897,6 +8900,7 @@ async def issue_create_structured(
     assignee: Optional[str] = None,
     status: str = "open",
     goal_id: Optional[int] = None,
+    process_template: Optional[str] = None,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {
         "title": title,
@@ -8914,6 +8918,8 @@ async def issue_create_structured(
         body["assignee"] = assignee
     if goal_id is not None:
         body["goal_id"] = goal_id
+    if process_template is not None:
+        body["process_template"] = process_template
     return await call_issue_api("POST", "/api/v1/issues", json_body=body)
 
 
@@ -9057,6 +9063,42 @@ async def issue_search(
 )
 async def issue_comment(id: int, body: str) -> Dict[str, Any]:
     return await call_issue_api("POST", f"/api/v1/issues/{id}/comments", json_body={"body": body})
+
+
+@issue_mcp.tool(
+    name="stage_update",
+    description="""Phase A — transition a single stage of a gated issue.
+
+    Only applicable when the issue was created with `process_template`
+    (e.g. "design-impl-test"). Stage status values:
+      pending | in_progress | done | skipped
+
+    STRICT SEQUENTIAL ORDERING: a stage can only transition to
+    `in_progress` or `done` if the PREVIOUS stage is already done or
+    skipped. Out-of-order transitions return HTTP 409 with the offending
+    prior stage in the error detail.
+
+    Pending/skipped transitions don't violate sequence — you can reset
+    a stage or skip a stage any time.
+
+    Use this from a worker agent to signal progress through gated work:
+      stage_update(id=117, stage="design", status="done")
+      stage_update(id=117, stage="impl", status="in_progress")
+      stage_update(id=117, stage="impl", status="done")
+      stage_update(id=117, stage="test", status="done")
+      resolve(id=117, commit=..., summary=...)   # now allowed
+    """,
+)
+async def issue_stage_update(
+    id: int,
+    stage: str,
+    status: str,
+) -> Dict[str, Any]:
+    return await call_issue_api(
+        "POST",
+        f"/api/v1/issues/{id}/stages/{stage}",
+        json_body={"status": status},
+    )
 
 
 # =============================================================================

@@ -8883,7 +8883,8 @@ async def issue_create(
 
     Required: title, description.
     Optional: severity (critical|major|minor|cosmetic, default minor),
-      component, tags, file_pointer, assignee, status (default open).
+      component, tags, file_pointer, assignee, status (default open),
+      goal_id (parent Goal in three-tier work model).
     """,
 )
 async def issue_create_structured(
@@ -8895,6 +8896,7 @@ async def issue_create_structured(
     file_pointer: Optional[str] = None,
     assignee: Optional[str] = None,
     status: str = "open",
+    goal_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {
         "title": title,
@@ -8910,6 +8912,8 @@ async def issue_create_structured(
         body["file_pointer"] = file_pointer
     if assignee is not None:
         body["assignee"] = assignee
+    if goal_id is not None:
+        body["goal_id"] = goal_id
     return await call_issue_api("POST", "/api/v1/issues", json_body=body)
 
 
@@ -8919,7 +8923,8 @@ async def issue_create_structured(
 
     Filters (all optional): status (open|in_progress|fixed|deferred|closed|
     duplicate|wontfix), severity (critical|major|minor|cosmetic), component,
-    assignee, q (full-text search across title+description), limit (default 20,
+    assignee, goal_id (filter to issues under a specific parent Goal),
+    q (full-text search across title+description), limit (default 20,
     max 200), offset.
 
     Returns: {items: [...], total, limit, offset}.
@@ -8930,6 +8935,7 @@ async def issue_list(
     severity: Optional[str] = None,
     component: Optional[str] = None,
     assignee: Optional[str] = None,
+    goal_id: Optional[int] = None,
     q: Optional[str] = None,
     limit: int = 20,
     offset: int = 0,
@@ -8939,6 +8945,7 @@ async def issue_list(
         severity=severity,
         component=component,
         assignee=assignee,
+        goal_id=goal_id,
         q=q,
         limit=limit,
         offset=offset,
@@ -8959,7 +8966,8 @@ async def issue_get(id: int) -> Dict[str, Any]:
     description="""Partial update of an issue. All fields optional.
 
     Updatable: title, description, severity, status, component, tags (list),
-    file_pointer, assignee, duplicate_of, metadata_json.
+    file_pointer, assignee, duplicate_of, goal_id (link/unlink parent Goal),
+    metadata_json.
 
     Tenant-isolation: only the issue's tenant can update; cross-tenant → 404.
     """,
@@ -8975,6 +8983,7 @@ async def issue_update(
     file_pointer: Optional[str] = None,
     assignee: Optional[str] = None,
     duplicate_of: Optional[int] = None,
+    goal_id: Optional[int] = None,
     metadata_json: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     body = _clean_params(
@@ -8987,6 +8996,7 @@ async def issue_update(
         file_pointer=file_pointer,
         assignee=assignee,
         duplicate_of=duplicate_of,
+        goal_id=goal_id,
         metadata_json=metadata_json,
     )
     return await call_issue_api("PATCH", f"/api/v1/issues/{id}", json_body=body)
@@ -9047,6 +9057,170 @@ async def issue_search(
 )
 async def issue_comment(id: int, body: str) -> Dict[str, Any]:
     return await call_issue_api("POST", f"/api/v1/issues/{id}/comments", json_body={"body": body})
+
+
+# =============================================================================
+# Goal tools — Level 1 of the three-tier work model
+# (spec: post #1257 product p-87c869b97d0b)
+#
+# Goals are high-level natural-language wishes (e.g. "Real-Time-Agent als Dr.
+# Ciocco"). Issues link UP to Goals via the goal_id FK. Cloud's work-board
+# reads `GET /goals/{id}` for the rollup (issues_summary + linked_issue_ids).
+# =============================================================================
+
+
+@issue_mcp.tool(
+    name="goal_create",
+    description="""Create a Goal from free-text — AI extracts title + acceptance criteria.
+
+    A Goal is a high-level wish in natural language ("Real-Time-Agent als
+    Dr. Ciocco kennt DB-Objekte"), the durable WAS-Anforderung. Technical
+    execution work goes into Issues with `goal_id` pointing here.
+
+    Required: description (free natural-language text).
+    Optional: owner (defaults to caller), tenant_id (defaults to caller's
+    tenant).
+
+    Returns: {id, title, acceptance_criteria, ai_confidence, url}.
+    """,
+)
+async def issue_goal_create(
+    description: str,
+    owner: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"text": description}
+    if owner is not None:
+        body["owner"] = owner
+    if tenant_id is not None:
+        body["tenant_id"] = tenant_id
+    return await call_issue_api("POST", "/api/v1/goals/intake", json_body=body)
+
+
+@issue_mcp.tool(
+    name="goal_create_structured",
+    description="""Create a Goal with full control — no AI extraction.
+
+    Required: title, description.
+    Optional: acceptance_criteria (markdown), status (proposed|active|blocked|
+      achieved|abandoned, default proposed), owner.
+    """,
+)
+async def issue_goal_create_structured(
+    title: str,
+    description: str,
+    acceptance_criteria: Optional[str] = None,
+    status: str = "proposed",
+    owner: Optional[str] = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {
+        "title": title,
+        "description": description,
+        "status": status,
+    }
+    if acceptance_criteria is not None:
+        body["acceptance_criteria"] = acceptance_criteria
+    if owner is not None:
+        body["owner"] = owner
+    return await call_issue_api("POST", "/api/v1/goals", json_body=body)
+
+
+@issue_mcp.tool(
+    name="goal_list",
+    description="""List Goals with optional filters. Caller's tenant auto-applied.
+
+    Filters: status (proposed|active|blocked|achieved|abandoned), owner,
+    q (full-text title+description), limit (default 20, max 200), offset.
+    """,
+)
+async def issue_goal_list(
+    status: Optional[str] = None,
+    owner: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    params = _clean_params(
+        status=status,
+        owner=owner,
+        q=q,
+        limit=limit,
+        offset=offset,
+    )
+    return await call_issue_api("GET", "/api/v1/goals", params=params)
+
+
+@issue_mcp.tool(
+    name="goal_get",
+    description="""Get full Goal detail + child-issue rollup.
+
+    Returns Goal fields PLUS:
+      - `issues_summary`: {open, in_progress, fixed, deferred, closed,
+        duplicate, wontfix, total} — aggregate of child Issue statuses
+      - `linked_issue_ids`: [int] — IDs of all Issues with this goal_id
+
+    This is the rollup contract Cloud's work-board uses for the Goal-card.
+    """,
+)
+async def issue_goal_get(id: int) -> Dict[str, Any]:
+    return await call_issue_api("GET", f"/api/v1/goals/{id}")
+
+
+@issue_mcp.tool(
+    name="goal_update",
+    description="""Partial update of a Goal.
+
+    Updatable: title, description, acceptance_criteria, status (proposed|
+    active|blocked|achieved|abandoned), owner, metadata_json.
+    """,
+)
+async def issue_goal_update(
+    id: int,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    acceptance_criteria: Optional[str] = None,
+    status: Optional[str] = None,
+    owner: Optional[str] = None,
+    metadata_json: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    body = _clean_params(
+        title=title,
+        description=description,
+        acceptance_criteria=acceptance_criteria,
+        status=status,
+        owner=owner,
+        metadata_json=metadata_json,
+    )
+    return await call_issue_api("PATCH", f"/api/v1/goals/{id}", json_body=body)
+
+
+@issue_mcp.tool(
+    name="goal_achieve",
+    description="""Mark a Goal as achieved — sets status=achieved + achieved_at + achieved_by.
+
+    Typically called when all acceptance criteria are met. Independent of
+    child-issue status (a goal can be achieved even if some issues are wontfix
+    or duplicate).
+    """,
+)
+async def issue_goal_achieve(id: int) -> Dict[str, Any]:
+    return await call_issue_api("POST", f"/api/v1/goals/{id}/achieve")
+
+
+@issue_mcp.tool(
+    name="goal_issues",
+    description="""List child Issues of a Goal.
+
+    Convenience wrapper for `list(goal_id=N)`. Optional status filter.
+    Returns plain array of Issue records, not paginated.
+    """,
+)
+async def issue_goal_issues(
+    id: int,
+    status: Optional[str] = None,
+) -> Any:
+    params = _clean_params(status=status)
+    return await call_issue_api("GET", f"/api/v1/goals/{id}/issues", params=params)
 
 
 issue_app = issue_mcp.streamable_http_app()

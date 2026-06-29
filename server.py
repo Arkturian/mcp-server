@@ -8042,6 +8042,36 @@ async def cloud_list_agents() -> Dict[str, Any]:
 
 
 @cloud_mcp.tool(
+    name="set_status",
+    description=(
+        "Declare YOUR coarse work-status for the operator's federation-wide "
+        "work-overview board, so a human juggling many agents sees at a glance "
+        "who is done / blocked / waiting. Call this ONLY at a transition: when "
+        "you FINISH a task (state='done'), hit a wall you cannot pass alone "
+        "(state='blocked'), or start waiting on someone or something "
+        "(state='waiting'). Do NOT call it continuously and do NOT push "
+        "'working' — 'working' is the default the system already reads from your "
+        "screen, so pushing status is a rare milestone act, not ongoing UI "
+        "upkeep; it must never distract you from your actual task. Pass YOUR own "
+        "session name. summary = one short human line (what you finished / what "
+        "blocks you). task_id = the shared workstream id (a Collab task or "
+        "section id) when several agents work one feature, so the board groups "
+        "you all as ONE card instead of N redundant entries."
+    ),
+)
+async def cloud_set_status(
+    session_name: str,
+    state: str,
+    summary: str = "",
+    task_id: str = "",
+) -> Dict[str, Any]:
+    return await call_cloud_api(
+        "POST", f"/api/agents/{session_name}/status",
+        json_body={"state": state, "summary": summary, "task_id": task_id},
+    )
+
+
+@cloud_mcp.tool(
     name="read_session",
     description="Read the current screen content of any agent's tmux session across all servers. Returns plain text, no ANSI codes.",
 )

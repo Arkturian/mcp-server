@@ -8060,7 +8060,10 @@ async def cloud_list_agents() -> Dict[str, Any]:
         "session name. summary = one short human line (what you finished / what "
         "blocks you). task_id = the shared workstream id (a Collab task or "
         "section id) when several agents work one feature, so the board groups "
-        "you all as ONE card instead of N redundant entries."
+        "you all as ONE card instead of N redundant entries. next = your NEXT "
+        "goal after the current one — together with summary this is your own "
+        "re-orientation anchor ('now: X, next: Y'); read it back with get_status "
+        "when interruptions made you lose the thread."
     ),
 )
 async def cloud_set_status(
@@ -8068,11 +8071,26 @@ async def cloud_set_status(
     state: str,
     summary: str = "",
     task_id: str = "",
+    next: str = "",
 ) -> Dict[str, Any]:
     return await call_cloud_api(
         "POST", f"/api/agents/{session_name}/status",
-        json_body={"state": state, "summary": summary, "task_id": task_id},
+        json_body={"state": state, "summary": summary, "task_id": task_id, "next": next},
     )
+
+
+@cloud_mcp.tool(
+    name="get_status",
+    description=(
+        "Read YOUR OWN work-anchor back (now / next goal / task) to re-orient "
+        "after interruptions — when an IACP flood or cross-questions made you "
+        "lose the thread, call this to remind yourself 'what was I working on, "
+        "what is my next goal'. This is an ON-DEMAND pull you reach for when you "
+        "feel disoriented; it is never forced on you. Pass YOUR own session name."
+    ),
+)
+async def cloud_get_status(session_name: str) -> Dict[str, Any]:
+    return await call_cloud_api("GET", f"/api/agents/{session_name}/status")
 
 
 @cloud_mcp.tool(

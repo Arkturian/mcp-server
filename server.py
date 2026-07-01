@@ -71,7 +71,17 @@ AI_API_KEY = os.getenv("AI_API_KEY", "")
 
 HOST = os.getenv("MCP_HOST", "127.0.0.1")
 PORT = int(os.getenv("MCP_PORT", "8080"))
-HTTP_TIMEOUT = float(os.getenv("MCP_HTTP_TIMEOUT", "30.0"))
+# Default timeout for federation API calls (content-api, cloud-api, storage-api,
+# comm-api, tools-api etc.). These typically respond in <2s; 60s gives generous
+# headroom for slow/network-limited paths without hiding real network hangs.
+HTTP_TIMEOUT = float(os.getenv("MCP_HTTP_TIMEOUT", "60.0"))
+# Separate timeout for /ai/* endpoints on api-ai. Codex/Gemini/Claude CLIs carry
+# a 12-25k input-token system-prompt overhead per call → 60-120s wall-clock is
+# normal for prompts >few KB. Alex 2026-07-01: 5-minute default covers even
+# batch translations of 30+ POIs in one call. Content debugging AI calls from
+# the bot side no longer hit spurious client-timeouts. (Production /translate
+# endpoint has its own timeout inside content-api and is unaffected by this.)
+AI_HTTP_TIMEOUT = float(os.getenv("MCP_AI_HTTP_TIMEOUT", "300.0"))
 
 # Optional MCP filter — defined here early so validation can use it
 _mcp_servers_env_early = os.getenv("MCP_SERVERS", "").strip()
@@ -381,13 +391,20 @@ async def call_ai_api(
     *,
     json_body: Optional[Dict[str, Any]] = None,
 ) -> Any:
-    """Call AI API (text/image/audio) with API key if provided."""
+    """Call AI API (text/image/audio) with API key if provided.
+
+    Uses AI_HTTP_TIMEOUT (default 300s) instead of the generic HTTP_TIMEOUT
+    because CLI-backed models (codex/gemini/claude) carry a 12-25k input-
+    token system-prompt overhead per call and can take 60-120s wall-clock
+    for prompts >few KB. Overriding via `MCP_AI_HTTP_TIMEOUT` env-var.
+    """
     headers = {"X-API-Key": AI_API_KEY} if AI_API_KEY else {}
     return await _fetch_json(
         method,
         f"{AI_API_BASE}{endpoint}",
         headers=headers,
         json_body=json_body,
+        timeout=AI_HTTP_TIMEOUT,
     )
 
 

@@ -1597,14 +1597,17 @@ async def artrack_routes_list(track_id: int) -> Dict[str, Any]:
     name="waypoints_set_knowledge_links",
     description="""Link waypoints/screen_points to Knowledge objects (e.g. Flora/Fauna species).
 
-    Sets metadata_json.knowledge_id on each given waypoint. Reverse direction of
-    Knowledge's geo-lookup: lets you later ask "which screen_points show knowledge
-    object X" (see waypoints_by_knowledge).
+    A waypoint may link to ONE or SEVERAL knowledge objects (1:n — e.g. an info
+    board showing 3 animals). Canonical storage: metadata_json.knowledge_ids[];
+    metadata_json.knowledge_id mirrors the first entry (backward compat). Reverse
+    direction of Knowledge's geo-lookup (see waypoints_by_knowledge).
 
     Parameters:
     - track_id: Track ID (required)
-    - links: dict mapping waypoint_id (string) -> knowledge_id (int), e.g.
-             {"24977": 285, "24988": 286}. Value null clears a link.
+    - links: dict mapping waypoint_id (string) -> value, where value is:
+        * int        → single link, e.g. {"24977": 285}
+        * list[int]  → multiple links, e.g. {"24988": [83, 267]}
+        * null / []  → clear all links
 
     Track creator only. Returns {updated:[ids], skipped:[{id,reason}]}.
     """,
@@ -1624,9 +1627,10 @@ async def artrack_waypoints_set_knowledge_links(
     description="""Get all waypoints/screen_points linked to a given Knowledge object.
 
     Reverse of Knowledge's pos+radius lookup: "where is knowledge object X (e.g. a
-    species) shown?" Returns each waypoint whose metadata_json.knowledge_id matches,
-    with id, track_id, lat/lng, waypoint_type, title, assets (host-resolved file_url)
-    and source_collection.
+    species) shown?" Matches waypoints whose metadata_json.knowledge_ids[] contains
+    the id (or the legacy scalar knowledge_id). Returns each waypoint with id,
+    track_id, lat/lng, waypoint_type, title, knowledge_ids, assets (host-resolved
+    file_url) and source_collection.
 
     Parameters:
     - knowledge_id: the Knowledge object id (required)

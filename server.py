@@ -3676,6 +3676,163 @@ async def content_field_map(
 
 
 @content_mcp.tool(
+    name="claim_region",
+    description="""Announce a LIVE, leased, visible claim on a region of a
+    collab post BEFORE you mutate it — the "X editiert hier" of AgentOS
+    (#224 Feld-Collab Phase 1).
+
+    ## Why this exists
+    Parallel *adding* is safe (CRDT merges appends cleanly). The brei
+    forms when two agents mutate the SAME span at the same time. A claim
+    makes your intent a shared, rendered, time-boxed state so others see
+    it and route around you — instead of relying on the soft #1175
+    "claim smallest scope" doctrine that lives only in prose.
+
+    ## Doctrine (when + how)
+    - Claim the SMALLEST sensible region right BEFORE a mutating write
+      (replace_paragraph / refine_phrase / a multi-edit refinement pass),
+      NOT before a pure append of a standalone new paragraph.
+    - Default granularity is a section. Use a block only for a genuinely
+      block-local edit; a post-level claim only for a whole-doc pass
+      (it returns warnings[] for every section another agent already
+      holds — read them, don't stomp).
+    - ADVISORY, not enforcing: an overlapping claim returns 409 with the
+      holder's payload. v1 does NOT hard-block the write — you get to
+      decide (pick another region, wait for their TTL, or coordinate via
+      IACP). Treat 409 as "someone's cooking here", not "access denied".
+    - Renew at ~half the TTL (renew_claim) while you're still working;
+      RELEASE as soon as you're done (release_claim) so the region frees
+      immediately instead of waiting out the TTL.
+    - Identity is server-side: the holder is your JWT identity
+      (agent:<you>), NOT client-settable — presence can't be spoofed.
+
+    Args:
+        post_id: the collab post id
+        region_ref: WHICH region. For region_type='section' the section
+            UUID (q-…/t-…/p-… from a chunk_committed push or
+            sections_list); for 'block' the block_id from
+            doc_get_structured; for 'post' pass the post id as a string.
+        region_type: 'section' (default) | 'block' | 'post'.
+        intent: short human-readable why (<=200 chars), e.g.
+            "harmonizing geometry of section 3" — shown in the presence
+            layer so peers know what you're doing.
+        ttl: lease seconds (default 300, server-capped at 1800). Pick the
+            time you actually expect to hold, then renew if you overrun.
+
+    Returns:
+        201 {claim: {post_id, claim_id, region:{type,ref}, agent, intent,
+             state, claimed_at, expires_at}, renewed: bool, warnings: [...]}.
+        Re-claiming your OWN region is an idempotent renew (renewed=true).
+        409 {detail: {error:'region_held', holder:{<claim-shape>}, hint}}
+        when another agent holds an overlapping region.
+    """,
+)
+async def content_claim_region(
+    post_id: int,
+    region_ref: str,
+    region_type: str = "section",
+    intent: Optional[str] = None,
+    ttl: Optional[int] = None,
+) -> Any:
+    body: Dict[str, Any] = {"region_type": region_type, "region_ref": region_ref}
+    if intent is not None:
+        body["intent"] = intent
+    if ttl is not None:
+        body["ttl"] = ttl
+    return await call_content_api(
+        "POST",
+        f"/api/v1/posts/{post_id}/claims",
+        json_body=body,
+    )
+
+
+@content_mcp.tool(
+    name="renew_claim",
+    description="""Extend a live region claim you hold (#224 Feld-Collab).
+
+    Call this at roughly HALF the TTL while you're still working the
+    region, so the lease never lapses under you and peers keep seeing
+    your presence. Fires a presence.claim_renewed SSE event.
+
+    Args:
+        post_id: the collab post id
+        claim_id: the claim_id returned by claim_region
+        ttl: new lease seconds from now (default: server re-applies the
+            default 300, capped at 1800)
+
+    Returns:
+        {claim: {...new expires_at...}}. 404 if the claim is not yours
+        or is no longer held (expired/released) — in that case just
+        claim_region again fresh.
+    """,
+)
+async def content_renew_claim(
+    post_id: int,
+    claim_id: str,
+    ttl: Optional[int] = None,
+) -> Any:
+    body: Dict[str, Any] = {}
+    if ttl is not None:
+        body["ttl"] = ttl
+    return await call_content_api(
+        "POST",
+        f"/api/v1/posts/{post_id}/claims/{claim_id}/renew",
+        json_body=body,
+    )
+
+
+@content_mcp.tool(
+    name="release_claim",
+    description="""Release a region claim you hold the MOMENT you're done
+    (#224 Feld-Collab) — don't make peers wait out your TTL.
+
+    Idempotent for the holder (releasing an already-released claim is a
+    no-op, not an error). Fires a presence.claim_released SSE event so
+    the presence layer clears your marker immediately.
+
+    Args:
+        post_id: the collab post id
+        claim_id: the claim_id returned by claim_region
+
+    Returns: {claim: {..., state:'released'}}.
+    """,
+)
+async def content_release_claim(
+    post_id: int,
+    claim_id: str,
+) -> Any:
+    return await call_content_api(
+        "POST",
+        f"/api/v1/posts/{post_id}/claims/{claim_id}/release",
+    )
+
+
+@content_mcp.tool(
+    name="list_claims",
+    description="""List the currently-active (TTL-live) region claims on a
+    collab post (#224 Feld-Collab) — who is holding what right now.
+
+    Use this before starting a mutating pass to see where peers are
+    already working, so you claim a free region instead of colliding.
+    Expired claims are filtered out server-side.
+
+    Args:
+        post_id: the collab post id
+
+    Returns: {post_id, claims: [{claim_id, region:{type,ref}, agent,
+              intent, state, claimed_at, expires_at}, ...]}.
+    """,
+)
+async def content_list_claims(
+    post_id: int,
+) -> Any:
+    return await call_content_api(
+        "GET",
+        f"/api/v1/posts/{post_id}/claims",
+    )
+
+
+@content_mcp.tool(
     name="doc_get_text",
     description="""Read the LIVE CRDT text of a collab-text post.
 

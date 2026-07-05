@@ -6,7 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
 # Minimal sanity check for Python service: syntax check server.py
-BUILD_COMMAND="python -m py_compile server.py"
+BUILD_COMMAND="python3 -m py_compile server.py"
 
 usage() {
   cat <<'USAGE'

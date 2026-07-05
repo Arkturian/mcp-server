@@ -1400,6 +1400,36 @@ artrack_mcp = FastMCP(
 
 
 @artrack_mcp.tool(
+    name="weather",
+    description="""Aktuelles Wetter (open-meteo, server-side 10min-Cache) — default Tscheppaschlucht-Zentrum.
+
+    Args:
+    - lat/lon: optional, default 46.49778/14.26374 (Schluchtzentrum)
+    - location: optionaler Anzeigename fuer die text-Zeile
+
+    Returns: {location, lat, lon, observed_at, temperature_c, precipitation_mm,
+    wind_kmh, weather_code, condition (deutsch), emoji, text}
+
+    `text` ist die ready-to-inject Zeile fuer Voice-Guide/Agent-Kontext, z.B.:
+    "Aktuell in der Tscheppaschlucht ⛅ teils bewoelkt, rund 20 °C, kein Niederschlag, leichter Wind."
+    """,
+)
+async def artrack_weather(
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+    location: Optional[str] = None,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {}
+    if lat is not None:
+        params["lat"] = lat
+    if lon is not None:
+        params["lon"] = lon
+    if location:
+        params["location"] = location
+    return await call_artrack_api("GET", "/weather", params=params)
+
+
+@artrack_mcp.tool(
     name="tracks_list",
     description="List all tracks for the authenticated user.",
 )

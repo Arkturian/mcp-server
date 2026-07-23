@@ -73,15 +73,21 @@ jobs:
             echo "Restarting $SERVICE_NAME service..."
             sudo systemctl restart $SERVICE_NAME
 
-            # Wait for service to start
-            sleep 3
-
-            # Health check
+            # Health check with retry — the service listens on 8004 (uvicorn
+            # server:app --port 8004); the old check probed 8080 and failed
+            # every deploy despite a healthy service (false-red 2026-07-23).
             echo "Running health check..."
-            if curl -sf http://localhost:8080/health > /dev/null; then
-              echo "Health check passed!"
-            else
-              echo "Health check failed, checking service status..."
+            HEALTH_OK=0
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              if curl -sf http://localhost:8004/health > /dev/null; then
+                HEALTH_OK=1
+                echo "Health check passed (attempt $i)!"
+                break
+              fi
+              sleep 3
+            done
+            if [ "$HEALTH_OK" != "1" ]; then
+              echo "Health check failed after 10 attempts, checking service status..."
               sudo systemctl status $SERVICE_NAME --no-pager -l
               exit 1
             fi

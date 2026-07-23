@@ -1464,6 +1464,38 @@ async def artrack_routes_ids(track_id: int) -> Dict[str, Any]:
 
 
 @artrack_mcp.tool(
+    name="segment_positions",
+    description="""Compute COUNT evenly spaced GPS positions along a segment's
+    stretch of its route polyline — exactly on the line, ordered in walking
+    direction (start marker → end marker). For efficient bulk placement of
+    POIs/stations along a segment (sculptures, species, info points): compute
+    positions here, then create waypoints at them.
+
+    Parameters:
+    - track_id: the track (required)
+    - segment: segment name, e.g. "Kunstpfad" (required)
+    - count: number of positions, 1-500 (required; count+1 equal intervals)
+    - route_id: optional override; default = segment markers' routeId, with
+      geographic fallback to the nearest route polyline
+
+    Returns segment geometry (length_m, spacing_m, along-range) + positions
+    [{index, latitude, longitude, along_meters}]. Pure computation — creates
+    nothing.
+    """,
+)
+async def artrack_segment_positions(
+    track_id: int,
+    segment: str,
+    count: int,
+    route_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"segment": segment, "count": count}
+    if route_id is not None:
+        params["route_id"] = route_id
+    return await call_artrack_api("GET", f"/tracks/{track_id}/segments/positions", params=params)
+
+
+@artrack_mcp.tool(
     name="route_pretty",
     description="""Get human-readable route detail.
 
@@ -1744,6 +1776,8 @@ async def artrack_waypoint_update(
     tags: Optional[List[str]] = None,
     priority: Optional[float] = None,
     metadata_json: Optional[Dict[str, Any]] = None,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {}
     if title is not None:
@@ -1756,6 +1790,11 @@ async def artrack_waypoint_update(
         body["priority"] = priority
     if metadata_json is not None:
         body["metadata_json"] = metadata_json
+    # In-place move: pass both lat AND lon to reposition the waypoint without
+    # changing its id (fires artrack.waypoint_moved for Knowledge re-sync).
+    if latitude is not None and longitude is not None:
+        body["latitude"] = latitude
+        body["longitude"] = longitude
     return await call_artrack_api("PUT", f"/waypoints/{waypoint_id}", json_body=body)
 
 

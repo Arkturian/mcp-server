@@ -275,7 +275,7 @@ async def _fetch_json(
 # agent identity (with their tenant + permissions) instead of treating
 # every MCP call as anonymous.
 def _caller_auth_headers(api_key_fallback: str = "") -> Dict[str, str]:
-    """Return Authorization headers for upstream API calls.
+    """Return authenticated caller headers for upstream API calls.
 
     Priority:
       1. Caller's JWT (from ContextVar set by JWTAuthMiddleware) → forward as
@@ -284,13 +284,31 @@ def _caller_auth_headers(api_key_fallback: str = "") -> Dict[str, str]:
          the MCP is called anonymously and we still want some auth.
       3. Empty (anonymous) → upstream applies its anon-policy.
     """
-    from auth import current_caller_jwt
+    from auth import current_caller_agent_name, current_caller_jwt
+
+    headers: Dict[str, str] = {}
     jwt_str = current_caller_jwt()
     if jwt_str:
-        return {"Authorization": f"Bearer {jwt_str}"}
-    if api_key_fallback:
-        return {"X-API-KEY": api_key_fallback}
-    return {}
+        headers["Authorization"] = f"Bearer {jwt_str}"
+        # This identity is derived from the already RS256-validated JWT by
+        # JWTAuthMiddleware.  Never derive it from a tool/body argument such
+        # as from_session: that value is only an untrusted routing claim.
+        agent_name = current_caller_agent_name()
+        if agent_name:
+            headers["X-Agent-Name"] = agent_name
+    elif api_key_fallback:
+        headers["X-API-KEY"] = api_key_fallback
+    return headers
+
+
+def _cloud_request_headers() -> Dict[str, str]:
+    """Forward a verified agent plus proof that it came through this gateway."""
+    headers = _caller_auth_headers()
+    if headers.get("X-Agent-Name"):
+        headers["X-Agent-Gateway"] = "mcp"
+        if IACP_TOKEN:
+            headers["X-IACP-Token"] = IACP_TOKEN
+    return headers
 
 
 async def call_storage_api(
@@ -487,6 +505,7 @@ async def call_cloud_api(
     *,
     params: Optional[Dict[str, Any]] = None,
     json_body: Optional[Dict[str, Any]] = None,
+    agent_gateway_proof: bool = False,
 ) -> Any:
     """Call Cloud API for inter-agent communication.
 
@@ -496,7 +515,7 @@ async def call_cloud_api(
     return await _fetch_json(
         method,
         f"{CLOUD_API_BASE}{endpoint}",
-        headers=_caller_auth_headers(),
+        headers=_cloud_request_headers() if agent_gateway_proof else _caller_auth_headers(),
         params=params,
         json_body=json_body,
         timeout=180.0,
@@ -8265,7 +8284,7 @@ cloud_mcp = FastMCP(
 
 @cloud_mcp.tool(
     name="send_message",
-    description="Send a message to another Claude Code agent on any server (Mac or arkserver). Auto-routes to the correct server. Default is fire-and-forget: message is delivered to the agent's tmux, you get back {id, status: 'sent'} immediately. The other agent's response will appear in YOUR tmux pane later as an [IACP:...] marker — you'll see it next time you're active. You do NOT need to wait. Only set wait=true for rare cases where you need the response inline (short queries, <30s expected).",
+    description="Send a message to another Claude Code agent on any server (Mac or arkserver). Auto-routes to the correct server. Default is fire-and-forget: message is delivered to the agent's tmux, you get back {id, status: 'sent'} immediately. For replies to Arcturian actions, pass the received message handle as in_reply_to and one of ack, progress, question, result, error as event_type; question also requires options. The authenticated caller identity is forwarded from the verified JWT and cannot be supplied through from_session. The other agent's response will appear in YOUR tmux pane later as an [IACP:...] marker — you'll see it next time you're active. You do NOT need to wait. Only set wait=true for rare cases where you need the response inline (short queries, <30s expected).",
 )
 async def cloud_send_message(
     from_session: str,
@@ -8273,11 +8292,66 @@ async def cloud_send_message(
     message: str,
     timeout: int = 30,
     wait: bool = False,
+    in_reply_to: Optional[str] = None,
+    event_type: Optional[str] = None,
+    artifacts: Optional[List[Dict[str, Any]]] = None,
+    options: Optional[List[Any]] = None,
+    retryable: Optional[bool] = None,
+    expires_at: Optional[float] = None,
 ) -> Dict[str, Any]:
+    body = _cloud_message_body(
+        from_session=from_session,
+        to_session=to_session,
+        message=message,
+        timeout=timeout,
+        wait=wait,
+        in_reply_to=in_reply_to,
+        event_type=event_type,
+        artifacts=artifacts,
+        options=options,
+        retryable=retryable,
+        expires_at=expires_at,
+    )
     return await call_cloud_api(
         "POST", "/api/agents/route",
-        json_body={"from": from_session, "to": to_session, "message": message, "wait": wait, "timeout": timeout},
+        json_body=body,
+        agent_gateway_proof=True,
     )
+
+
+def _cloud_message_body(
+    *,
+    from_session: str,
+    to_session: str,
+    message: str,
+    timeout: int,
+    wait: bool,
+    in_reply_to: Optional[str] = None,
+    event_type: Optional[str] = None,
+    artifacts: Optional[List[Dict[str, Any]]] = None,
+    options: Optional[List[Any]] = None,
+    retryable: Optional[bool] = None,
+    expires_at: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Build the additive send_message wire without changing legacy calls."""
+    body: Dict[str, Any] = {
+        "from": from_session,
+        "to": to_session,
+        "message": message,
+        "wait": wait,
+        "timeout": timeout,
+    }
+    body.update(
+        _clean_params(
+            in_reply_to=in_reply_to,
+            event_type=event_type,
+            artifacts=artifacts,
+            options=options,
+            retryable=retryable,
+            expires_at=expires_at,
+        )
+    )
+    return body
 
 
 @cloud_mcp.tool(

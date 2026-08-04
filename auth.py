@@ -156,13 +156,36 @@ async def _get_public_key():
 
 
 def _decode_jwt(token: str, public_key) -> dict:
-    """Decode and validate a JWT token."""
+    """Decode and validate a JWT token.
+
+    `verify_aud` is off deliberately. PyJWT raises InvalidAudienceError when a
+    token *carries* an `aud` claim and the verifier passes no expected audience
+    — silence is not an option, it is an error. auth-api stamps `aud=client_id`
+    on OAuth access tokens (oauth_service.py), and that client_id is minted per
+    client by dynamic registration, so a resource server cannot know the set of
+    valid values in advance.
+
+    The practical effect before this change: agents using a static JWT (no
+    `aud`) worked, while every OAuth client was rejected with
+    "401 Invalid token: Invalid audience" — ChatGPT could not use any MCP
+    server at all, Claude Code could (Alex 2026-08-04).
+
+    Dropping the check does not widen trust: the token is still proven to come
+    from auth-api by RS256 signature over the JWKS key plus the issuer check,
+    expiry is still enforced, and authorisation is decided further down by the
+    per-agent RBAC lookup on `sub`. `aud` only records which client the token
+    was issued to — it was never the gate here.
+
+    The cleaner long-term shape is RFC 8707: have auth-api stamp the resource
+    (this server) as the audience and verify it explicitly. That touches every
+    auth-api consumer, so it belongs in its own change, not in an outage fix.
+    """
     return jwt.decode(
         token,
         public_key,
         algorithms=["RS256"],
         issuer=AUTH_API_ISSUER,
-        options={"verify_exp": True},
+        options={"verify_exp": True, "verify_aud": False},
     )
 
 

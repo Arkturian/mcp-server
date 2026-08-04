@@ -1066,6 +1066,53 @@ async def storage_assets_upload_file(
 
 
 @storage_mcp.tool(
+    name="assets_upload_ticket",
+    description="""Get a one-shot URL to upload a file WITHOUT base64.
+
+    Use this when you hold a file (a photo the user just took or attached) and
+    passing it as base64 would be impractical — base64 inflates the payload by
+    a third and a phone photo easily exceeds what fits comfortably into a tool
+    argument.
+
+    Two steps:
+      1. call assets_upload_ticket(filename="photo.jpg", ...) -> {upload_url}
+      2. HTTP PUT the RAW file bytes to upload_url (no multipart, no base64,
+         no API key — the URL itself is the authorisation)
+
+    The ticket is single-use and expires after 15 minutes. The PUT response is
+    the created storage object (id, file_url, thumbnail_url).
+
+    Parameters mirror assets_upload: filename (required), context,
+    collection_id, is_public, private (confidential — media served to
+    owner/admin only), ai_mode (none|safety|vision|full, default none because
+    AI analysis costs money), ttl_hours (auto-delete after N hours).
+    """,
+)
+async def storage_assets_upload_ticket(
+    filename: str,
+    context: Optional[str] = None,
+    collection_id: Optional[str] = None,
+    is_public: bool = False,
+    private: bool = False,
+    ai_mode: str = "none",
+    ttl_hours: Optional[int] = None,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {
+        "filename": filename,
+        "is_public": str(is_public).lower(),
+        "private": str(private).lower(),
+        "ai_mode": ai_mode,
+    }
+    if context:
+        params["context"] = context
+    if collection_id:
+        params["collection_id"] = collection_id
+    if ttl_hours is not None:
+        params["ttl_hours"] = ttl_hours
+    return await call_storage_api("POST", "/storage/upload-ticket", params=params)
+
+
+@storage_mcp.tool(
     name="assets_fetch",
     description="""Import a file from a URL into Storage.
 

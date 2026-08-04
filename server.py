@@ -977,6 +977,12 @@ async def storage_assets_update_embedding_text(
 
     Example: Upload a small file
       assets_upload(file_base64="iVBORw0KGgo...", filename="logo.png", context="branding")
+
+    LARGE FILES (phone photos): pass the literal string "TICKET" as file_base64.
+    You then get back {upload_url} instead of an upload — HTTP PUT the raw bytes
+    to that URL (no base64, no multipart, no API key) and the PUT response is the
+    created storage object. Use this whenever base64 would be impractical.
+      assets_upload(file_base64="TICKET", filename="photo.jpg")
     """,
 )
 async def storage_assets_upload(
@@ -988,6 +994,28 @@ async def storage_assets_upload(
     is_public: bool = False,
     ai_mode: str = "safety",
 ) -> Dict[str, Any]:
+    # Escape hatch for clients whose tool catalogue is capped and therefore
+    # never sees assets_upload_ticket (ChatGPT loads 9 of our 16 tools, 2026-08-04).
+    # Passing the literal "TICKET" as file_base64 returns a one-shot upload URL
+    # instead of uploading — same result as assets_upload_ticket, but reachable
+    # through a tool the client already has. Nothing else changes.
+    if file_base64.strip().upper() in ("TICKET", "REQUEST_TICKET"):
+        params: Dict[str, Any] = {
+            "filename": filename,
+            "is_public": str(is_public).lower(),
+            "ai_mode": "none" if ai_mode == "safety" else ai_mode,
+        }
+        if context:
+            params["context"] = context
+        if collection_id:
+            params["collection_id"] = collection_id
+        ticket = await call_storage_api("POST", "/storage/upload-ticket", params=params)
+        ticket["next_step"] = (
+            "HTTP PUT the raw file bytes to upload_url — no base64, no multipart, "
+            "no API key. The PUT response is the created storage object."
+        )
+        return ticket
+
     file_bytes = base64.b64decode(file_base64)
     form_fields: Dict[str, str] = {"ai_mode": ai_mode, "is_public": str(is_public).lower()}
     if context:

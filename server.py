@@ -208,6 +208,7 @@ async def _fetch_json(
     headers: Dict[str, str],
     params: Optional[Dict[str, Any]] = None,
     json_body: Optional[Dict[str, Any]] = None,
+    content: Optional[str] = None,
     timeout: Optional[float] = None,
 ) -> Any:
     async with httpx.AsyncClient(timeout=timeout or HTTP_TIMEOUT) as client:
@@ -222,7 +223,12 @@ async def _fetch_json(
             if method == "GET":
                 response = await client.get(url, headers=headers, params=params)
             elif method == "POST":
-                response = await client.post(url, headers=headers, params=params, json=json_body or {})
+                # `content` sends a raw body instead of JSON — used by the
+                # chunked upload, where the body IS the base64 text.
+                if content is not None:
+                    response = await client.post(url, headers=headers, params=params, content=content)
+                else:
+                    response = await client.post(url, headers=headers, params=params, json=json_body or {})
             elif method == "PUT":
                 response = await client.put(url, headers=headers, params=params, json=json_body or {})
             elif method == "PATCH":
@@ -1138,6 +1144,68 @@ async def storage_assets_upload_ticket(
     if ttl_hours is not None:
         params["ttl_hours"] = ttl_hours
     return await call_storage_api("POST", "/storage/upload-ticket", params=params)
+
+
+@storage_mcp.tool(
+    name="assets_upload_chunked",
+    description="""Upload a file as SEVERAL small base64 pieces — for clients that
+    cannot send one large argument and have no network access of their own.
+
+    Why this exists: some runtimes (ChatGPT's sandbox, verified 2026-08-04) have
+    NO outbound network, so the upload-ticket + HTTP PUT route is unusable there,
+    and a whole photo as one base64 argument may exceed the argument limit. You
+    choose a chunk size you can actually serialise; Storage reassembles.
+
+    Usage — call once per piece, same upload_id for all of them:
+      assets_upload_chunked(upload_id="abc123", index=0, total_chunks=4,
+                            filename="photo.jpg", chunk_base64="<piece 0>")
+      ... index=1, 2, 3 ...
+
+    Split the base64 STRING into equal pieces (order does not matter, but every
+    index 0..total_chunks-1 must arrive exactly once). While pieces are missing
+    you get {received, missing, complete: false}; the call that completes the set
+    returns the created storage object (id, file_url, thumbnail_url).
+
+    Sessions expire after 30 minutes. Other parameters mirror assets_upload:
+    context, collection_id, is_public, private, ai_mode (default none — AI costs
+    money), ttl_hours.
+    """,
+)
+async def storage_assets_upload_chunked(
+    upload_id: str,
+    index: int,
+    total_chunks: int,
+    filename: str,
+    chunk_base64: str,
+    context: Optional[str] = None,
+    collection_id: Optional[str] = None,
+    is_public: bool = False,
+    private: bool = False,
+    ai_mode: str = "none",
+    ttl_hours: Optional[int] = None,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {
+        "upload_id": upload_id,
+        "index": index,
+        "total_chunks": total_chunks,
+        "filename": filename,
+        "is_public": str(is_public).lower(),
+        "private": str(private).lower(),
+        "ai_mode": ai_mode,
+    }
+    if context:
+        params["context"] = context
+    if collection_id:
+        params["collection_id"] = collection_id
+    if ttl_hours is not None:
+        params["ttl_hours"] = ttl_hours
+    return await _fetch_json(
+        "POST",
+        f"{STORAGE_API_BASE}/storage/upload-chunk",
+        headers={"X-API-KEY": STORAGE_API_KEY, "Content-Type": "text/plain"},
+        params=params,
+        content=chunk_base64,
+    )
 
 
 @storage_mcp.tool(

@@ -984,6 +984,11 @@ async def storage_assets_update_embedding_text(
     Example: Upload a small file
       assets_upload(file_base64="iVBORw0KGgo...", filename="logo.png", context="branding")
 
+    CHUNKED (no network, big file): pass
+      file_base64 = "CHUNK:<upload_id>:<index>:<total_chunks>:<base64 piece>"
+    Send one call per piece with the same upload_id; the call completing the set
+    returns the created storage object. Split the base64 STRING, not the raw file.
+
     LARGE FILES (phone photos): pass the literal string "TICKET" as file_base64.
     You then get back {upload_url} instead of an upload — HTTP PUT the raw bytes
     to that URL (no base64, no multipart, no API key) and the PUT response is the
@@ -1005,6 +1010,30 @@ async def storage_assets_upload(
     # Passing the literal "TICKET" as file_base64 returns a one-shot upload URL
     # instead of uploading — same result as assets_upload_ticket, but reachable
     # through a tool the client already has. Nothing else changes.
+    # Second escape hatch, same reason as TICKET below: a client whose tool
+    # catalogue lags behind cannot see assets_upload_chunked either. Prefix form:
+    #   file_base64 = "CHUNK:<upload_id>:<index>:<total>:<base64 piece>"
+    if file_base64.startswith("CHUNK:"):
+        try:
+            _, _uid, _idx, _tot, _payload = file_base64.split(":", 4)
+            _idx_i, _tot_i = int(_idx), int(_tot)
+        except ValueError as exc:
+            raise ValueError(
+                'expected CHUNK:<upload_id>:<index>:<total_chunks>:<base64 piece> '
+                f'— could not parse ({exc})'
+            ) from exc
+        return await storage_assets_upload_chunked(
+            upload_id=_uid,
+            index=_idx_i,
+            total_chunks=_tot_i,
+            filename=filename,
+            chunk_base64=_payload,
+            context=context,
+            collection_id=collection_id,
+            is_public=is_public,
+            ai_mode="none" if ai_mode == "safety" else ai_mode,
+        )
+
     if file_base64.strip().upper() in ("TICKET", "REQUEST_TICKET"):
         params: Dict[str, Any] = {
             "filename": filename,

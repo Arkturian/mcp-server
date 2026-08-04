@@ -1000,6 +1000,72 @@ async def storage_assets_upload(
 
 
 @storage_mcp.tool(
+    name="assets_upload_file",
+    description="""Upload a file that already exists on the storage host — no base64.
+
+    Reads the file directly from disk on the server and uploads its bytes.
+    Use this instead of assets_upload whenever the file is already on the
+    arkserver filesystem: base64 inflates payloads by ~33% and large binaries
+    are impractical to pass through an MCP argument.
+
+    Decision guide:
+    - file lies on the storage host        -> assets_upload_file(path=...)
+    - file reachable via a public URL      -> assets_fetch(url=...)
+    - you only hold the bytes in-process   -> assets_upload(file_base64=...)
+
+    Parameters:
+    - path: absolute path on the storage host (required)
+    - filename: override the stored name (defaults to the file's own name)
+    - context / collection_id / link_id: metadata as in assets_upload
+    - is_public: make publicly readable (default false)
+    - private: mark confidential — /storage/media then serves it only to
+      owner/admin, never anonymously (default false)
+    - ai_mode: none | safety | vision | full (default none — AI costs money)
+
+    Returns the created storage object with id, file_url, thumbnail_url, etc.
+    """,
+)
+async def storage_assets_upload_file(
+    path: str,
+    filename: Optional[str] = None,
+    context: Optional[str] = None,
+    collection_id: Optional[str] = None,
+    link_id: Optional[str] = None,
+    is_public: bool = False,
+    private: bool = False,
+    ai_mode: str = "none",
+) -> Dict[str, Any]:
+    from pathlib import Path as _P
+
+    p = _P(path)
+    if not p.is_absolute():
+        raise ValueError("path must be absolute")
+    if not p.is_file():
+        raise ValueError(f"not a file on the storage host: {path}")
+    try:
+        file_bytes = p.read_bytes()
+    except PermissionError as exc:
+        raise ValueError(f"cannot read {path}: {exc}") from exc
+
+    form_fields: Dict[str, str] = {
+        "ai_mode": ai_mode,
+        "is_public": str(is_public).lower(),
+        # AI-generated and hand-picked files are distinct works: never let the
+        # filename dedup replay an unrelated object back to the caller.
+        "reuse_existing": "false",
+    }
+    if private:
+        form_fields["private"] = "true"
+    if context:
+        form_fields["context"] = context
+    if collection_id:
+        form_fields["collection_id"] = collection_id
+    if link_id:
+        form_fields["link_id"] = link_id
+    return await call_storage_upload(file_bytes, filename or p.name, form_fields=form_fields)
+
+
+@storage_mcp.tool(
     name="assets_fetch",
     description="""Import a file from a URL into Storage.
 
@@ -7972,7 +8038,7 @@ async def comm_calendar_create_event(
         payload["location"] = location
     if attendees:
         payload["attendees"] = attendees
-    return await call_comm_api("POST", f"/api/v1/calendar/{source}/events", json=payload)
+    return await call_comm_api("POST", f"/api/v1/calendar/{source}/events", json_body=payload)
 
 
 @comm_mcp.tool(

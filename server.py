@@ -413,6 +413,7 @@ async def call_ai_api(
     method: str,
     endpoint: str,
     *,
+    params: Optional[Dict[str, Any]] = None,
     json_body: Optional[Dict[str, Any]] = None,
 ) -> Any:
     """Call AI API (text/image/audio) with API key if provided.
@@ -427,6 +428,7 @@ async def call_ai_api(
         method,
         f"{AI_API_BASE}{endpoint}",
         headers=headers,
+        params=params,
         json_body=json_body,
         timeout=AI_HTTP_TIMEOUT,
     )
@@ -5522,7 +5524,7 @@ async def ai_claude_text(
 
 @ai_mcp.tool(
     name="chatgpt_text",
-    description="Call AI API /ai/chatgpt. Params: prompt, system?, max_tokens?, temperature?, model?",
+    description="Call AI API /ai/chatgpt. Params: prompt, system?, max_tokens?, temperature?, model?, effort?",
 )
 async def ai_chatgpt_text(
     prompt: str,
@@ -5530,6 +5532,7 @@ async def ai_chatgpt_text(
     max_tokens: Optional[int] = 1000,
     temperature: Optional[float] = 0.7,
     model: Optional[str] = None,
+    effort: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {
         "prompt": prompt,
@@ -5537,9 +5540,19 @@ async def ai_chatgpt_text(
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
-    if model:
-        body["model"] = model
-    return await call_ai_api("POST", "/ai/chatgpt", json_body=body)
+    if effort:
+        normalized_effort = effort.strip().lower()
+        if normalized_effort not in {"minimal", "low", "medium", "high", "xhigh"}:
+            raise ValueError(f"Unsupported Codex reasoning effort: {effort}")
+        body["effort"] = normalized_effort
+
+    # api-ai declares `model` as a FastAPI query parameter, while `effort`
+    # belongs to the Prompt body. Sending both in the JSON body silently made
+    # model selection fall back to the Codex default.
+    params = {"model": model.strip()} if model and model.strip() else None
+    return await call_ai_api(
+        "POST", "/ai/chatgpt", params=params, json_body=body,
+    )
 
 
 @ai_mcp.tool(

@@ -1066,20 +1066,24 @@ async def storage_assets_upload(
 
 @storage_mcp.tool(
     name="assets_upload_file",
-    description="""Upload a file that already exists on the storage host — no base64.
+    description="""Upload a file that already exists on THIS MCP server's disk — no base64.
 
-    Reads the file directly from disk on the server and uploads its bytes.
-    Use this instead of assets_upload whenever the file is already on the
-    arkserver filesystem: base64 inflates payloads by ~33% and large binaries
-    are impractical to pass through an MCP argument.
+    IMPORTANT — which machine: the path is resolved on the filesystem of the
+    host running this MCP server, which is NOT necessarily the machine you are
+    running on, and NOT the host running storage-api. Those can all differ. If
+    the file is not there, you get an error naming the actual hostname; copy it
+    to that host, or use assets_fetch(url=...) instead.
+
+    Prefer this over assets_upload whenever the file is reachable as a path:
+    base64 inflates payloads by ~33% and floods your context.
 
     Decision guide:
-    - file lies on the storage host        -> assets_upload_file(path=...)
-    - file reachable via a public URL      -> assets_fetch(url=...)
-    - you only hold the bytes in-process   -> assets_upload(file_base64=...)
+    - file lies on this MCP server's disk   -> assets_upload_file(path=...)
+    - file reachable via a URL              -> assets_fetch(url=..., analyze=False)
+    - you only hold the bytes in-process    -> assets_upload(file_base64=...)
 
     Parameters:
-    - path: absolute path on the storage host (required)
+    - path: absolute path on the MCP server's host (required)
     - filename: override the stored name (defaults to the file's own name)
     - context / collection_id / link_id: metadata as in assets_upload
     - is_public: make publicly readable (default false)
@@ -1106,7 +1110,20 @@ async def storage_assets_upload_file(
     if not p.is_absolute():
         raise ValueError("path must be absolute")
     if not p.is_file():
-        raise ValueError(f"not a file on the storage host: {path}")
+        # The file is read HERE, on the MCP server's own filesystem — not on
+        # whatever host runs storage-api. Those are different machines, so
+        # "the storage host" misled SWFME (2026-08-10) into copying the file
+        # to the wrong side and then hunting a phantom upload bug. Name the
+        # actual host so the next caller knows where to put the file.
+        import socket as _socket
+        _host = _socket.gethostname()
+        raise ValueError(
+            f"no such file on {_host}, where this MCP server runs: {path} — "
+            "this tool reads from the MCP server's own filesystem, which is "
+            "NOT necessarily the machine you are running on. If your file "
+            "lives elsewhere, copy it here first, or use assets_fetch(url=...) "
+            "if it is reachable by URL."
+        )
     try:
         file_bytes = p.read_bytes()
     except PermissionError as exc:

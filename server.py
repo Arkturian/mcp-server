@@ -7719,6 +7719,49 @@ async def comm_send_telegram(
 
 
 @comm_mcp.tool(
+    name="escalate",
+    description="""One-way escalation channel from a tenant instance to the operator.
+
+    Use ONLY for events that need the operator's (Alex') attention and
+    cannot be resolved locally:
+      - Blocker you cannot resolve alone (after 2-3 attempts)
+      - Data-loss risk detected
+      - Security-relevant finding
+      - Recurring failure you cannot diagnose
+
+    Do NOT use for:
+      - Normal bugs → issue-tracker
+      - Understanding questions → ask a local agent via content-collab
+      - Status updates ("I'm working on X") → not this channel
+
+    Semantics — this is intentionally different from `notify_human`:
+      - `notify_human` lets you set chat_id — flexible ping to a known
+        recipient in a support conversation.
+      - `escalate` does NOT accept chat_id — the target is the
+        instance's configured operator (OPERATOR_ESCALATION_CHAT_ID).
+        Even a prompt-injection cannot redirect the channel. That is
+        the intended security property, not a limitation.
+
+    The instance auto-prefixes `[tenant:<TENANT_NAME>] ` so Alex sees
+    which tenant escalated. Delivery is one-way — the escalate call
+    does NOT wait for a response. Continue your work locally; Alex
+    replies asynchronously (via IACP back, or by direct intervention).
+
+    Args:
+        message: Short escalation text. Keep it ~1-2 sentences. Include
+            what happened + what you tried + what's blocking. Do NOT
+            include sensitive tenant data (customer names, amounts,
+            internal IDs) — this crosses the tenant isolation boundary
+            intentionally, keep it minimal.
+    """,
+)
+async def comm_escalate(message: str) -> Dict[str, Any]:
+    return await call_comm_api(
+        "POST", "/api/v1/escalate", json_body={"message": message}
+    )
+
+
+@comm_mcp.tool(
     name="send_telegram_document",
     description=(
         "Send a document (PDF, invoice, any file) via Telegram. "

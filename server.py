@@ -7357,7 +7357,11 @@ async def business_paypal_balance(api_key: Optional[str] = None) -> Dict[str, An
         "next_fire_at. Supports recurrence (none/daily/weekly/monthly/yearly). "
         "For MONTHLY use recurrence_day (1-28) to pin to a specific day-of-month. "
         "reminder_type: subscription_renewal | payment_due | tax_deadline | followup | generic. "
-        "channel: telegram | email | both. recipient: Telegram contact name (e.g. 'alex') or email."
+        "channel: telegram | email | both. recipient: Telegram contact name (e.g. 'alex') or email. "
+        "ALWAYS send next_fire_at with a UTC offset, e.g. '2026-08-25T16:00:00+02:00'. "
+        "It is stored as naive UTC and fired against utcnow(), so a value WITHOUT an "
+        "offset is read as UTC: '2026-08-25T16:00:00' fires at 18:00 Vienna time, "
+        "silently and two hours late."
     ),
 )
 async def business_reminders_create(
@@ -7445,7 +7449,11 @@ async def business_reminders_get(rem_id: int, api_key: Optional[str] = None) -> 
 
 @business_mcp.tool(
     name="reminders_update",
-    description="Update any field of a reminder (incl. next_fire_at, recurrence, status, amount).",
+    description=(
+        "Update any field of a reminder (incl. next_fire_at, recurrence, status, amount). "
+        "As with reminders_create, ALWAYS send next_fire_at with a UTC offset "
+        "('2026-08-25T16:00:00+02:00'); without one it is read as UTC and fires late."
+    ),
 )
 async def business_reminders_update(
     rem_id: int,
@@ -7700,6 +7708,13 @@ async def comm_send_email(
             recipient contact's preferred_bot is used; otherwise the
             deployment's default bot. Use this only when you need to override
             the natural routing — most outbound calls should leave it unset.
+        origin_agent: Optional. Reply-Routing: session name of the agent this
+            message is being sent ON BEHALF OF. When set, a later Telegram-reply
+            from the recipient is routed to THIS agent instead of your own
+            session. Use when you are a bridge/notifier forwarding another
+            agent's content — pass the ORIGINAL author's session name so
+            replies land back at them, not at you. Omit for direct sends
+            (default: you receive replies).
     """,
 )
 async def comm_send_telegram(
@@ -7707,6 +7722,7 @@ async def comm_send_telegram(
     chat_id: Optional[str] = None,
     to: Optional[str] = None,
     bot: Optional[str] = None,
+    origin_agent: Optional[str] = None,
 ) -> Dict[str, Any]:
     json_body: Dict[str, Any] = {"message": message}
     if chat_id:
@@ -7715,6 +7731,8 @@ async def comm_send_telegram(
         json_body["to"] = to
     if bot:
         json_body["bot"] = bot
+    if origin_agent:
+        json_body["origin_agent"] = origin_agent
     return await call_comm_api("POST", "/api/v1/telegram/send", json_body=json_body)
 
 
@@ -7794,7 +7812,11 @@ async def comm_send_telegram_document(
     url: Optional[str] = None,
     data_base64: Optional[str] = None,
     bot: Optional[str] = None,
+    origin_agent: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """Additional param: origin_agent — see send_telegram for semantics.
+    Bridge/notifier forwarding another agent's document sets this to the
+    original author's session so Telegram-replies land at them."""
     if not url and not data_base64:
         return {"error": "Either url or data_base64 must be provided"}
     if url and data_base64:
@@ -7813,6 +7835,8 @@ async def comm_send_telegram_document(
         json_body["data"] = data_base64
     if bot:
         json_body["bot"] = bot
+    if origin_agent:
+        json_body["origin_agent"] = origin_agent
     return await call_comm_api("POST", "/api/v1/telegram/send-document", json_body=json_body)
 
 
@@ -8114,6 +8138,44 @@ async def comm_gmail_list_messages(
     if query:
         params["query"] = query
     return await call_comm_api("GET", f"/api/v1/gmail/{source}/messages", params=params)
+
+
+@comm_mcp.tool(
+    name="gmail_search_all",
+    description=(
+        "Fanout-Search über ALLE Gmail-Postfächer einer Identität — die "
+        "'ich weiss nicht welches Konto es war'-Antwort. "
+        "\n\n"
+        "Statt N getrennter gmail_list_messages-Aufrufe für apopovic, edera, "
+        "tsaier, accounting, marlon durchsucht dieser Aufruf alle Sources "
+        "deren `owners`-Feld die Identität enthält, parallel. Ergebnisse "
+        "chronologisch sortiert (neueste zuerst) mit source-Feld je Treffer. "
+        "\n\n"
+        "identity: Owner-Email deren Postfächer durchsucht werden. Leer = "
+        "die Instanz-Default-Identität (auf arkturian: alex@arkturian.com "
+        "→ trifft apopovic, edera, tsaier, accounting, marlon, spreadyourwings; "
+        "auf pdrei: jascha; auf David: davidsteiner). "
+        "\n\n"
+        "query: Gmail-Search-Syntax — 'from:sonja', 'is:unread', "
+        "'subject:Rechnung', 'newer_than:7d', 'in:sent'. "
+        "\n\n"
+        "Return: {identity, accounts_searched, accounts_failed, "
+        "accounts_skipped, hits, total_hits}. Auf einer Instanz ohne "
+        "konfigurierte Google-Konten (frische Kundeninstanz) trifft es "
+        "sauber leer statt Fehler."
+    ),
+)
+async def comm_gmail_search_all(
+    query: str = "",
+    identity: str = "",
+    max_per_account: int = 10,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"max_per_account": max_per_account}
+    if query:
+        params["query"] = query
+    if identity:
+        params["identity"] = identity
+    return await call_comm_api("GET", "/api/v1/gmail/search-all", params=params)
 
 
 @comm_mcp.tool(

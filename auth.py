@@ -195,9 +195,7 @@ def _decode_jwt(token: str, public_key) -> dict:
 # hat noch keine Deny-Liste (AuthAPI baut revoked_agent_jtis + Poll-Endpunkt).
 # Bis dahin: feste jti-Liste + Env-Override REVOKED_AGENT_JTIS (kommagetrennt),
 # damit der naechste Fall keinen Release braucht. Gleiche Liste wie in cloud-api.
-_REVOKED_JTIS = {
-    "c9a8dc32-9150-4891-b949-5e184a7dcff3",   # agent:Wave, Pane-Leak 27.08.2026
-}
+_REVOKED_JTIS: set = set()   # Notnagel ohne auth-api; Regelweg ist revoked_poll_loop (Deny-Liste, seit 27.08.)
 
 
 # Poll-Seite der auth-api Deny-Liste (Spur B, AuthAPI 27.08.): oeffentlicher

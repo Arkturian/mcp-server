@@ -2,9 +2,10 @@ import jwt, pytest
 import auth
 
 
-def test_revoked_jti_wird_abgewiesen():
-    with pytest.raises(jwt.InvalidTokenError):
-        auth._reject_if_revoked({"jti": "c9a8dc32-9150-4891-b949-5e184a7dcff3", "sub": "agent:Wave"})
+def test_feste_liste_leer(monkeypatch):
+    monkeypatch.delenv("REVOKED_AGENT_JTIS", raising=False)
+    monkeypatch.setattr(auth, "_revoked_polled", set()); monkeypatch.setattr(auth, "_revoked_loaded", True)
+    auth._reject_if_revoked({"jti": "c9a8dc32-9150-4891-b949-5e184a7dcff3"})
 
 
 def test_env_override_und_normalfall(monkeypatch):

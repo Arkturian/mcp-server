@@ -10016,6 +10016,14 @@ async def startup() -> None:
     Compatible with both old (0.27.x) and new (1.x) Starlette versions.
     Respects MCP_SERVERS filter — only initializes enabled MCPs.
     """
+    # Deny-Liste widerrufener Agent-JWTs (auth-api Spur B, 27.08.2026): 30-s-Poll
+    # neben JWKS; ohne diesen Poll waere ein geleaktes Token hier bis exp gueltig.
+    try:
+        import asyncio as _asyncio
+        import auth as _auth
+        _asyncio.get_event_loop().create_task(_auth.revoked_poll_loop())
+    except Exception as _e:
+        logger.warning("revoked_jtis: Poller nicht gestartet: %s", _e)
     for name, stack, mcp in _all_mcps():
         if ENABLED_MCPS is not None and name not in ENABLED_MCPS:
             continue

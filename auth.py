@@ -200,12 +200,97 @@ _REVOKED_JTIS = {
 }
 
 
+# Poll-Seite der auth-api Deny-Liste (Spur B, AuthAPI 27.08.): oeffentlicher
+# Endpunkt neben JWKS, Zeilen werden nie erneut ausgegeben, ``since=<as_of>``
+# ist die Fortschrittsmarke. Menge im Prozess + Spiegel auf Platte; ein
+# Poll-Ausfall leert nichts.
+_REVOKED_POLL_SECONDS = int(os.getenv("REVOKED_JTIS_POLL_SECONDS", "30") or 30)
+_REVOKED_STATE = os.getenv("REVOKED_JTIS_STATE", "/var/lib/mcp-server/revoked_jtis.json")
+_revoked_polled: set = set()
+_revoked_as_of = ""
+_revoked_loaded = False
+
+
+def _revoked_endpoint() -> str:
+    return AUTH_API_JWKS_URL.rsplit("/", 1)[0] + "/revoked-agent-jtis"
+
+
+def _revoked_load() -> None:
+    global _revoked_polled, _revoked_as_of, _revoked_loaded
+    if _revoked_loaded:
+        return
+    _revoked_loaded = True
+    try:
+        import json
+        with open(_REVOKED_STATE) as f:
+            d = json.load(f)
+        _revoked_polled = set(d.get("revoked") or [])
+        _revoked_as_of = str(d.get("as_of") or "")
+    except Exception:
+        pass
+
+
+def _revoked_save() -> None:
+    try:
+        import json
+        os.makedirs(os.path.dirname(_REVOKED_STATE), exist_ok=True)
+        tmp = _REVOKED_STATE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"revoked": sorted(_revoked_polled), "as_of": _revoked_as_of}, f)
+        os.replace(tmp, _REVOKED_STATE)
+    except Exception as e:
+        logger.warning("revoked_jtis: Spiegel nicht geschrieben: %s", e)
+
+
+async def revoked_poll_once(client=None) -> int:
+    """Einmal abholen; liefert Anzahl NEUER jtis. Wirft nicht."""
+    global _revoked_as_of
+    _revoked_load()
+    try:
+        import httpx
+        params = {"since": _revoked_as_of} if _revoked_as_of else {}
+        c = client or httpx.AsyncClient(timeout=6)
+        try:
+            r = await c.get(_revoked_endpoint(), params=params)
+        finally:
+            if client is None:
+                await c.aclose()
+        if r.status_code != 200:
+            logger.warning("revoked_jtis: Poll -> HTTP %s", r.status_code)
+            return 0
+        d = r.json() or {}
+        neu = 0
+        for e in d.get("revoked_jtis") or []:
+            j = str((e or {}).get("jti") or "")
+            if j and j not in _revoked_polled:
+                _revoked_polled.add(j)
+                neu += 1
+        _revoked_as_of = str(d.get("as_of") or _revoked_as_of)
+        if neu or not os.path.exists(_REVOKED_STATE):
+            _revoked_save()
+        if neu:
+            logger.warning("revoked_jtis: %d neue widerrufene Agent-Token (gesamt %d)", neu, len(_revoked_polled))
+        return neu
+    except Exception as e:
+        logger.warning("revoked_jtis: Poll fehlgeschlagen: %s", e)
+        return 0
+
+
+async def revoked_poll_loop() -> None:
+    import asyncio
+    await asyncio.sleep(5)
+    while True:
+        await revoked_poll_once()
+        await asyncio.sleep(_REVOKED_POLL_SECONDS)
+
+
 def _reject_if_revoked(claims: dict) -> None:
     jti = str(claims.get("jti") or "")
     if not jti:
         return
+    _revoked_load()
     extra = {x.strip() for x in os.getenv("REVOKED_AGENT_JTIS", "").split(",") if x.strip()}
-    if jti in _REVOKED_JTIS or jti in extra:
+    if jti in _REVOKED_JTIS or jti in extra or jti in _revoked_polled:
         logger.warning("JWT abgewiesen: jti %s widerrufen (sub=%s)", jti, claims.get("sub"))
         raise jwt.InvalidTokenError("token revoked")
 

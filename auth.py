@@ -180,13 +180,34 @@ def _decode_jwt(token: str, public_key) -> dict:
     (this server) as the audience and verify it explicitly. That touches every
     auth-api consumer, so it belongs in its own change, not in an outage fix.
     """
-    return jwt.decode(
+    claims = jwt.decode(
         token,
         public_key,
         algorithms=["RS256"],
         issuer=AUTH_API_ISSUER,
         options={"verify_exp": True, "verify_aud": False},
     )
+    _reject_if_revoked(claims)
+    return claims
+
+
+# Interims-Widerruf (27.08.2026): auth-api prueft Agent-Tokens rein per JWKS und
+# hat noch keine Deny-Liste (AuthAPI baut revoked_agent_jtis + Poll-Endpunkt).
+# Bis dahin: feste jti-Liste + Env-Override REVOKED_AGENT_JTIS (kommagetrennt),
+# damit der naechste Fall keinen Release braucht. Gleiche Liste wie in cloud-api.
+_REVOKED_JTIS = {
+    "c9a8dc32-9150-4891-b949-5e184a7dcff3",   # agent:Wave, Pane-Leak 27.08.2026
+}
+
+
+def _reject_if_revoked(claims: dict) -> None:
+    jti = str(claims.get("jti") or "")
+    if not jti:
+        return
+    extra = {x.strip() for x in os.getenv("REVOKED_AGENT_JTIS", "").split(",") if x.strip()}
+    if jti in _REVOKED_JTIS or jti in extra:
+        logger.warning("JWT abgewiesen: jti %s widerrufen (sub=%s)", jti, claims.get("sub"))
+        raise jwt.InvalidTokenError("token revoked")
 
 
 # ──────────────────────────────────────────────────────────────

@@ -11,7 +11,7 @@ jobs:
   # Production: arkserver — full MCP stack
   # ─────────────────────────────────────────
   build-and-deploy:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, arkserver]
 
     steps:
       - name: Checkout code
@@ -106,7 +106,7 @@ jobs:
   # Production: pdrei (jascha) — content only
   # ─────────────────────────────────────────
   deploy-pdrei:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, arkserver]
 
     steps:
       - name: Checkout code

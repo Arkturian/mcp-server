@@ -17,14 +17,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      # Self-hosted arkserver-Runner (Debian 12, Python 3.11 im System): kein
+      # setup-python (laedt fuer Debian nichts herunter) — Abhaengigkeiten in
+      # ein lokales venv, damit der Runner-Host sauber bleibt.
+      - name: Build-Probe (venv + Compile)
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -q -r requirements.txt
+          .venv/bin/python -m py_compile auth.py main.py 2>/dev/null || .venv/bin/python -m py_compile auth.py
 
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.0.3

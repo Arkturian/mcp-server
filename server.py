@@ -8221,8 +8221,13 @@ async def comm_outlook_list_accounts() -> Dict[str, Any]:
         "folder: well-known Graph folder such as 'SentItems', 'Inbox', "
         "'Drafts' — omit for the default view. query: Graph $search text "
         "(e.g. 'subject:Rechnung', 'from:someone@example.com'). "
-        "max_results: 1-50. Returns {account, messages: [{id, subject, from, "
-        "to, received_at, preview, ...}]}. Access is enforced per source by "
+        "max_results: 1-50 PER PAGE. For more than one page pass the `cursor` "
+        "from the previous response back in (opaque, do not construct it). "
+        "since/until: ISO-8601 UTC bounds (e.g. '2026-06-01T00:00:00Z') to "
+        "restrict the time range — needed for multi-month work, because "
+        "max_results alone caps at 50. "
+        "Returns {account, messages: [{id, subject, from, "
+        "to, received_at, preview, ...}], cursor}. Access is enforced per source by "
         "comm-api against the caller's identity — a 403 means this agent is "
         "not an owner of that mailbox, not that the mailbox is missing."
     ),
@@ -8232,12 +8237,26 @@ async def comm_outlook_list_messages(
     query: str = "",
     max_results: int = 10,
     folder: str = "",
+    cursor: str = "",
+    since: str = "",
+    until: str = "",
 ) -> Dict[str, Any]:
     params: Dict[str, Any] = {"max_results": max_results}
     if query:
         params["query"] = query
     if folder:
         params["folder"] = folder
+    # Mehrmonats-Auswertungen brauchen mehr als eine Seite: `cursor` aus der
+    # vorigen Antwort weiterreichen, `since`/`until` grenzen den Zeitraum ein.
+    # Ohne diese drei Felder im SCHEMA kommen sie beim Aufrufer gar nicht an —
+    # ein Agent kann nur uebergeben, was das Werkzeug deklariert (Steward/David
+    # 28.08.: Seite 1 und Seite 2 waren identisch, Datumsfilter wirkungslos).
+    if cursor:
+        params["cursor"] = cursor
+    if since:
+        params["since"] = since
+    if until:
+        params["until"] = until
     return await call_comm_api("GET", f"/api/v1/outlook/{source}/messages", params=params)
 
 

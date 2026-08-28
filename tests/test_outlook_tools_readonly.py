@@ -43,3 +43,13 @@ def test_cloud_admin_tools_registered():
     import server
     names = {t.name for t in server.cloud_mcp._tool_manager.list_tools()}
     assert {"session_mcp_servers", "session_set_mcp_servers", "session_restart"} <= names
+
+
+def test_list_messages_exposes_cursor_and_timerange():
+    """Ein Agent kann nur uebergeben, was das Schema deklariert (#1455)."""
+    import inspect
+    import server
+    sig = inspect.signature(server.comm_outlook_list_messages)
+    for p in ("cursor", "since", "until"):
+        assert p in sig.parameters, p
+        assert sig.parameters[p].default == ""

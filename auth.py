@@ -71,7 +71,13 @@ AUTH_API_JWKS_URL = os.getenv(
     "https://auth-api.arkturian.com/api/v1/auth/.well-known/jwks.json",
 )
 AUTH_API_ISSUER = os.getenv("AUTH_API_ISSUER", "auth-api.arkturian.com")
-AUTH_REQUIRE_JWT = os.getenv("AUTH_REQUIRE_JWT", "false").lower() == "true"
+# Fail-closed (Steward/David 2026-08-28, dort #24): mit dem alten Default
+# "false" fuehrte JEDER anonyme Aufrufer, der das Gateway erreicht, Werkzeuge
+# aus -- verifiziert an einem mutierenden Aufruf, der ein Attribut wirklich
+# schrieb, weil der Upstream-Helfer danach auf den Service-Key zurueckfaellt.
+# Ein Uebergangs-Default, der Schreibzugriff ohne Identitaet erlaubt, ist die
+# falsche Richtung; wer den alten Zustand braucht, setzt ihn ausdruecklich.
+AUTH_REQUIRE_JWT = os.getenv("AUTH_REQUIRE_JWT", "true").lower() == "true"
 
 # Paths that don't require auth
 PUBLIC_PATHS = {"/", "/health", "/.well-known/mcp.json", "/docs", "/openapi.json"}

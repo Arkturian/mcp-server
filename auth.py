@@ -365,7 +365,22 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                     {"error": "Authorization required for tool calls"},
                     status_code=403,  # 403 not 401 — avoids OAuth trigger
                 )
-            # No token = anonymous (transition period)
+            # No token = anonymous (transition period). SICHTBAR machen, wer
+            # das ueberhaupt nutzt: ohne diese Zeile ist "wir sehen keine
+            # anonymen Aufrufe" kein Befund, sondern eine fehlende Messung
+            # (#1462). Werkzeugname und Aufrufer-IP genuegen zur Entscheidung,
+            # ob der strikte Modus jemanden abschneidet.
+            try:
+                _tool = ""
+                if body_bytes:
+                    _tool = (_json.loads(body_bytes).get("params") or {}).get("name") or ""
+                _peer = request.headers.get("x-forwarded-for") or (
+                    request.client.host if request.client else "?")
+                logger.warning(
+                    "anonymous tools/call zugelassen (AUTH_REQUIRE_JWT=false): tool=%s von=%s",
+                    _tool or "?", _peer)
+            except Exception:
+                pass
             request.state.agent = AgentContext()
             return await call_next(request)
 

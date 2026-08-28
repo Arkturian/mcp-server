@@ -7582,6 +7582,7 @@ Used by Business API for document delivery, and directly for notifications.
 
 ### Gmail
 - gmail_list_messages(source, query, max_results) — List emails
+- outlook_list_accounts() / outlook_list_messages(source, query, max_results, folder) / outlook_get_message(source, message_id) — Microsoft 365 mailboxes, READ-ONLY
 - gmail_get_message(source, message_id) — Get full email
 - gmail_latest(source, query) — Most recent email
 - gmail_send(source, to, subject, body) — Send email via Gmail
@@ -8189,6 +8190,66 @@ async def comm_gmail_search_all(
 )
 async def comm_gmail_get_message(source: str, message_id: str) -> Dict[str, Any]:
     return await call_comm_api("GET", f"/api/v1/gmail/{source}/messages/{message_id}")
+
+
+# ── Outlook / Microsoft 365 — NUR LESEND (Steward/David #19, Cloud #1455) ──
+# Spiegel der gmail_*-Lesetools gegen comm-apis /api/v1/outlook/{source}/…
+# Bewusst KEIN send/mark/delete: der erste Anwendungsfall (Writer wertet
+# Sent-Mails fuer ein Stilprofil aus) braucht Lesen, und ein Schreibpfad
+# waere auf einer Kundeninstanz ein neuer Vertrag, nicht ein Spiegel.
+# Autorisierung liegt in comm-api (require_source_access: Owner der Source
+# oder Wildcard) und kommt ueber das durchgereichte Agenten-JWT — auf
+# Kundeninstanzen ist COMM_API_KEY leer, es gibt keinen API-Key-Umweg.
+
+
+@comm_mcp.tool(
+    name="outlook_list_accounts",
+    description=(
+        "List the Microsoft 365 / Outlook mailboxes (sources) configured on "
+        "THIS instance. Use before outlook_list_messages to learn the source name."
+    ),
+)
+async def comm_outlook_list_accounts() -> Dict[str, Any]:
+    return await call_comm_api("GET", "/api/v1/outlook/accounts")
+
+
+@comm_mcp.tool(
+    name="outlook_list_messages",
+    description=(
+        "List emails of a Microsoft 365 / Outlook mailbox (read-only). "
+        "source: mailbox name from outlook_list_accounts (e.g. 'steiner'). "
+        "folder: well-known Graph folder such as 'SentItems', 'Inbox', "
+        "'Drafts' — omit for the default view. query: Graph $search text "
+        "(e.g. 'subject:Rechnung', 'from:someone@example.com'). "
+        "max_results: 1-50. Returns {account, messages: [{id, subject, from, "
+        "to, received_at, preview, ...}]}. Access is enforced per source by "
+        "comm-api against the caller's identity — a 403 means this agent is "
+        "not an owner of that mailbox, not that the mailbox is missing."
+    ),
+)
+async def comm_outlook_list_messages(
+    source: str,
+    query: str = "",
+    max_results: int = 10,
+    folder: str = "",
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"max_results": max_results}
+    if query:
+        params["query"] = query
+    if folder:
+        params["folder"] = folder
+    return await call_comm_api("GET", f"/api/v1/outlook/{source}/messages", params=params)
+
+
+@comm_mcp.tool(
+    name="outlook_get_message",
+    description=(
+        "Get a single Outlook email with full body text and attachment "
+        "metadata (read-only). Use outlook_list_messages first to get ids."
+    ),
+)
+async def comm_outlook_get_message(source: str, message_id: str) -> Dict[str, Any]:
+    return await call_comm_api("GET", f"/api/v1/outlook/{source}/messages/{message_id}")
 
 
 @comm_mcp.tool(

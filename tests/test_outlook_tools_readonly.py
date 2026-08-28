@@ -1,0 +1,39 @@
+"""#1455: comm-MCP traegt Outlook-LESE-Tools — und nur die.
+
+Steward (David) will Sent-Mails auswerten; ein Schreibpfad (send/mark/delete)
+darf ueber diesen Spiegel nicht entstehen.
+"""
+import asyncio
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+for _k in ("ARKTURIAN_API_KEY", "ONEAL_STORAGE_API_KEY", "JWT_PUBLIC_KEY", "COMM_API_KEY"):
+    os.environ.setdefault(_k, "test-only")
+
+
+def _tool_names():
+    import server
+    mgr = getattr(server.comm_mcp, "_tool_manager", None)
+    if mgr is not None and hasattr(mgr, "list_tools"):
+        return {t.name for t in mgr.list_tools()}
+    return {t.name for t in asyncio.run(server.comm_mcp.list_tools())}
+
+
+def test_outlook_read_tools_are_registered():
+    names = _tool_names()
+    assert {"outlook_list_accounts", "outlook_list_messages", "outlook_get_message"} <= names
+
+
+def test_no_outlook_write_tools():
+    names = {n for n in _tool_names() if n.startswith("outlook_")}
+    forbidden = {n for n in names if any(k in n for k in ("send", "mark", "delete", "move", "draft"))}
+    assert forbidden == set(), forbidden
+
+
+def test_folder_is_only_sent_when_given():
+    import inspect
+    import server
+    sig = inspect.signature(server.comm_outlook_list_messages)
+    assert sig.parameters["folder"].default == ""

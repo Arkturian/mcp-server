@@ -9282,6 +9282,52 @@ async def cloud_session_config(
     return await call_cloud_api("PATCH", f"/api/sessions/{session_name}/config", json_body=body)
 
 
+# ── MCP-Zuweisung + Neustart als Werkzeuge (Steward/David, 2026-08-28) ──────
+# Die REST-Wege (GET/PUT /api/sessions/{name}/mcp-servers, POST …/restart)
+# sind foederations-bewusst und mit owner_or_admin gegated; hier nur der
+# Spiegel als Tool, damit ein Admin-Agent einer Instanz sie ohne curl und
+# ohne Betreiber nutzen kann. Rechte entscheidet cloud-api am JWT, nicht
+# dieses Werkzeug.
+
+
+@cloud_mcp.tool(
+    name="session_mcp_servers",
+    description=(
+        "Show which MCP servers an agent is wired to (federation-aware). "
+        "Returns {servers: [...], allowed_tools: [...]} as cloud-api reports it."
+    ),
+)
+async def cloud_session_mcp_servers(session_name: str) -> Dict[str, Any]:
+    return await call_cloud_api("GET", f"/api/sessions/{session_name}/mcp-servers")
+
+
+@cloud_mcp.tool(
+    name="session_set_mcp_servers",
+    description=(
+        "Set the MCP servers an agent is wired to — full lifecycle "
+        "(rewrite config + auth helper + restart of that agent). "
+        "servers: canonical names, e.g. ['cloud','content','comm']. "
+        "Requires owner or admin rights on that agent; cloud-api enforces "
+        "this from the caller's JWT and answers 401/403 otherwise. "
+        "The agent restarts with --continue, its history is kept."
+    ),
+)
+async def cloud_session_set_mcp_servers(session_name: str, servers: List[str]) -> Dict[str, Any]:
+    return await call_cloud_api("PUT", f"/api/sessions/{session_name}/mcp-servers", json_body={"servers": list(servers)})
+
+
+@cloud_mcp.tool(
+    name="session_restart",
+    description=(
+        "Restart another agent's CLI process (federation-aware; --continue keeps "
+        "its history). Owner or admin only — cloud-api decides from the JWT. "
+        "For yourself use self_restart."
+    ),
+)
+async def cloud_session_restart(session_name: str) -> Dict[str, Any]:
+    return await call_cloud_api("POST", f"/api/sessions/{session_name}/restart")
+
+
 @cloud_mcp.tool(
     name="system_memory",
     description=(

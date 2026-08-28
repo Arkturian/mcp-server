@@ -37,3 +37,9 @@ def test_folder_is_only_sent_when_given():
     import server
     sig = inspect.signature(server.comm_outlook_list_messages)
     assert sig.parameters["folder"].default == ""
+
+
+def test_cloud_admin_tools_registered():
+    import server
+    names = {t.name for t in server.cloud_mcp._tool_manager.list_tools()}
+    assert {"session_mcp_servers", "session_set_mcp_servers", "session_restart"} <= names

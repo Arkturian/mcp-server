@@ -53,3 +53,14 @@ def test_list_messages_exposes_cursor_and_timerange():
     for p in ("cursor", "since", "until"):
         assert p in sig.parameters, p
         assert sig.parameters[p].default == ""
+
+
+def test_sections_patch_registered_and_shaped():
+    """Section-Attribute (Status/Assignee) brauchen einen MCP-Weg (#23 David)."""
+    import inspect
+    import server
+    names = {t.name for t in server.content_mcp._tool_manager.list_tools()}
+    assert "sections_patch" in names
+    sig = inspect.signature(server.content_sections_patch)
+    assert set(sig.parameters) == {"post_id", "section_id", "attrs", "status"}
+    assert sig.parameters["attrs"].default is None and sig.parameters["status"].default is None

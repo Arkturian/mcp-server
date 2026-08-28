@@ -3650,6 +3650,53 @@ async def content_sections_reply(
 
 
 @content_mcp.tool(
+    name="sections_patch",
+    description="""Update a section's attributes — status, assignee, targets,
+    priority — WITHOUT touching its body.
+
+    This is the missing counterpart to sections_create/reply: a task moves
+    open → in_progress → done by patching `status`, not by writing prose
+    into the section. Until now that needed a raw REST call with a JWT,
+    which an agent inside the MCP world could not make (Steward/David,
+    2026-08-28, dort #23) — the backend route existed and was already
+    tenant-gated, only this exposure was missing.
+
+    Args:
+        post_id: the collab post id
+        section_id: the section id (e.g. 't-…', 'q-…', 'p-…')
+        attrs: dict of attributes to MERGE into the section tag (e.g.
+               {"assignee": "Writer", "priority": "high"}). Omitted keys
+               keep their current value.
+        status: shorthand for the status attribute ('open', 'in_progress',
+                'done', 'resolved' … as the section type allows).
+
+    Rights are decided by content-api against your JWT (write access to
+    that post); a refusal comes back as the server's own error, not as a
+    silent no-op. Product-section BODIES are still edited with
+    doc_apply_text — this tool changes the tag, not the artefact.
+    """,
+)
+async def content_sections_patch(
+    post_id: int,
+    section_id: str,
+    attrs: Optional[Dict[str, Any]] = None,
+    status: Optional[str] = None,
+) -> Any:
+    if attrs is None and status is None:
+        return {"error": "nothing to patch — pass attrs and/or status"}
+    body: Dict[str, Any] = {}
+    if attrs is not None:
+        body["attrs"] = attrs
+    if status is not None:
+        body["status"] = status
+    return await call_content_api(
+        "PATCH",
+        f"/api/v1/posts/{post_id}/sections/{section_id}",
+        json_body=body,
+    )
+
+
+@content_mcp.tool(
     name="sections_decline",
     description="""Explicit decline of a question (or task) section.
 

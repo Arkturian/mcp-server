@@ -9188,6 +9188,7 @@ async def cloud_create_pool(
     model: str = "",
     effort: str = "high",
     idle_timeout_minutes: int = 30,
+    pool_public: bool = False,
 ) -> Dict[str, Any]:
     return await call_cloud_api(
         "POST", "/api/pools",
@@ -9195,6 +9196,7 @@ async def cloud_create_pool(
             "name": name, "size": size, "agent": agent,
             "model": model, "effort": effort,
             "idle_timeout_minutes": idle_timeout_minutes,
+            "pool_public": pool_public,
         },
     )
 
@@ -9211,19 +9213,23 @@ async def cloud_delete_pool(name: str) -> Dict[str, Any]:
     name="pool_config",
     description=(
         "Update pool configuration. Changeable fields: size (number of instances), "
-        "idle_timeout_minutes (auto-release acquired instances after N minutes idle)."
+        "idle_timeout_minutes (auto-release acquired instances after N minutes idle), "
+        "pool_public (anonymous widget acquire/release/touch allowed, #1617)."
     ),
 )
 async def cloud_pool_config(
     name: str,
     size: int | None = None,
     idle_timeout_minutes: int | None = None,
+    pool_public: bool | None = None,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {}
     if size is not None:
         body["size"] = size
     if idle_timeout_minutes is not None:
         body["idle_timeout_minutes"] = idle_timeout_minutes
+    if pool_public is not None:
+        body["pool_public"] = bool(pool_public)   # #1617: anonyme Widget-Belegung je Pool
     return await call_cloud_api("PATCH", f"/api/pools/{name}/config", json_body=body)
 
 

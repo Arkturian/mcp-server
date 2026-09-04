@@ -8339,6 +8339,103 @@ async def comm_gmail_get_attachment(
 
 
 @comm_mcp.tool(
+    name="outlook_get_attachment",
+    description=(
+        "Fetch one Outlook attachment (read-only) WITHOUT pushing base64 "
+        "through your context. Use outlook_get_message first for attachment_ids. "
+        "Gate: the caller's JWT is forwarded to comm-api (source owner/tenant), "
+        "and the attachment must belong to the given message — otherwise "
+        "`attachment_not_in_message`. No API-key fallback on customer instances.\n"
+        "deliver='storage' (default): bytes go server-side into Storage API; "
+        "you get {storage: {id, file_url, media_url}} plus filename/mime_type/size. "
+        "deliver='file': written to `save_to` (absolute path on the MCP host; a "
+        "directory gets the original filename). deliver='base64': legacy inline "
+        "`data` — only for small files you really need in context."
+    ),
+)
+async def comm_outlook_get_attachment(
+    source: str,
+    message_id: str,
+    attachment_id: str,
+    deliver: str = "storage",
+    save_to: str = "",
+    is_public: bool = False,
+    private: bool = False,
+) -> Dict[str, Any]:
+    # Davids Instanz, Issue #31 (Steward 04.09.): der comm-api-Pfad existierte,
+    # nur der MCP-Spiegel fehlte — und der Gmail-Zwilling zwingt Base64 durch
+    # den Agentenkontext. Hier: Zugehoerigkeit pruefen, Bytes serverseitig
+    # holen, Ausgabe als Storage-Objekt oder Datei; Base64 nur auf Wunsch.
+    deliver = (deliver or "storage").strip().lower()
+    if deliver not in ("storage", "file", "base64"):
+        return {"error": "deliver_invalid", "allowed": ["storage", "file", "base64"]}
+    if deliver == "file" and not (save_to and os.path.isabs(save_to)):
+        return {"error": "save_to_required", "hint": "deliver='file' braucht einen absoluten Pfad auf dem MCP-Host"}
+
+    msg = await call_comm_api("GET", f"/api/v1/outlook/{source}/messages/{message_id}")
+    atts = (((msg or {}).get("message") or {}).get("attachments")) or []
+    meta = next((a for a in atts if a.get("attachment_id") == attachment_id), None)
+    if meta is None:
+        return {
+            "error": "attachment_not_in_message",
+            "message_id": message_id,
+            "attachment_count": len(atts),
+        }
+    filename = (meta.get("filename") or "").strip() or f"attachment-{attachment_id[:12]}.bin"
+    filename = os.path.basename(filename)  # kein Pfadanteil aus fremden Mail-Headern
+    mime_type = meta.get("mime_type") or "application/octet-stream"
+
+    payload = await call_comm_api(
+        "GET",
+        f"/api/v1/outlook/{source}/messages/{message_id}/attachments/{attachment_id}",
+    )
+    data_b64 = (payload or {}).get("data") or ""
+    try:
+        raw = base64.b64decode(data_b64) if data_b64 else b""
+    except Exception:
+        return {"error": "attachment_decode_failed", "attachment_id": attachment_id}
+
+    out: Dict[str, Any] = {
+        "account": source,
+        "message_id": message_id,
+        "attachment_id": attachment_id,
+        "filename": filename,
+        "mime_type": mime_type,
+        "size": len(raw),
+        "deliver": deliver,
+    }
+    if deliver == "base64":
+        out["data"] = data_b64
+        return out
+    if deliver == "file":
+        from pathlib import Path as _P
+        target = _P(save_to)
+        if target.is_dir():
+            target = target / filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(raw)
+        out["path"] = str(target)
+        return out
+
+    form_fields: Dict[str, str] = {
+        "ai_mode": "none",
+        "is_public": str(bool(is_public)).lower(),
+        "reuse_existing": "false",
+        "context": f"outlook:{source}:{message_id}",
+    }
+    if private:
+        form_fields["private"] = "true"
+    res = await call_storage_upload(raw, filename, form_fields=form_fields)
+    sid = (res or {}).get("id") if isinstance(res, dict) else None
+    out["storage"] = {
+        "id": sid,
+        "file_url": (res or {}).get("file_url") if isinstance(res, dict) else None,
+        "media_url": f"{STORAGE_API_BASE}/storage/media/{sid}" if sid else None,
+    }
+    return out
+
+
+@comm_mcp.tool(
     name="gmail_latest",
     description=(
         "Get the most recent email for a Gmail account. "

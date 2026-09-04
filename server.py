@@ -8373,13 +8373,29 @@ async def comm_outlook_get_attachment(
         return {"error": "save_to_required", "hint": "deliver='file' braucht einen absoluten Pfad auf dem MCP-Host"}
 
     msg = await call_comm_api("GET", f"/api/v1/outlook/{source}/messages/{message_id}")
-    atts = (((msg or {}).get("message") or {}).get("attachments")) or []
-    meta = next((a for a in atts if a.get("attachment_id") == attachment_id), None)
+    _m = msg or {}
+    # comm-api liefert {"account","email","message":{…,"attachments":[…]}};
+    # aeltere/andere Formen liefern die Nachricht unverpackt. Beides lesen.
+    atts = (((_m.get("message") or {}).get("attachments")) or _m.get("attachments") or [])
+    want = (attachment_id or "").strip()
+    def _aid(a):
+        return str(a.get("attachment_id") or a.get("id") or "").strip()
+    meta = next((a for a in atts if _aid(a) == want), None)
     if meta is None:
+        # Steward #31 (04.09.): Fehlantwort trug nur die Anzahl — nicht pruefbar,
+        # ob Transport oder Vergleich schuld war. Jetzt: gekuerzte Kennungen
+        # (Anfang/Ende + Laenge) und Feldnamen, damit ein Vergleich ohne
+        # Freilegen der ganzen ID moeglich ist.
+        def _short(v):
+            v = str(v or ""); return f"{v[:10]}…{v[-6:]}({len(v)})" if len(v) > 20 else v
         return {
             "error": "attachment_not_in_message",
-            "message_id": message_id,
+            "message_id": _short(message_id),
             "attachment_count": len(atts),
+            "requested": _short(want),
+            "known": [_short(_aid(a)) for a in atts][:10],
+            "keys": sorted((atts[0] or {}).keys()) if atts else [],
+            "top_keys": sorted(_m.keys())[:12],
         }
     filename = (meta.get("filename") or "").strip() or f"attachment-{attachment_id[:12]}.bin"
     filename = os.path.basename(filename)  # kein Pfadanteil aus fremden Mail-Headern

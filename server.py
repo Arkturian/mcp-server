@@ -8385,10 +8385,33 @@ async def comm_outlook_get_attachment(
     filename = os.path.basename(filename)  # kein Pfadanteil aus fremden Mail-Headern
     mime_type = meta.get("mime_type") or "application/octet-stream"
 
-    payload = await call_comm_api(
-        "GET",
-        f"/api/v1/outlook/{source}/messages/{message_id}/attachments/{attachment_id}",
-    )
+    # comm-api >= c573d4e (Comm, 04.09.) kann den Anhang selbst nach Storage
+    # legen (`mode=storage`, Antwort mit storage_url/storage_media_id) — dann
+    # laufen die Bytes gar nicht erst durch das Gateway. Aeltere comm-api
+    # ignorieren den Parameter und liefern `data` (Base64); dafuer bleibt der
+    # Gateway-Upload unten als Rueckfall.
+    att_path = f"/api/v1/outlook/{source}/messages/{message_id}/attachments/{attachment_id}"
+    if deliver == "storage":
+        payload = await call_comm_api("GET", att_path, params={"mode": "storage"})
+        if isinstance(payload, dict) and payload.get("storage_url"):
+            sid = payload.get("storage_media_id")
+            return {
+                "account": source,
+                "message_id": message_id,
+                "attachment_id": attachment_id,
+                "filename": payload.get("filename") or filename,
+                "mime_type": payload.get("mime_type") or mime_type,
+                "size": payload.get("size"),
+                "deliver": "storage",
+                "storage": {
+                    "id": sid,
+                    "file_url": payload.get("storage_url"),
+                    "media_url": f"{STORAGE_API_BASE}/storage/media/{sid}" if sid else payload.get("storage_url"),
+                },
+                "stored_by": "comm-api",
+            }
+    else:
+        payload = await call_comm_api("GET", att_path, params={"mode": "inline", "max_inline_bytes": 20_000_000})
     data_b64 = (payload or {}).get("data") or ""
     try:
         raw = base64.b64decode(data_b64) if data_b64 else b""
@@ -8432,6 +8455,7 @@ async def comm_outlook_get_attachment(
         "file_url": (res or {}).get("file_url") if isinstance(res, dict) else None,
         "media_url": f"{STORAGE_API_BASE}/storage/media/{sid}" if sid else None,
     }
+    out["stored_by"] = "mcp-gateway"
     return out
 
 

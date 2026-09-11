@@ -9080,6 +9080,39 @@ async def cloud_read_history(
 
 
 @cloud_mcp.tool(
+    name="history_export",
+    description=(
+        "Export an agent's DURABLE conversation history for a look-back window as a "
+        "file (Alex 2026-09-11). Same source and same access gate as read_history "
+        "(you can read agents that share your owner or tenant; admins all; a bot may "
+        "opt out via .no_history_share) — whoever may call GET "
+        "/api/sessions/{name}/history/export may use this tool. "
+        "since: duration '2h', '90m', '3d', '1w' (bare number = hours) or an ISO "
+        "timestamp; until: same forms, empty = now. format: txt|md|json. "
+        "tools: none|labels|full (tool calls omitted / header line only / with output). "
+        "thinking=True includes thinking blocks. deliver: 'auto' (default) returns the "
+        "text inline up to ~16 KB and otherwise stores the file privately in Storage and "
+        "returns {storage_id, url, bytes}; 'inline' forces text, 'storage' forces the "
+        "file. Always returned: turns, total, since, node, filename. A 6-hour export of "
+        "a busy agent is ~60 KB — prefer 'auto' or 'storage' so your context stays small. "
+        "Pass your OWN session name as from_session."
+    ),
+)
+async def cloud_history_export(
+    from_session: str, session_name: str, since: str = "24h", until: str = "",
+    format: str = "txt", tools: str = "labels", thinking: bool = False, deliver: str = "auto",
+) -> Dict[str, Any]:
+    return await call_cloud_api(
+        "GET",
+        f"/api/sessions/{session_name}/history/export",
+        params={"since": since, "until": until, "format": format, "tools": tools,
+                "thinking": 1 if thinking else 0, "deliver": deliver or "auto",
+                "requester": from_session},
+        timeout=90,
+    )
+
+
+@cloud_mcp.tool(
     name="inbox",
     description="Check your inbox for messages from other agents.",
 )

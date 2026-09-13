@@ -8888,8 +8888,11 @@ async def story_characters_create(
     behavior: Optional[str] = None,
     mission: Optional[str] = None,
     prompt_tokens: Optional[str] = None,
+    visual_identity: Optional[Dict[str, Any]] = None,
+    reference_storage_ids: Optional[List[int]] = None,
+    metadata_json: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    body = _clean_params(name=name, description=description, origin=origin, powers=powers, symbol=symbol, outfit=outfit, colors=colors, behavior=behavior, mission=mission, prompt_tokens=prompt_tokens)
+    body = _clean_params(name=name, description=description, origin=origin, powers=powers, symbol=symbol, outfit=outfit, colors=colors, behavior=behavior, mission=mission, prompt_tokens=prompt_tokens, visual_identity=visual_identity, reference_storage_ids=reference_storage_ids, metadata_json=metadata_json)
     return await call_story_api("POST", f"/api/v1/projects/{project_id}/characters", json_body=body)
 
 
@@ -8903,6 +8906,9 @@ async def story_export_project(
 ) -> Dict[str, Any]:
     return await call_story_api("GET", f"/api/v1/projects/{project_id}/export", params={"format": format})
 
+
+from story_tools import register_story_tools
+register_story_tools(story_mcp, call_story_api)
 
 story_app = story_mcp.streamable_http_app()
 mount_mcp("story", STORY_PATH, story_app)
@@ -10552,6 +10558,7 @@ async def well_known(request: Request) -> JSONResponse:
     return JSONResponse(
         {
             "mcpServers": {
+                "story": {"name": "story", "version": "2.0.0", "url": f"{base_url}{STORY_PATH}/", "description": "Story contracts, sample approvals and film production"},
                 "storage": {
                     "name": "arkturian-storage",
                     "version": "2.6.0",

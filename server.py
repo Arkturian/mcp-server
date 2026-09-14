@@ -8654,7 +8654,7 @@ async def story_projects_list(
 
 @story_mcp.tool(
     name="projects_get",
-    description="Get a story project with full hierarchy: beats > scenes > shots > media/prompts + characters/locations/artifacts.",
+    description="Get project hierarchy and stored media. Storage is not readiness: call project_readiness for blockers and next steps, workflow_get for the full film recipe.",
 )
 async def story_projects_get(project_id: int) -> Dict[str, Any]:
     return await call_story_api("GET", f"/api/v1/projects/{project_id}")
@@ -8662,7 +8662,7 @@ async def story_projects_get(project_id: int) -> Dict[str, Any]:
 
 @story_mcp.tool(
     name="projects_create",
-    description="Create a new story project. Required: title. Optional: description, genre, tagline, status, metadata_json.",
+    description="Create a project outline, NOT a film. Start with workflow_get; after writing use project_readiness for missing production steps. Required title; optional description, genre, tagline, status, metadata_json. Check field_warnings.",
 )
 async def story_projects_create(
     title: str,
@@ -8751,7 +8751,7 @@ async def story_scenes_list(beat_id: int) -> Dict[str, Any]:
 
 @story_mcp.tool(
     name="scenes_create",
-    description="Create a new scene. Required: beat_id, title. Optional: description, purpose, characters, location, time_of_day, transition.",
+    description="Create a scene. description is not speech; narrative is narrator text, scene_lighting supports authored speech. characters/location must resolve to existing IDs or exact names. Call workflow_get and contracts_get(scenes_create). No media generation.",
 )
 async def story_scenes_create(
     beat_id: int,
@@ -8762,14 +8762,17 @@ async def story_scenes_create(
     location: Optional[str] = None,
     time_of_day: Optional[str] = None,
     transition: Optional[str] = None,
+    narrative: Optional[str] = None,
+    scene_lighting: Optional[Dict[str, Any]] = None,
+    position: Optional[int] = None,
 ) -> Dict[str, Any]:
-    body = _clean_params(title=title, description=description, purpose=purpose, characters=characters, location=location, time_of_day=time_of_day, transition=transition)
+    body = _clean_params(title=title, description=description, purpose=purpose, characters=characters, location=location, time_of_day=time_of_day, transition=transition, narrative=narrative, scene_lighting=scene_lighting, position=position)
     return await call_story_api("POST", f"/api/v1/beats/{beat_id}/scenes", json_body=body)
 
 
 @story_mcp.tool(
     name="scenes_update",
-    description="Update a scene. All fields optional.",
+    description="Update authored scene fields including narrative and scene_lighting. Use scenes_save(body) for the full canonical schema and explicit null clearing. No generation. Read project_readiness next.",
 )
 async def story_scenes_update(
     scene_id: int,
@@ -8780,8 +8783,11 @@ async def story_scenes_update(
     location: Optional[str] = None,
     time_of_day: Optional[str] = None,
     transition: Optional[str] = None,
+    narrative: Optional[str] = None,
+    scene_lighting: Optional[Dict[str, Any]] = None,
+    position: Optional[int] = None,
 ) -> Dict[str, Any]:
-    body = _clean_params(title=title, description=description, purpose=purpose, characters=characters, location=location, time_of_day=time_of_day, transition=transition)
+    body = _clean_params(title=title, description=description, purpose=purpose, characters=characters, location=location, time_of_day=time_of_day, transition=transition, narrative=narrative, scene_lighting=scene_lighting, position=position)
     return await call_story_api("PUT", f"/api/v1/scenes/{scene_id}", json_body=body)
 
 
@@ -8874,7 +8880,7 @@ async def story_characters_list(project_id: int) -> Dict[str, Any]:
 
 @story_mcp.tool(
     name="characters_create",
-    description="Create a character. Required: project_id, name. Optional: description, origin, powers, symbol, outfit, colors, behavior, mission, prompt_tokens.",
+    description="Create a character. Required: project_id, name. For voices use metadata_json.voice_profile with a verified voice_id; visual_identity supports gender/age/build/face/hair/skin/distinguishing/clothing_default, or prompt_tokens. Additional identity keys are stored with field_warnings, not rendered. reference_storage_ids binds existing visual references. Read workflow_get and contracts_get before preparing a film.",
 )
 async def story_characters_create(
     project_id: int,

@@ -10,6 +10,11 @@ from urllib.parse import quote
 
 # name, method, path. Bodies are the canonical schemas returned by contracts_get.
 OPERATIONS = [
+    ("story_intent_get", "GET", "/projects/{project_id}/story-intent"),
+    ("story_intent_save", "PUT", "/projects/{project_id}/story-intent"),
+    ("workflow_get", "GET", "/workflow"),
+    ("project_readiness", "GET", "/projects/{project_id}/readiness"),
+    ("scenes_save", "PUT", "/scenes/{scene_id}"),
     ("film_export_preview", "GET", "/projects/{project_id}/film-export-preview"),
     ("film_export_create", "POST", "/projects/{project_id}/film-exports"),
     ("film_export_get", "GET", "/projects/{project_id}/film-exports/{export_id}"),
@@ -83,6 +88,23 @@ OPERATIONS = [
         "/scenes/{scene_id}/audio-attempts/{attempt_id}/mix",
     ),
 ]
+# Legacy tools retain their call signatures; expose their actual REST schemas too.
+CRUD_OPERATIONS = [
+    ("story_intent_get", "GET", "/projects/{project_id}/story-intent"),
+    ("story_intent_save", "PUT", "/projects/{project_id}/story-intent"),
+    ("projects_create", "POST", "/projects/"),
+    ("projects_update", "PUT", "/projects/{project_id}"),
+    ("projects_get", "GET", "/projects/{project_id}"),
+    ("projects_list", "GET", "/projects/"),
+    ("characters_create", "POST", "/projects/{project_id}/characters"),
+    ("beats_create", "POST", "/projects/{project_id}/beats"),
+    ("beats_update", "PUT", "/beats/{beat_id}"),
+    ("scenes_create", "POST", "/beats/{beat_id}/scenes"),
+    ("scenes_update", "PUT", "/scenes/{scene_id}"),
+    ("shots_create", "POST", "/scenes/{scene_id}/shots"),
+    ("shots_update", "PUT", "/shots/{shot_id}"),
+]
+
 NO_BODY = {
     "film_export_retry",
     "production_recover",
@@ -144,7 +166,13 @@ def register_story_tools(mcp, call_api):
         fn.__name__ = name
         fn.__signature__ = inspect.Signature(params, return_annotation=dict)
         description = f"Story {method} {path}. Read contracts_get(operation='{name}') for the exact body. "
-        if name == "production_execute":
+        if name == "workflow_get":
+            description = "START HERE for making stories/films: read the complete interview-to-sample guide and field meanings. No generation. Then project_readiness for the project."
+        elif name == "story_intent_save":
+            description = "Set explicit interview intent with question_character_id and answer_character_id (different project speakers). First story_intent_get for expected_fingerprint; contracts_get for schema. Does not generate text or media and never approves content."
+        elif name == "project_readiness":
+            description = "START HERE for an existing project: diagnose missing scenes, speech, voices, shots and references using real builders; returns blockers and next tools. Read-only, never authorizes production. See workflow_get for the complete recipe."
+        elif name == "production_execute":
             description += "Requires displayed remaining item_ids, fresh fingerprints/revision and explicit confirm_api_billing. Run samples first; obtain the user's separate approval for every sample before production. Never invent approval or retry an uncertain call."
         elif name == "production_samples_review":
             description += "Record only the user's explicit decision after showing/playing this exact sample. Approval is not billing consent."
@@ -156,12 +184,14 @@ def register_story_tools(mcp, call_api):
 
     @mcp.tool(
         name="contracts_get",
-        description="Read the deployed Story request schema for one modern operation, including referenced definitions. No generation.",
+        description="Read the deployed Story schema for CRUD or production operations and field effects. Call workflow_get first for the complete process. No generation.",
     )
     async def contracts_get(operation: str) -> dict:
-        entry = next((e for e in OPERATIONS if e[0] == operation), None)
+        entry = next(
+            (e for e in OPERATIONS + CRUD_OPERATIONS if e[0] == operation), None
+        )
         if entry is None:
-            return {"operations": [e[0] for e in OPERATIONS]}
+            return {"operations": [e[0] for e in OPERATIONS + CRUD_OPERATIONS]}
         spec = await call_api("GET", "/openapi.json")
         route = (
             spec.get("paths", {}).get("/api/v1" + entry[2], {}).get(entry[1].lower())
@@ -191,4 +221,7 @@ def register_story_tools(mcp, call_api):
             "operation": operation,
             "route": route,
             "components": {"schemas": needed},
+            "field_usage": (await call_api("GET", "/api/v1/workflow")).get(
+                "field_usage", {}
+            ),
         }

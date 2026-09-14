@@ -8705,7 +8705,7 @@ async def story_projects_delete(project_id: int) -> Dict[str, Any]:
     name="beats_list",
     description="List all story beats for a project, ordered by position.",
 )
-async def story_beats_list(project_id: int) -> Dict[str, Any]:
+async def story_beats_list(project_id: int) -> List[Dict[str, Any]]:
     return await call_story_api("GET", f"/api/v1/projects/{project_id}/beats")
 
 
@@ -8745,7 +8745,7 @@ async def story_beats_update(
     name="scenes_list",
     description="List all scenes for a beat, ordered by position.",
 )
-async def story_scenes_list(beat_id: int) -> Dict[str, Any]:
+async def story_scenes_list(beat_id: int) -> List[Dict[str, Any]]:
     return await call_story_api("GET", f"/api/v1/beats/{beat_id}/scenes")
 
 
@@ -8795,7 +8795,7 @@ async def story_scenes_update(
     name="shots_list",
     description="List all shots for a scene, ordered by position.",
 )
-async def story_shots_list(scene_id: int) -> Dict[str, Any]:
+async def story_shots_list(scene_id: int) -> List[Dict[str, Any]]:
     return await call_story_api("GET", f"/api/v1/scenes/{scene_id}/shots")
 
 
@@ -8874,7 +8874,7 @@ async def story_prompts_create(
     name="characters_list",
     description="List all characters for a project.",
 )
-async def story_characters_list(project_id: int) -> Dict[str, Any]:
+async def story_characters_list(project_id: int) -> List[Dict[str, Any]]:
     return await call_story_api("GET", f"/api/v1/projects/{project_id}/characters")
 
 

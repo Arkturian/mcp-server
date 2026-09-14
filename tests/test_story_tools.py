@@ -1,3 +1,4 @@
+import json
 import unittest
 from mcp.server.fastmcp import FastMCP
 from story_tools import OPERATIONS, register_story_tools
@@ -41,6 +42,35 @@ class StoryToolsTests(unittest.IsolatedAsyncioTestCase):
         )
         # No truthy filtering and no invented billing permission.
         self.assertIs(self.calls[0][2]["json_body"]["confirm_api_billing"], False)
+
+    async def test_existing_contract_action_exposes_chat_workflow(self):
+        async def transport(method, path, **kwargs):
+            if path == "/openapi.json":
+                return {
+                    "paths": {
+                        "/api/v1/projects/{project_id}/production-preview": {
+                            "post": {"summary": "Preview"}
+                        }
+                    }
+                }
+            self.assertEqual(path, "/api/v1/workflow")
+            return {
+                "version": "v2",
+                "guide": "Complete chat guide",
+                "interaction": {"portal_required": False},
+                "field_usage": {"text": "spoken"},
+            }
+
+        mcp = FastMCP("old-connector-contract")
+        register_story_tools(mcp, transport)
+        output = await mcp.call_tool(
+            "contracts_get", {"operation": "production_preview"}
+        )
+        result = output[1] if isinstance(output, tuple) else json.loads(output[0].text)
+        self.assertTrue(result["available"])
+        self.assertEqual(result["workflow"]["guide"], "Complete chat guide")
+        self.assertFalse(result["workflow"]["interaction"]["portal_required"])
+        self.assertEqual(result["field_usage"], {"text": "spoken"})
 
     async def test_recovery_is_separate_and_path_injection_is_rejected(self):
         await self.mcp.call_tool(

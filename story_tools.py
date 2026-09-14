@@ -167,15 +167,19 @@ def register_story_tools(mcp, call_api):
         fn.__signature__ = inspect.Signature(params, return_annotation=dict)
         description = f"Story {method} {path}. Read contracts_get(operation='{name}') for the exact body. "
         if name == "workflow_get":
-            description = "START HERE for making stories/films: read the complete interview-to-sample guide and field meanings. No generation. Then project_readiness for the project."
+            description = "START HERE for making stories/films entirely in this chat: samples -> one user decision -> remaining production -> MP4. Portal optional; never require UI clicks. Read the complete guide and field meanings. No generation."
         elif name == "story_intent_save":
             description = "Set explicit interview intent with question_character_id and answer_character_id (different project speakers). First story_intent_get for expected_fingerprint; contracts_get for schema. Does not generate text or media and never approves content."
         elif name == "project_readiness":
             description = "START HERE for an existing project: diagnose missing scenes, speech, voices, shots and references using real builders; returns blockers and next tools. Read-only, never authorizes production. See workflow_get for the complete recipe."
         elif name == "production_execute":
-            description += "Requires displayed remaining item_ids, fresh fingerprints/revision and explicit confirm_api_billing. Run samples first; obtain the user's separate approval for every sample before production. Never invent approval or retry an uncertain call."
+            description += "Requires displayed remaining item_ids, fresh fingerprints/revision and explicit confirm_api_billing. Run samples first; show sample_media URLs in chat. One explicit user decision can cover all displayed samples and the announced remaining scope; do not require separate user clicks per API call. Reuse already granted permission. Never invent approval or retry an uncertain call."
         elif name == "production_samples_review":
-            description += "Record only the user's explicit decision after showing/playing this exact sample. Approval is not billing consent."
+            description += "Record the user's decision after presenting this exact sample in chat. One group approval can cover all shown samples: call this tool for each with a fresh revision, without asking the user again. Quality approval alone is not billing consent; the same user message may explicitly authorize both."
+        elif name in {"production_runs_get", "production_runs_create"}:
+            description += "Returns sample_media with bound image/audio URLs for presentation in chat. Do not redirect the user to a portal. Run creation stores a plan and does not spend."
+        elif name in {"film_export_create", "film_export_get"}:
+            description += "Export existing film media via MCP; poll get until complete and return download_url as the actual MP4 link in chat. No portal required, no image or TTS generation. Null URL means not complete."
         elif name == "scene_development_generate":
             description += "Uses subscription text quota; generates a reviewable draft, no images or speech."
         else:
@@ -184,7 +188,7 @@ def register_story_tools(mcp, call_api):
 
     @mcp.tool(
         name="contracts_get",
-        description="Read the deployed Story schema for CRUD or production operations and field effects. Call workflow_get first for the complete process. No generation.",
+        description="Read the deployed Story schema and complete chat workflow for CRUD or production operations. If workflow_get is absent from your connector, call this tool with production_preview: workflow.guide and workflow.interaction provide the same instructions. No generation.",
     )
     async def contracts_get(operation: str) -> dict:
         entry = next(
@@ -216,12 +220,16 @@ def register_story_tools(mcp, call_api):
                     collect(child)
 
         collect(route)
+        workflow = await call_api("GET", "/api/v1/workflow")
         return {
             "available": True,
             "operation": operation,
             "route": route,
             "components": {"schemas": needed},
-            "field_usage": (await call_api("GET", "/api/v1/workflow")).get(
-                "field_usage", {}
-            ),
+            "field_usage": workflow.get("field_usage", {}),
+            "workflow": {
+                key: workflow[key]
+                for key in ("version", "start_tool", "guide", "interaction")
+                if key in workflow
+            },
         }

@@ -10,6 +10,10 @@ from urllib.parse import quote
 
 # name, method, path. Bodies are the canonical schemas returned by contracts_get.
 OPERATIONS = [
+    ("text_review_speech_save", "PUT", "/projects/{project_id}/text-review/speech"),
+    ("text_review_get", "GET", "/projects/{project_id}/text-review"),
+    ("text_review_analyse", "POST", "/projects/{project_id}/text-review"),
+    ("text_review_decide", "PUT", "/projects/{project_id}/text-review/{review_id}/decision"),
     ("image_feedback_list", "GET", "/projects/{project_id}/image-feedback"),
     ("image_feedback_get", "GET", "/media/{media_id}/feedback"),
     ("image_feedback_save", "PUT", "/media/{media_id}/feedback"),
@@ -146,7 +150,7 @@ def register_story_tools(mcp, call_api):
                 inspect.Parameter.KEYWORD_ONLY,
                 annotation=(
                     str
-                    if key in {"run_id", "attempt_id", "draft_id", "export_id"}
+                    if key in {"run_id", "attempt_id", "draft_id", "export_id", "review_id"}
                     else int
                 ),
             )
@@ -169,6 +173,7 @@ def register_story_tools(mcp, call_api):
                         "attempt_id",
                         "draft_id",
                         "export_id",
+                        "review_id",
                     } and (type(value) is not int or value <= 0):
                         raise ValueError("Entity IDs must be positive integers")
                     if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", str(value)):
@@ -187,7 +192,9 @@ def register_story_tools(mcp, call_api):
         fn.__name__ = name
         fn.__signature__ = inspect.Signature(params, return_annotation=dict)
         description = f"Story {method} {path}. Read contracts_get(operation='{name}') for the exact body. "
-        if name.startswith("image_feedback_"):
+        if name.startswith("text_review_"):
+            description += "Review the complete ordered spoken text before full TTS: opening, introductions, chat references, question/answer logic, transitions, wording. GET sources/fingerprint; analyse creates one durable subscription-text review, never media or edits. Lost response: GET existing reviews, never auto-repeat. Show exact anchored findings/suggestions to the user. Use text_review_speech_save with expected_source_fingerprint and scene_id/speech_id/text for explicit user-accepted edits; media stays unchanged. After actual text edits analyse the new version; to consciously retain findings decide with an explicit reason for EVERY finding. Never invent a decision. Starting review blocks new full TTS until current text is explicitly accepted; existing media and voice auditions remain available. audio_checked=false: this is NOT listening or transcription. Portal optional."
+        elif name.startswith("image_feedback_"):
             description += "Read/save user observations about one displayed image: rating undecided/like/needs_change, liked, change_requested. Read first for expected_revision and expected_media_fingerprint. Persists across sessions and feeds the next visual_development_analyse. Feedback is NEVER production/billing approval and never regenerates, replaces or activates media. Conflicts return409; preserve user text and reload explicitly."
         elif name.startswith("visual_development_"):
             description += "Two distinct scopes: to improve ONE displayed image, set target_media_id to its current ShotMedia.id in analyse; show only that image and its feedback. This creates exactly one replacement candidate and activation preserves the shot, every cut time and audio. Omit target_media_id ONLY for explicit whole-film picture direction. Never infer global scope from a single-image note. Parent proposals must have the same target. Refine pictures of an existing recorded film by spoken meaning. Get context first; analyse with coarse/balanced/fine detail and exact source fingerprint (subscription text only). Show frames with spoken_text, real times, reasons, reused thumbnails and new motif descriptions in chat. No equal-time buckets, audio changes or invented times. Image creates ONE requested new entry with explicit model/size/quality and billing consent, saving a durable result without changing the film. Same request never regenerates; recover only GETs provider status. Activate only after all new images exist and the user accepts the visual edit; atomically binds word cuts, retains original media/audio. Portal optional."

@@ -105,5 +105,16 @@ class StoryToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Never infer global scope", tool.description)
 
 
+    async def test_text_review_discovery_and_decision_path(self):
+        tools = {t.name: t for t in await self.mcp.list_tools()}
+        for name in ("text_review_get", "text_review_analyse", "text_review_decide", "text_review_speech_save"):
+            self.assertIn(name, tools)
+            self.assertIn("audio_checked=false", tools[name].description)
+        self.assertEqual(tools["text_review_decide"].inputSchema["properties"]["review_id"]["type"], "string")
+        body = {"expected_revision": 1, "expected_source_fingerprint": "a"*64, "approved": False, "note": "Please correct"}
+        await self.mcp.call_tool("text_review_decide", {"project_id": 7, "review_id": "review-0001", "body": body})
+        self.assertEqual(self.calls, [("PUT", "/api/v1/projects/7/text-review/review-0001/decision", {"json_body": body})])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,23 @@ from urllib.parse import quote
 
 # name, method, path. Bodies are the canonical schemas returned by contracts_get.
 OPERATIONS = [
+    ("visual_development_get", "GET", "/projects/{project_id}/visual-development"),
+    ("visual_development_analyse", "POST", "/projects/{project_id}/visual-development"),
+    (
+        "visual_development_image",
+        "POST",
+        "/projects/{project_id}/visual-development/{draft_id}/images",
+    ),
+    (
+        "visual_development_recover",
+        "POST",
+        "/projects/{project_id}/visual-development/{draft_id}/recover",
+    ),
+    (
+        "visual_development_activate",
+        "POST",
+        "/projects/{project_id}/visual-development/{draft_id}/activate",
+    ),
     ("story_intent_get", "GET", "/projects/{project_id}/story-intent"),
     ("story_intent_save", "PUT", "/projects/{project_id}/story-intent"),
     ("workflow_get", "GET", "/workflow"),
@@ -106,6 +123,7 @@ CRUD_OPERATIONS = [
 ]
 
 NO_BODY = {
+    "visual_development_recover",
     "film_export_retry",
     "production_recover",
     "audio_attempts_recover",
@@ -166,7 +184,9 @@ def register_story_tools(mcp, call_api):
         fn.__name__ = name
         fn.__signature__ = inspect.Signature(params, return_annotation=dict)
         description = f"Story {method} {path}. Read contracts_get(operation='{name}') for the exact body. "
-        if name == "workflow_get":
+        if name.startswith("visual_development_"):
+            description += "Refine pictures of an existing recorded film by spoken meaning. Get context first; analyse with coarse/balanced/fine detail and exact source fingerprint (subscription text only). Show frames with spoken_text, real times, reasons, reused thumbnails and new motif descriptions in chat. No equal-time buckets, audio changes or invented times. Image creates ONE requested new entry with explicit model/size/quality and billing consent, saving a durable result without changing the film. Same request never regenerates; recover only GETs provider status. Activate only after all new images exist and the user accepts the visual edit; atomically binds word cuts, retains original media/audio. Portal optional."
+        elif name == "workflow_get":
             description = "START HERE for making stories/films entirely in this chat: samples -> one user decision -> remaining production -> MP4. Portal optional; never require UI clicks. Read the complete guide and field meanings. No generation."
         elif name == "story_intent_save":
             description = "Set explicit interview intent with question_character_id and answer_character_id (different project speakers). First story_intent_get for expected_fingerprint; contracts_get for schema. Does not generate text or media and never approves content."

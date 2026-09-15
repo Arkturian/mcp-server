@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - main
+    # Reine Doku-Aenderungen starten den Gateway nicht neu (15.09.2026: cae50fd,
+    # ein docs-Commit, startete mcp-server neu; ein Agent, der genau dann seine
+    # MCP-Sitzungen aufbaute, blieb bis zum Sitzungsende werkzeuglos).
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   workflow_dispatch:
 
 jobs:

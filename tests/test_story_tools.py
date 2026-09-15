@@ -86,6 +86,15 @@ class StoryToolsTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(len(self.calls), 1)
 
+    async def test_image_feedback_uses_media_binding_without_production_fields(self):
+        body = {"expected_revision": 0, "expected_media_fingerprint": "a" * 64,
+                "rating": "like", "liked": "", "change_requested": ""}
+        await self.mcp.call_tool("image_feedback_save", {"media_id": 42, "body": body})
+        self.assertEqual(self.calls, [("PUT", "/api/v1/media/42/feedback", {"json_body": body})])
+        tool = next(t for t in await self.mcp.list_tools() if t.name == "image_feedback_save")
+        self.assertIn("NEVER production/billing approval", tool.description)
+        self.assertEqual(tool.inputSchema["required"], ["media_id", "body"])
+
 
 if __name__ == "__main__":
     unittest.main()

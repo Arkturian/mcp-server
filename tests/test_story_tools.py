@@ -95,6 +95,15 @@ class StoryToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("NEVER production/billing approval", tool.description)
         self.assertEqual(tool.inputSchema["required"], ["media_id", "body"])
 
+    async def test_single_image_scope_is_explicit_and_forwarded(self):
+        body = {"request_id": "single-image-test", "expected_source_fingerprint": "b" * 64,
+                "target_media_id": 42, "instruction": "Preserve light, improve sensors"}
+        await self.mcp.call_tool("visual_development_analyse", {"project_id": 7, "body": body})
+        self.assertEqual(self.calls, [("POST", "/api/v1/projects/7/visual-development", {"json_body": body})])
+        tool = next(t for t in await self.mcp.list_tools() if t.name == "visual_development_analyse")
+        self.assertIn("target_media_id", tool.description)
+        self.assertIn("Never infer global scope", tool.description)
+
 
 if __name__ == "__main__":
     unittest.main()

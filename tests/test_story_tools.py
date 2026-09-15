@@ -115,6 +115,16 @@ class StoryToolsTests(unittest.IsolatedAsyncioTestCase):
         await self.mcp.call_tool("text_review_decide", {"project_id": 7, "review_id": "review-0001", "body": body})
         self.assertEqual(self.calls, [("PUT", "/api/v1/projects/7/text-review/review-0001/decision", {"json_body": body})])
 
+    async def test_max_analysis_is_discoverable_without_new_tool_names(self):
+        body = {"request_id": "max-statement-test", "detail": "max",
+                "expected_source_fingerprint": "c" * 64, "instruction": "Sensoren einzeln"}
+        await self.mcp.call_tool("visual_development_analyse", {"project_id": 7, "body": body})
+        self.assertEqual(self.calls, [("POST", "/api/v1/projects/7/visual-development", {"json_body": body})])
+        tool = next(t for t in await self.mcp.list_tools() if t.name == "visual_development_analyse")
+        self.assertIn("coarse/balanced/fine/max", tool.description)
+        self.assertIn("Minimum hold0.5s", tool.description)
+        self.assertIn("unanswered image-check", tool.description)
+
 
 if __name__ == "__main__":
     unittest.main()

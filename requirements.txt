@@ -1,6 +1,13 @@
 fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
 httpx>=0.27.0
-mcp>=0.3.0
+# Obergrenze, nicht Kosmetik: mcp 2.x hat `mcp.server.fastmcp` entfernt und
+# FastMCP zu MCPServer umbenannt (`from mcp.server.mcpserver import MCPServer`).
+# server.py:34 importiert FastMCP — eine Neuinstallation ohne Obergrenze zieht
+# heute mcp 2.2.0 und bricht beim Import. Befund Story 16.09.2026, von mir in
+# einer Wegwerf-Umgebung gegen 2.2.0 nachgestellt (die Fehlermeldung von mcp
+# selbst empfiehlt genau diese Grenze). Der laufende Host hat 1.21.0.
+# Anheben erst mit der Umstellung auf MCPServer.
+mcp>=0.3.0,<2
 PyJWT[crypto]>=2.9.0
 cryptography>=43.0.0

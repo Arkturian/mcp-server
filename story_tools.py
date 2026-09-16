@@ -100,6 +100,12 @@ OPERATIONS = [
         "POST",
         "/projects/{project_id}/production-runs/{run_id}/activate",
     ),
+    ("story_v3_prototype", "GET", "/story-v3/prototype"),
+    ("story_v3_snapshot", "POST", "/story-v3/snapshot"),
+    ("story_v3_plan", "POST", "/story-v3/plan"),
+    ("story_v3_contract", "POST", "/story-v3/contract"),
+    ("story_v3_explain", "POST", "/story-v3/explain"),
+    ("story_v3_diff", "POST", "/story-v3/diff"),
     ("audio_attempts_list", "GET", "/scenes/{scene_id}/audio-attempts"),
     (
         "audio_attempts_recover",
@@ -212,6 +218,49 @@ def register_story_tools(mcp, call_api):
             description += "Returns sample_media with bound image/audio URLs for presentation in chat. Do not redirect the user to a portal. Run creation stores a plan and does not spend."
         elif name in {"film_export_create", "film_export_get"}:
             description += "Export existing film media via MCP; poll get until complete and return download_url as the actual MP4 link in chat. No portal required, no image or TTS generation. Null URL means not complete."
+        elif name == "story_v3_prototype":
+            description = (
+                "Story v3.1 PROTOTYPE, read-only exploration surface — not the production flow "
+                "(use workflow_get / project_readiness for making films). Start here for v3.1: returns "
+                "the idea (meaning nodes bound to spoken words vs. a director layer that decides "
+                "single_frame|composite|split_sequence), the available sources, every operation, the step "
+                "format for refine/freeze and all error codes. Needs no arguments and no prior context. "
+                "Writes nothing, generates nothing, approves nothing."
+            )
+        elif name.startswith("story_v3_"):
+            description = (
+                f"Story v3.1 PROTOTYPE, read-only. {method} {path}. Call story_v3_prototype first for the "
+                "full entry point, or contracts_get(operation='" + name + "') for the exact body. "
+                "Body fields shared by all v3 tools: source (default {\"kind\":\"fixture\","
+                "\"name\":\"p7_scene36_export\"} = isolated extract of P7 scene 36; or "
+                "{\"kind\":\"project\",\"project_id\":N,\"scene_id\":N} for one read of a real "
+                "project), snapshot_fingerprint (pass the value from story_v3_snapshot; a scene changed since "
+                "then returns 409 snapshot_drift), authored_plan (the meaning layer: speech_id, perception "
+                "{from,to} and exactly two claims with id/from/to/emotional_function — phrases must occur "
+                "exactly once in the recording; required for scenes without a built-in plan), variant "
+                "split|composite, thesis, and steps ([{kind:'refine'|'freeze', node_id, instruction}] replayed "
+                "in order because there is no server-side session). "
+                + (
+                    "snapshot: one read with fingerprints, the active audio attempt, known gaps such as a missing "
+                    "visual identity, and the existing cuts as a read-only projection. "
+                    if name == "story_v3_snapshot"
+                    else "plan: meaning nodes, visual beats with the director's decision, the priority classes "
+                    "hard_invariant/creative_direction/soft_preference and the beat_ids you need next. "
+                    if name == "story_v3_plan"
+                    else "contract: compiles one beat_id into a CompiledContract with prompt_contents, excluded "
+                    "soft preferences with reasons, relevance_decisions and a stable fingerprint; route "
+                    "subscription (never accepts references) or api; bound_source_fingerprint reports "
+                    "stale_binding when the recording changed. "
+                    if name == "story_v3_contract"
+                    else "explain: every prompt line of one beat_id traced to its source, priority and director "
+                    "decision, plus the exclusions. "
+                    if name == "story_v3_explain"
+                    else "diff: compares two variants (split vs composite) on word coverage, emotional functions, "
+                    "readability and the director's split_or_merge_reason. "
+                )
+                + "Read-only: no database write, no provider or media call, no persistence, no project change, "
+                "no production or billing approval. Story v3.1 is a prototype; do not present it as released."
+            )
         elif name == "scene_development_generate":
             description += "Uses subscription text quota; generates a reviewable draft, no images or speech."
         else:

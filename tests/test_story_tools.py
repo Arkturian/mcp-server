@@ -43,6 +43,55 @@ class StoryToolsTests(unittest.IsolatedAsyncioTestCase):
         # No truthy filtering and no invented billing permission.
         self.assertIs(self.calls[0][2]["json_body"]["confirm_api_billing"], False)
 
+    async def test_story_v3_prototype_tools_are_read_only_and_self_contained(self):
+        tools = {t.name: t for t in await self.mcp.list_tools()}
+        expected = {
+            "story_v3_prototype": ("GET", "/api/v1/story-v3/prototype"),
+            "story_v3_snapshot": ("POST", "/api/v1/story-v3/snapshot"),
+            "story_v3_plan": ("POST", "/api/v1/story-v3/plan"),
+            "story_v3_contract": ("POST", "/api/v1/story-v3/contract"),
+            "story_v3_explain": ("POST", "/api/v1/story-v3/explain"),
+            "story_v3_diff": ("POST", "/api/v1/story-v3/diff"),
+        }
+        for name, (method, path) in expected.items():
+            tool = tools[name]
+            self.assertIn("PROTOTYPE", tool.description, name)
+            self.assertIn("read-only", tool.description.lower(), name)
+            # A foreign client must learn the entry point and the limits from the tool alone.
+            if name != "story_v3_prototype":
+                self.assertIn("story_v3_prototype", tool.description, name)
+            else:
+                self.assertIn("Start here", tool.description)
+            for promise in ("no provider", "approves nothing", "generates nothing", "no production"):
+                if promise in tool.description.lower():
+                    break
+            else:
+                self.fail(f"{name} does not state its production limit")
+            if method == "POST":
+                self.assertEqual(tool.inputSchema["required"], ["body"], name)
+                for field in ("source", "snapshot_fingerprint", "authored_plan"):
+                    self.assertIn(field, tool.description, name)
+            else:
+                self.assertFalse(tool.inputSchema.get("required"), name)
+
+        self.calls.clear()
+        body = {
+            "source": {"kind": "project", "project_id": 7, "scene_id": 36},
+            "variant": "split",
+            "beat_id": "p7:scene36:beat:thermal",
+            "snapshot_fingerprint": "a" * 64,
+            "steps": [{"kind": "freeze", "node_id": "p7:scene36:beat:spatial"}],
+        }
+        await self.mcp.call_tool("story_v3_contract", {"body": body})
+        await self.mcp.call_tool("story_v3_prototype", {})
+        self.assertEqual(
+            self.calls,
+            [
+                ("POST", "/api/v1/story-v3/contract", {"json_body": body}),
+                ("GET", "/api/v1/story-v3/prototype", {}),
+            ],
+        )
+
     async def test_existing_contract_action_exposes_chat_workflow(self):
         async def transport(method, path, **kwargs):
             if path == "/openapi.json":

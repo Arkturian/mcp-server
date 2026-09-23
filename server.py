@@ -3334,6 +3334,15 @@ async def content_blocks_delete(post_id: int, block_id: int) -> Dict[str, Any]:
             `replace_range`
         end_char_offset: substring end (exclusive) — required for
             `replace_range`
+        intent: one sentence — what this write does and why (shown to
+            every push recipient; Wissensosmose #4720 §15)
+        triggered_by: block_ids / section_ids this write reacts to
+            (declared genealogy edge; max 8)
+        parent_section_id: section the new paragraph belongs to — REQUIRED
+            for `insert_after_paragraph` inside a question/task/product
+            section, otherwise the paragraph lands outside the section
+        parent_section_type: type of that section (product|question|task|
+            annotation|vote), pass together with parent_section_id
         expected_text: race-guard for `replace_range` (see above)
 
     Returns:
@@ -3356,6 +3365,10 @@ async def content_doc_apply_text(
     start_char_offset: Optional[int] = None,
     end_char_offset: Optional[int] = None,
     expected_text: Optional[str] = None,
+    intent: Optional[str] = None,
+    triggered_by: Optional[List[str]] = None,
+    parent_section_id: Optional[str] = None,
+    parent_section_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Write into a collab-text CRDT post. See tool description for modes.
 
@@ -3386,6 +3399,18 @@ async def content_doc_apply_text(
         body["end_char_offset"] = end_char_offset
     if expected_text is not None:
         body["expected_text"] = expected_text
+    # Wissensosmose (#4720 §15): deklarierte Bedeutung + Ausloeser des Writes.
+    if intent is not None:
+        body["intent"] = intent
+    if triggered_by is not None:
+        body["triggered_by"] = triggered_by
+    # Issue #2009 (Feldversuch #5047): Section-Zuordnung fuer
+    # insert_after_paragraph in eine bestehende Section — ohne sie landet
+    # der Absatz ohne section_id und die Section-Regeln greifen nicht.
+    if parent_section_id is not None:
+        body["parent_section_id"] = parent_section_id
+    if parent_section_type is not None:
+        body["parent_section_type"] = parent_section_type
     return await call_content_api(
         "POST",
         f"/api/v1/posts/{post_id}/crdt/apply",
@@ -3460,9 +3485,18 @@ async def content_refine_phrase(
     block_id: Optional[str] = None,
     occurrence: Optional[int] = None,
     expected_text: Optional[str] = None,
+    intent: Optional[str] = None,
+    triggered_by: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Word-level refinement wrapper über replace_range."""
+    """Word-level refinement wrapper über replace_range.
+
+    intent / triggered_by wie bei doc_apply_text (Wissensosmose #4720 §15).
+    """
     body: Dict[str, Any] = {"find": find, "replace": replace}
+    if intent is not None:
+        body["intent"] = intent
+    if triggered_by is not None:
+        body["triggered_by"] = triggered_by
     if section_id is not None:
         body["section_id"] = section_id
     if block_id is not None:

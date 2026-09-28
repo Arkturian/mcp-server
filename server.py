@@ -415,6 +415,7 @@ async def call_ai_api(
     *,
     params: Optional[Dict[str, Any]] = None,
     json_body: Optional[Dict[str, Any]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
 ) -> Any:
     """Call AI API (text/image/audio) with API key if provided.
 
@@ -424,6 +425,8 @@ async def call_ai_api(
     for prompts >few KB. Overriding via `MCP_AI_HTTP_TIMEOUT` env-var.
     """
     headers = {"X-API-Key": AI_API_KEY} if AI_API_KEY else {}
+    if extra_headers:
+        headers.update(extra_headers)
     return await _fetch_json(
         method,
         f"{AI_API_BASE}{endpoint}",
@@ -5901,6 +5904,45 @@ async def ai_tts_minimax(
     if link_id:
         body["link_id"] = link_id
     return await call_ai_api("POST", "/ai/tts/minimax", json_body=body)
+
+
+@ai_mcp.tool(
+    name="jev",
+    description="""Jev — typisierte Urteile über TypeSafe System One (via AiApi /ai/jev).
+
+Jev generiert keinen Text, nur typisierte Urteile. Rechnen, Zählen und Datumsvergleiche gehören in den Code.
+
+Params: state (Text oder strukturierte Daten), questions (Map frage_id -> Frage), model (optional, Vorgabe jev-latest; feste Version wie jev-1.13.0 erlaubt). Mehrere Fragen zum selben state laufen in einem Aufruf parallel.
+
+Drei Fragetypen:
+- noul — Ja-Wahrscheinlichkeit 0..1. Beispiel: {"echt": {"type": "noul", "instructions": "Ist das eine echte Geschäftsanfrage?"}} -> {"noul": 0.86}
+- choice — eine Option mit Verteilung und confidence, criteria = Map Option -> Beschreibung (max. 255). Beispiel: {"kat": {"type": "choice", "instructions": "Welche Art von Nachricht?", "criteria": {"anfrage": "Kunde fragt nach Leistung", "werbung": "Werbung, Spam"}}} -> {"choice": "anfrage", "confidence": 1.0, "probabilities": {...}}
+- score — Einstufung auf beschriebenen Stufen, criteria = Liste 2..10 Stufen. Beispiel: {"dringlichkeit": {"type": "score", "instructions": "Wie dringend?", "criteria": ["kann warten", "diese Woche", "heute", "sofort"]}} -> {"score": 2, "legend": {...}}
+
+Antwort: {model, answers, usage, cost_usd, latency_ms}. Kosten ~0,00002–0,0002 USD je Aufruf; Tagesbudget in AiApi.
+
+Datenschutz: Keine echten personenbezogenen Daten (Kunden-, Behörden-, Personenmails) ohne Alex' Freigabe. TypeSafe bietet ohne Enterprise-Vertrag keine Zero Data Retention.
+
+Rechte: Jev-Urteile sind nie ein Berechtigungs-Tor. Ein Wahrscheinlichkeitsmodell darf nicht über Rechte entscheiden.
+
+Massenläufe über hunderte echte Datensätze nur mit Alex' Okay.
+
+Doku: https://docs.typesafe.ai/llms.txt""",
+)
+async def ai_jev(
+    state: Any,
+    questions: Dict[str, Any],
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
+    from auth import current_caller_agent_name
+
+    body: Dict[str, Any] = {"state": state, "questions": questions}
+    if model and str(model).strip():
+        body["model"] = str(model).strip()
+    # Nur Zuordnung im AiApi-Nutzungslog (aus dem geprueften JWT), nie Recht.
+    agent = current_caller_agent_name()
+    extra = {"X-Agent-Name": agent} if agent else None
+    return await call_ai_api("POST", "/ai/jev", json_body=body, extra_headers=extra)
 
 
 # NOTE deliberately NOT exposed as MCP tools:

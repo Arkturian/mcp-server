@@ -26,6 +26,7 @@ def test_signatur_und_aufruf():
     assert [a.arg for a in fn.args.args] == ["state", "questions", "model"]
     src = ast.get_source_segment(TEXT, fn)
     assert '"/ai/jev"' in src and "extra_headers" in src and "current_caller_agent_name" in src
+    assert "current_caller_jwt" in src and '"Authorization"' in src
 
 
 def test_pflichttexte():

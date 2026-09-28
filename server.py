@@ -5934,15 +5934,23 @@ async def ai_jev(
     questions: Dict[str, Any],
     model: Optional[str] = None,
 ) -> Dict[str, Any]:
-    from auth import current_caller_agent_name
+    from auth import current_caller_agent_name, current_caller_jwt
 
     body: Dict[str, Any] = {"state": state, "questions": questions}
     if model and str(model).strip():
         body["model"] = str(model).strip()
-    # Nur Zuordnung im AiApi-Nutzungslog (aus dem geprueften JWT), nie Recht.
+    # /ai/jev verlangt ein gepruefetes Agenten-JWT (Sicherheitsbefund Jev,
+    # 28.09.: ohne Pflicht-Anmeldung war der TypeSafe-Schluessel oeffentlich
+    # nutzbar). Das Gateway reicht das JWT des Aufrufers durch; X-Agent-Name
+    # bleibt reines Etikett im Nutzungslog.
+    extra: Dict[str, str] = {}
+    jwt_str = current_caller_jwt()
+    if jwt_str:
+        extra["Authorization"] = f"Bearer {jwt_str}"
     agent = current_caller_agent_name()
-    extra = {"X-Agent-Name": agent} if agent else None
-    return await call_ai_api("POST", "/ai/jev", json_body=body, extra_headers=extra)
+    if agent:
+        extra["X-Agent-Name"] = agent
+    return await call_ai_api("POST", "/ai/jev", json_body=body, extra_headers=extra or None)
 
 
 # NOTE deliberately NOT exposed as MCP tools:

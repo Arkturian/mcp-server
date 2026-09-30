@@ -9052,6 +9052,29 @@ async def cloud_send_message(
     )
 
 
+@cloud_mcp.tool(
+    name="send_to_human",
+    description=(
+        "Send a message to a HUMAN of the federation (e.g. Alex, Tommy Saier, Peter Weidinger) "
+        "through AgentOS itself: it appears in all of their open portal tabs and as a push "
+        "notification in the iOS app, and they can reply. THIS is the default whenever someone "
+        "says 'send X a message' / 'schick X eine Nachricht' without naming a channel — do NOT "
+        "use e-mail or Telegram unless the channel is named explicitly ('per Mail', 'per "
+        "Telegram'). `to` is the person's e-mail address (aliases resolve at the recipient); if "
+        "you only know the name, look it up (comm contacts) and ask when ambiguous. The sender "
+        "is set by the server from your login (you appear as '<your agent> on behalf of your "
+        "owner'), never from the arguments. Returns {id, delivered_to, ...}: delivered_to = 0 "
+        "means no open portal tab right now — the iOS push still goes out; say so instead of "
+        "claiming it was read. Not for other agents (use send_message)."
+    ),
+)
+async def cloud_send_to_human(to: str, text: str, message_id: Optional[str] = None) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"to": (to or "").strip(), "text": text}
+    if message_id:
+        body["message_id"] = message_id
+    return await call_cloud_api("POST", "/api/user-messages", json_body=body)
+
+
 def _cloud_message_body(
     *,
     from_session: str,

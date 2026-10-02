@@ -10453,60 +10453,40 @@ async def root() -> Dict[str, Any]:
     }
 
 
+def _health_probes() -> List[tuple]:
+    """(Ergebnis-Schluessel, MCP-Name, Probe) je Upstream, nur fuer gemountete MCPs.
+
+    Mandanten-Gateways mounten per MCP_SERVERS nur ihre eigenen Dienste.
+    Bis 02.10. probte /health trotzdem oneal-storage/artrack/oneal — ohne
+    deren Schluessel -> 401 -> RuntimeError aus _fetch_json, die das
+    `except httpx.HTTPError` nicht fing -> 500 auf jeder Kundeninstanz.
+    """
+    probes = [
+        ("storage_arkturian", "storage", storage_kg_stats),
+        ("oneal_products", "oneal", oneal_service_ping),
+        ("storage_oneal", "oneal-storage", oneal_storage_kg_stats),
+        ("artrack", "artrack", artrack_service_health),
+        ("content", "content", content_service_health),
+        ("tree", "tree", tree_service_health),
+    ]
+    if BUSINESS_API_KEY:
+        probes.append(("business", "business", business_service_health))
+    if COMM_API_KEY:
+        probes.append(("comm", "comm", comm_service_health))
+    return [p for p in probes if ENABLED_MCPS is None or p[1] in ENABLED_MCPS]
+
+
 @app.get("/health")
 async def health() -> Dict[str, Any]:
-    """Aggregated health check for all upstream services."""
+    """Aggregated health check for the upstream services of mounted MCPs."""
     results: Dict[str, Any] = {"status": "healthy"}
 
-    try:
-        results["storage_arkturian"] = await storage_kg_stats()
-    except httpx.HTTPError as exc:
-        results["status"] = "degraded"
-        results["storage_arkturian_error"] = str(exc)
-
-    try:
-        results["oneal_products"] = await oneal_service_ping()
-    except httpx.HTTPError as exc:
-        results["status"] = "degraded"
-        results["oneal_products_error"] = str(exc)
-
-    try:
-        results["storage_oneal"] = await oneal_storage_kg_stats()
-    except httpx.HTTPError as exc:
-        results["status"] = "degraded"
-        results["storage_oneal_error"] = str(exc)
-
-    try:
-        results["artrack"] = await artrack_service_health()
-    except httpx.HTTPError as exc:
-        results["status"] = "degraded"
-        results["artrack_error"] = str(exc)
-
-    try:
-        results["content"] = await content_service_health()
-    except httpx.HTTPError as exc:
-        results["status"] = "degraded"
-        results["content_error"] = str(exc)
-
-    try:
-        results["tree"] = await tree_service_health()
-    except httpx.HTTPError as exc:
-        results["status"] = "degraded"
-        results["tree_error"] = str(exc)
-
-    if BUSINESS_API_KEY:
+    for key, _name, probe in _health_probes():
         try:
-            results["business"] = await business_service_health()
-        except httpx.HTTPError as exc:
+            results[key] = await probe()
+        except Exception as exc:  # _fetch_json wirft RuntimeError, nicht nur httpx.HTTPError
             results["status"] = "degraded"
-            results["business_error"] = str(exc)
-
-    if COMM_API_KEY:
-        try:
-            results["comm"] = await comm_service_health()
-        except httpx.HTTPError as exc:
-            results["status"] = "degraded"
-            results["comm_error"] = str(exc)
+            results[f"{key}_error"] = str(exc)
 
     if results["status"] != "healthy":
         raise HTTPException(status_code=207, detail=results)

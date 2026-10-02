@@ -8256,6 +8256,205 @@ async def comm_discord_roles_list(guild_id: str) -> List[Dict[str, Any]]:
     )
 
 
+# --- Discord Guild write-ops (Bausteine 2-6, scope-gated per guild) ---
+
+
+@comm_mcp.tool(
+    name="discord_channel_create",
+    description=(
+        "Create a channel in the Guild. type: 0=text (default), 2=voice, "
+        "4=category, 5=announcement, 15=forum, 13=stage. "
+        "permission_overwrites IS passed in the create-body (Discord does "
+        "not inherit category overwrites to children at runtime — this is "
+        "the create-time copy). Requires `discord:guild:manage` scope "
+        "(per-guild allowlist, default Arkturian)."
+    ),
+)
+async def comm_discord_channel_create(
+    guild_id: str,
+    name: str,
+    type: int = 0,
+    parent_id: Optional[str] = None,
+    position: Optional[int] = None,
+    topic: Optional[str] = None,
+    rate_limit_per_user: Optional[int] = None,
+    bitrate: Optional[int] = None,
+    user_limit: Optional[int] = None,
+    permission_overwrites: Optional[List[Dict[str, Any]]] = None,
+    nsfw: Optional[bool] = None,
+) -> Dict[str, Any]:
+    body = _clean_params(
+        name=name, type=type, parent_id=parent_id, position=position,
+        topic=topic, rate_limit_per_user=rate_limit_per_user,
+        bitrate=bitrate, user_limit=user_limit,
+        permission_overwrites=permission_overwrites, nsfw=nsfw,
+    )
+    return await call_comm_api(
+        "POST", f"/api/v1/discord/guild/{guild_id}/channels", json_body=body,
+    )
+
+
+@comm_mcp.tool(
+    name="discord_role_create",
+    description=(
+        "Create a role. `permissions` is the bitmask as decimal string "
+        "(e.g. \"0\" for no perms, \"8\" for ADMINISTRATOR). Position is "
+        "not settable at create — Discord inserts the role at the "
+        "lowest-non-everyone position. Requires `discord:guild:manage`."
+    ),
+)
+async def comm_discord_role_create(
+    guild_id: str,
+    name: str,
+    permissions: str = "0",
+    color: int = 0,
+    hoist: bool = False,
+    mentionable: bool = False,
+) -> Dict[str, Any]:
+    body = {
+        "name": name, "permissions": permissions, "color": color,
+        "hoist": hoist, "mentionable": mentionable,
+    }
+    return await call_comm_api(
+        "POST", f"/api/v1/discord/guild/{guild_id}/roles", json_body=body,
+    )
+
+
+@comm_mcp.tool(
+    name="discord_permission_overwrite",
+    description=(
+        "Upsert a permission overwrite on a channel. overwrite_id is a "
+        "role-id (for type=0) or user-id (for type=1). For @everyone the "
+        "role-id equals the guild-id. allow/deny are 64-bit bitmasks as "
+        "DECIMAL STRINGS (Discord rejects int for perms this large). "
+        "Returns {} (Discord 204 passthrough). Requires `discord:guild:manage`."
+    ),
+)
+async def comm_discord_permission_overwrite(
+    guild_id: str,
+    channel_id: str,
+    overwrite_id: str,
+    type: int = 0,
+    allow: str = "0",
+    deny: str = "0",
+) -> Dict[str, Any]:
+    body = {
+        "overwrite_id": overwrite_id, "type": type,
+        "allow": allow, "deny": deny,
+    }
+    return await call_comm_api(
+        "PUT",
+        f"/api/v1/discord/guild/{guild_id}/channels/{channel_id}/permissions",
+        json_body=body,
+    )
+
+
+@comm_mcp.tool(
+    name="discord_channel_message_send",
+    description=(
+        "Bot posts a text message in a GUILD channel (not DM — use "
+        "`send` with channel=discord for DMs). Discord 2000-char cap "
+        "per message. Requires `discord:guild:post` scope (separate "
+        "from manage — this is public bot-speech, Cloud-Review Post #5179)."
+    ),
+)
+async def comm_discord_channel_message_send(
+    guild_id: str,
+    channel_id: str,
+    content: str,
+) -> Dict[str, Any]:
+    return await call_comm_api(
+        "POST",
+        f"/api/v1/discord/guild/{guild_id}/channels/{channel_id}/messages",
+        json_body={"content": content},
+    )
+
+
+@comm_mcp.tool(
+    name="discord_message_pin",
+    description=(
+        "Pin a message in a GUILD channel. Idempotent (pinning a pinned "
+        "message is a no-op). Requires `discord:guild:post`."
+    ),
+)
+async def comm_discord_message_pin(
+    guild_id: str,
+    channel_id: str,
+    message_id: str,
+) -> Dict[str, Any]:
+    return await call_comm_api(
+        "PUT",
+        f"/api/v1/discord/guild/{guild_id}/channels/{channel_id}/pins/{message_id}",
+    )
+
+
+@comm_mcp.tool(
+    name="discord_message_unpin",
+    description=(
+        "Unpin a message. 404 (not pinned) is treated as success "
+        "(idempotent). Requires `discord:guild:post`."
+    ),
+)
+async def comm_discord_message_unpin(
+    guild_id: str,
+    channel_id: str,
+    message_id: str,
+) -> Dict[str, Any]:
+    return await call_comm_api(
+        "DELETE",
+        f"/api/v1/discord/guild/{guild_id}/channels/{channel_id}/pins/{message_id}",
+    )
+
+
+@comm_mcp.tool(
+    name="discord_thread_create",
+    description=(
+        "Create a thread detached from any message. type: 10 "
+        "ANNOUNCEMENT_THREAD, 11 PUBLIC_THREAD (default), 12 "
+        "PRIVATE_THREAD. auto_archive_duration in minutes: "
+        "60/1440/4320/10080. Requires `discord:guild:manage`."
+    ),
+)
+async def comm_discord_thread_create(
+    guild_id: str,
+    channel_id: str,
+    name: str,
+    type: int = 11,
+    auto_archive_duration: int = 1440,
+) -> Dict[str, Any]:
+    body = {
+        "name": name, "type": type,
+        "auto_archive_duration": auto_archive_duration,
+    }
+    return await call_comm_api(
+        "POST",
+        f"/api/v1/discord/guild/{guild_id}/channels/{channel_id}/threads",
+        json_body=body,
+    )
+
+
+@comm_mcp.tool(
+    name="discord_members_list",
+    description=(
+        "List guild members paginated. limit defaults 100, cap 1000. "
+        "`after` is the last member-user-id of the previous page for "
+        "cursor-pagination. Returns per member: {user: {id, username, "
+        "discriminator, global_name, …}, roles: [role_ids], joined_at, "
+        "premium_since, nick, …}. Requires GUILD_MEMBERS privileged "
+        "intent (enabled). Read-only, no scope-gate."
+    ),
+)
+async def comm_discord_members_list(
+    guild_id: str,
+    limit: int = 100,
+    after: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    params = _clean_params(limit=limit, after=after)
+    return await call_comm_api(
+        "GET", f"/api/v1/discord/guild/{guild_id}/members", params=params,
+    )
+
+
 # --- Info ---
 
 

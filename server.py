@@ -8441,7 +8441,9 @@ async def comm_discord_thread_create(
         "cursor-pagination. Returns per member: {user: {id, username, "
         "discriminator, global_name, …}, roles: [role_ids], joined_at, "
         "premium_since, nick, …}. Requires GUILD_MEMBERS privileged "
-        "intent (enabled). Read-only, no scope-gate."
+        "intent (enabled). **Scope-gated via `discord:guild:manage`** — "
+        "personenbezogene Daten (Discord-Usernames echter Menschen), "
+        "darf nicht breit lesbar sein."
     ),
 )
 async def comm_discord_members_list(

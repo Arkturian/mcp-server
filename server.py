@@ -8204,6 +8204,58 @@ async def comm_telegram_get_file(file_id: str) -> Dict[str, Any]:
     return await call_comm_api("GET", f"/api/v1/telegram/files/{file_id}")
 
 
+# --- Discord Guild (read-only, Issue #2228 Baustein 1) ---
+
+
+@comm_mcp.tool(
+    name="discord_guild_info",
+    description=(
+        "Get Discord Guild metadata as a stable projected subset: "
+        "name, owner_id, system_channel_id, features, verification_level, "
+        "mfa_level, approximate_member_count, approximate_presence_count, "
+        "preferred_locale, premium_tier, nsfw_level. "
+        "guild_id is the Discord snowflake of the server (not the bot). "
+        "For the Arkturian AgentOS server: 1555608156174950484."
+    ),
+)
+async def comm_discord_guild_info(guild_id: str) -> Dict[str, Any]:
+    return await call_comm_api("GET", f"/api/v1/discord/guild/{guild_id}/info")
+
+
+@comm_mcp.tool(
+    name="discord_channels_list",
+    description=(
+        "List all channels of a Discord Guild (categories type=4, text "
+        "type=0, voice type=2, forum type=15, stage type=13). Returns the "
+        "raw Discord shape per channel: id, name, type, parent_id, "
+        "position, permission_overwrites, topic, rate_limit_per_user, "
+        "nsfw, last_message_id, bitrate (voice), user_limit (voice)."
+    ),
+)
+async def comm_discord_channels_list(guild_id: str) -> List[Dict[str, Any]]:
+    return await call_comm_api(
+        "GET", f"/api/v1/discord/guild/{guild_id}/channels",
+    )
+
+
+@comm_mcp.tool(
+    name="discord_roles_list",
+    description=(
+        "List all roles of a Discord Guild including @everyone (role_id "
+        "equals guild_id) and bot-managed roles (managed=true). Each role: "
+        "id, name, position, permissions (bitmask as string), color, "
+        "hoist, mentionable, managed, tags. Sorted by Discord's own "
+        "position-ascending; same-position ties break by role-id ascending "
+        "(younger role sits lower in the hierarchy — discord.py's "
+        "Role.__lt__ rule, verified in Post #5179)."
+    ),
+)
+async def comm_discord_roles_list(guild_id: str) -> List[Dict[str, Any]]:
+    return await call_comm_api(
+        "GET", f"/api/v1/discord/guild/{guild_id}/roles",
+    )
+
+
 # --- Info ---
 
 

@@ -7695,7 +7695,7 @@ Used by Business API for document delivery, and directly for notifications.
 ### Sending Messages
 - send_email(to, subject, body, source, template, template_data) — Send email
 - send_telegram(message, chat_id, to) — Send Telegram message. Use 'to' for name-based sending (e.g. to="sabrina")
-- send_message(channel, to, subject, body, source) — Unified send (email or telegram)
+- send_message(channel, to, subject, body, source) — Unified send (email|telegram|discord|whatsapp)
 - notify_human(message) — Quick Telegram notification to admin
 
 ### Interactive
@@ -7977,13 +7977,21 @@ async def comm_send_telegram_document(
     description="""Send a message via any channel (unified endpoint).
 
     Args:
-        channel: "email" | "telegram" | "discord"
-        to: Recipient — email address, Telegram chat_id, or Discord
-            user-id (snowflake, numeric string). For Discord the
-            Arkturian-bot must share at least one guild with the
-            recipient (Alex's user-id is `897121650959581244`).
-        body: Message body (Markdown-rendered on Discord/Telegram)
-        source: Source identity (default: "arkturian")
+        channel: "email" | "telegram" | "discord" | "whatsapp"
+        to: Recipient — email address, Telegram chat_id, Discord user-id
+            (snowflake, numeric string), or E.164 phone (`+<country><number>`)
+            for WhatsApp. For Discord the Arkturian-bot must share at least
+            one guild with the recipient (Alex's user-id is
+            `897121650959581244`). For WhatsApp use source="whatsapp"
+            (account_id wa-main is bound to it); V1 is text-only, no
+            attachments or groups — the upstream whatsapp-api 422s them.
+            Also note: V1 can only route from WhatsApp-side absenders if
+            the sender resolves to a stable phone (unknown LID-only ids
+            get stored but not dispatched).
+        body: Message body (Markdown-rendered on Discord/Telegram; WhatsApp
+            cap is 4096 chars, rate-limit is 12 messages/minute).
+        source: Source identity (default: "arkturian"; for WhatsApp use
+            source="whatsapp")
         subject: Email subject (required for email, ignored otherwise)
         template: Optional template name
         template_data: Optional template rendering data
@@ -7991,7 +7999,8 @@ async def comm_send_telegram_document(
             {"url": "...", "filename": "...", "content_type": "..."}
             (server-side fetch) or {"data": "<base64>", "filename": "...",
             "content_type": "..."} (inline). For Discord: 10 files per
-            message, 20 MiB per file, 24 MiB combined.
+            message, 20 MiB per file, 24 MiB combined. Not supported for
+            WhatsApp in V1 — attachments will cause the send to fail.
     """,
 )
 async def comm_send_message(
@@ -8022,6 +8031,70 @@ async def comm_send_message(
     if attachments:
         json_body["attachments"] = attachments
     return await call_comm_api("POST", "/api/v1/send", json_body=json_body)
+
+
+# --- WhatsApp Profilbild (Post #5229 / Issue #2272) ---
+
+
+@comm_mcp.tool(
+    name="whatsapp_set_profile_picture",
+    description="""Set the WhatsApp profile picture of the wa-main account.
+
+    Only autorisierte Owner (apopovic.aut@gmail.com, alex@arkturian.com)
+    plus superadmin / legacy-full-trust dürfen das. Jeder Profilwechsel
+    ist eine explizite Owner-Aktion; eingehende WhatsApp-Nachrichten
+    lösen NIE einen Profilwechsel aus.
+
+    Args:
+        storage_id: Storage-API-ID des Bildes. comm-api holt es serverseitig
+            von api-storage.arkturian.com mit format=jpg (JPEG/PNG only).
+        idempotency_key: Stabile UUID pro Change-Attempt. Beim Retry
+            desselben Attempts: denselben Key wiederverwenden. Bei bewusst
+            neuem Change (A→B→A): neuen Key setzen — sonst würde wa-api
+            die alte Operation replayen und das Bild bliebe B.
+
+    Alternatively: `url: "https://api-storage.arkturian.com/storage/media/..."`
+    statt storage_id.
+
+    Returns: `{id, account_id, status, error, sha256, picture_id,
+    created_at, updated_at}`. `id` = operation_id für den Status-Lookup.
+    Status folgt dem Lifecycle queued → applying → applied | failed.
+
+    Limits: JPEG + PNG, max 5 MiB upload, max 16 Mio decoded Pixel,
+    keine Animation. HEIC/WebP nicht unterstützt (storage-URL mit
+    `?format=jpg` holt JPEG-Konvertierung).
+    """,
+)
+async def comm_whatsapp_set_profile_picture(
+    idempotency_key: str,
+    storage_id: Optional[int] = None,
+    url: Optional[str] = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"idempotency_key": idempotency_key}
+    if storage_id is not None:
+        body["storage_id"] = storage_id
+    if url:
+        body["url"] = url
+    return await call_comm_api("POST", "/api/v1/whatsapp/profile-picture", json_body=body)
+
+
+@comm_mcp.tool(
+    name="whatsapp_get_profile_picture_operation",
+    description="""Get the status of a WhatsApp profile-picture change operation.
+
+    Args:
+        operation_id: ID aus einem früheren whatsapp_set_profile_picture-
+            Call (im `id`-Feld der Response).
+
+    Returns: ProfilePictureResponse mit aktuellem Status (queued |
+    applying | applied | failed). `applied` heißt: wa-api hat die
+    WhatsApp-IQ-result bestätigt bekommen.
+    """,
+)
+async def comm_whatsapp_get_profile_picture_operation(operation_id: str) -> Dict[str, Any]:
+    return await call_comm_api(
+        "GET", f"/api/v1/whatsapp/profile-picture-operations/{operation_id}",
+    )
 
 
 # --- Interventions (Human-in-the-loop) ---

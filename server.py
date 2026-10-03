@@ -7977,13 +7977,21 @@ async def comm_send_telegram_document(
     description="""Send a message via any channel (unified endpoint).
 
     Args:
-        channel: "email" or "telegram"
-        to: Recipient (email address or Telegram chat_id)
-        body: Message body
+        channel: "email" | "telegram" | "discord"
+        to: Recipient — email address, Telegram chat_id, or Discord
+            user-id (snowflake, numeric string). For Discord the
+            Arkturian-bot must share at least one guild with the
+            recipient (Alex's user-id is `897121650959581244`).
+        body: Message body (Markdown-rendered on Discord/Telegram)
         source: Source identity (default: "arkturian")
-        subject: Email subject (required for email, ignored for telegram)
+        subject: Email subject (required for email, ignored otherwise)
         template: Optional template name
         template_data: Optional template rendering data
+        attachments: Optional list of files. Each entry carries one of:
+            {"url": "...", "filename": "...", "content_type": "..."}
+            (server-side fetch) or {"data": "<base64>", "filename": "...",
+            "content_type": "..."} (inline). For Discord: 10 files per
+            message, 20 MiB per file, 24 MiB combined.
     """,
 )
 async def comm_send_message(
@@ -7995,6 +8003,7 @@ async def comm_send_message(
     template: Optional[str] = None,
     template_data: Optional[Dict[str, Any]] = None,
     bot: Optional[str] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     json_body: Dict[str, Any] = {
         "channel": channel,
@@ -8010,6 +8019,8 @@ async def comm_send_message(
         json_body["template_data"] = template_data
     if bot:
         json_body["bot"] = bot
+    if attachments:
+        json_body["attachments"] = attachments
     return await call_comm_api("POST", "/api/v1/send", json_body=json_body)
 
 

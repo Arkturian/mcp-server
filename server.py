@@ -322,7 +322,8 @@ def _cloud_request_headers() -> Dict[str, str]:
 _STORAGE_SCOPE_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
 _STORAGE_SCOPE_ID_MAX = 120  # storage-api: ID-Teil eines Scopes
 # Endpunkte, die ein neues Objekt anlegen und `grant_scope` annehmen
-# (storage-api 08b3767). upload-chunk nimmt ihn nicht an.
+# (storage-api 08b3767). upload-chunk ruft _fetch_json direkt und setzt ihn
+# selbst ueber _with_grant_scope.
 _STORAGE_SCOPE_QUERY = {"/storage/upload-ticket"}
 _STORAGE_SCOPE_BODY = {"/storage/fetch"}
 
@@ -1305,7 +1306,7 @@ async def storage_assets_upload_chunked(
         "POST",
         f"{STORAGE_API_BASE}/storage/upload-chunk",
         headers={"X-API-KEY": STORAGE_API_KEY, "Content-Type": "text/plain"},
-        params=params,
+        params=_with_grant_scope(params),
         content=chunk_base64,
     )
 

@@ -135,3 +135,17 @@ def test_multipart_upload_bekommt_scope(monkeypatch):
     finally:
         _zurueck(t)
     assert gesendet["grant_scope"] == "cloud-session-x:" + "Förderungen".encode().hex()
+
+
+def test_stueck_upload_bekommt_scope(monkeypatch):
+    import server
+    calls = []
+    monkeypatch.setattr(server, "_fetch_json", _fake_fetch(calls))
+    t = _als("Cloud", True)
+    try:
+        asyncio.run(server.storage_assets_upload_chunked(
+            upload_id="u1", index=0, total_chunks=1, filename="a.txt", chunk_base64="YWJj"))
+    finally:
+        _zurueck(t)
+    assert calls[0][0].endswith("/storage/upload-chunk")
+    assert calls[0][1]["params"]["grant_scope"] == "cloud-session:Cloud"

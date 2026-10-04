@@ -10517,8 +10517,8 @@ async def issue_create_structured(
     name="list",
     description="""List issues with optional filters. Caller's tenant is auto-applied.
 
-    Filters (all optional): status (open|in_progress|fixed|deferred|closed|
-    duplicate|wontfix), severity (critical|major|minor|cosmetic), component,
+    Filters (all optional): status (open|in_progress|blocked|deferred|fixed|
+    closed|duplicate|wontfix), severity (critical|major|minor|cosmetic), component,
     assignee, goal_id (filter to issues under a specific parent Goal),
     q (full-text search across title+description), limit (default 20,
     max 200), offset.
@@ -10564,6 +10564,23 @@ async def issue_get(id: int) -> Dict[str, Any]:
     Updatable: title, description, severity, status, component, tags (list),
     file_pointer, assignee, duplicate_of, goal_id (link/unlink parent Goal),
     metadata_json.
+
+    status — what each value does to dispatch and escalation:
+      open / in_progress  live work; dispatched, rotated by the stall sweep,
+                          escalated without progress (comment = progress).
+      blocked             WAITING ON SOMEONE (a human, another agent, a delivery).
+                          Set it while the issue is active: frees your slot, no
+                          re-dispatch, no escalation, stays visible. Put the
+                          wait condition at the top of the description.
+                          Resume with status="in_progress". Nothing resumes it
+                          automatically.
+      deferred            your own choice to park low-priority work (no
+                          external blocker). Same effect on dispatch.
+      fixed/closed/wontfix/duplicate  terminal — use the `resolve` tool;
+                          PATCH into a terminal state without a summary → 422.
+
+    The Work-Board (`set_status` waiting) does NOT change the issue; the
+    dispatcher only reads the issue status. Waiting → set both.
 
     Tenant-isolation: only the issue's tenant can update; cross-tenant → 404.
     """,

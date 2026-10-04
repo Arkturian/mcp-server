@@ -8246,6 +8246,97 @@ async def comm_contacts_get(
     return await call_comm_api("GET", f"/api/v1/contacts/{contact_id}")
 
 
+# --- Address Book (Alex' private iCloud-Kontakte) ---
+
+
+@comm_mcp.tool(
+    name="addressbook_search",
+    description="""Durchsuche Alex' privates Adressbuch (iCloud-Kontakte).
+
+    Owner-scoped und zweistufig gegated: nur freigegebene Agenten
+    (Allowlist in comm-api) kommen durch. Fremde Agenten bekommen 403.
+
+    Match über drei Pfade:
+      * Name LIKE %q% (fuzzy, display_name)
+      * Email LIKE %q%
+      * Phone-last-7-digits (nur wenn q mindestens 7 Ziffern enthält —
+        kürzere Ziffernfolgen matchen sonst halb Österreich)
+
+    Mindestlänge q: 2 Zeichen. Harte Obergrenze: 50 Treffer pro Call.
+    Antwort pro Treffer enthält display_name, phones (E.164 + raw),
+    emails und optional note.
+
+    Nutzen: Wenn Alex sagt „schick X eine Nachricht" oder „welche Nummer
+    hat Y?", schlag hier nach bevor du Mail/Telegram/WhatsApp-Routing
+    entscheidest. KEIN Massen-Export, kein list-all — gezielte Suche nur.
+    """,
+)
+async def comm_addressbook_search(
+    q: str,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    params = _clean_params(q=q, limit=limit)
+    return await call_comm_api("GET", "/api/v1/addressbook/search", params=params)
+
+
+@comm_mcp.tool(
+    name="addressbook_get",
+    description="""Hole einen einzelnen Adressbuch-Kontakt per ID.
+
+    Owner-scoped — gleiche Allowlist wie addressbook_search.
+    Antwort: {id, display_name, note, phones[], emails[]}.
+
+    Typisch nach einem addressbook_search-Treffer, wenn du mehr Details
+    (zB Notiz) brauchst.
+    """,
+)
+async def comm_addressbook_get(contact_id: int) -> Dict[str, Any]:
+    return await call_comm_api("GET", f"/api/v1/addressbook/{contact_id}")
+
+
+@comm_mcp.tool(
+    name="addressbook_count",
+    description="""Anzahl der Kontakte im Adressbuch für den Anrufer-Owner.
+
+    Owner-scoped. Nützlich als Smoke-Test oder um zu prüfen ob ein neuer
+    Import durch ist, bevor man gezielte Suchen abfeuert.
+
+    Antwort: {count: int, owner_email: str}.
+    """,
+)
+async def comm_addressbook_count() -> Dict[str, Any]:
+    return await call_comm_api("GET", "/api/v1/addressbook/count")
+
+
+@comm_mcp.tool(
+    name="addressbook_import_vcard",
+    description="""Importiere eine vCard-Datei aus Storage ins Adressbuch.
+
+    Owner-scoped. Idempotent: zweiter Import derselben Datei erzeugt
+    keine Dubletten (Match über UNIQUE(owner, vcard_uid) primär,
+    UNIQUE(owner, fingerprint) sekundär). Setzt die Storage-Datei
+    anschließend auf is_public=false und verifiziert via echtem GET.
+
+    Parameter:
+      * storage_id (int, >0): die Storage-ID der vCard-Datei
+      * make_private_after (bool, default True): Housekeeping nach Import
+
+    Antwort: {created, updated, skipped, total, errors[], storage_id,
+    storage_is_public_after}. storage_is_public_after=False bestätigt,
+    dass die Datei nach dem Import nicht mehr anonym abrufbar ist.
+    """,
+)
+async def comm_addressbook_import_vcard(
+    storage_id: int,
+    make_private_after: bool = True,
+) -> Dict[str, Any]:
+    body = {"storage_id": storage_id, "make_private_after": make_private_after}
+    return await call_comm_api("POST", "/api/v1/addressbook/import_vcard", json_body=body)
+
+
+# --- Incoming messages / Telegram files ---
+
+
 @comm_mcp.tool(
     name="incoming_messages",
     description="""List incoming Telegram messages received by the bot.

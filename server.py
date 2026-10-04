@@ -18,7 +18,9 @@ Exposes MCP endpoint groups over HTTP/SSE with per-tenant isolation:
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import logging
 import os
 import time
@@ -317,6 +319,51 @@ def _cloud_request_headers() -> Dict[str, str]:
     return headers
 
 
+_STORAGE_SCOPE_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
+_STORAGE_SCOPE_ID_MAX = 120  # storage-api: ID-Teil eines Scopes
+# Endpunkte, die ein neues Objekt anlegen und `grant_scope` annehmen
+# (storage-api 08b3767). upload-chunk nimmt ihn nicht an.
+_STORAGE_SCOPE_QUERY = {"/storage/upload-ticket"}
+_STORAGE_SCOPE_BODY = {"/storage/fetch"}
+
+
+def storage_grant_scope_for(agent: str) -> str:
+    """Freigabe-Scope fuer die Verlaufs-Medien eines Agenten (#5250).
+
+    Konformer Name -> `cloud-session:<Name>`. Sonst (Leerzeichen, Umlaute,
+    Klammern) die UTF-8-Bytes als Hex unter eigener Art, damit Storage nie
+    mit 422 abweist und kein echter Name kollidieren kann. Gleiche Abbildung
+    wie in cloud-api (media-urls). Laenger als 120 Zeichen -> sha256.
+    """
+    if not agent:
+        return ""
+    if len(agent) <= _STORAGE_SCOPE_ID_MAX and _STORAGE_SCOPE_ID_RE.fullmatch(agent):
+        return f"cloud-session:{agent}"
+    roh = agent.encode("utf-8")
+    if 2 * len(roh) <= _STORAGE_SCOPE_ID_MAX:
+        return f"cloud-session-x:{roh.hex()}"
+    # Zu lang fuer Hex: Hash. Das `h` ist kein Hex-Zeichen, faellt also nie
+    # mit einer Hex-Kodierung zusammen.
+    return f"cloud-session-x:h{hashlib.sha256(roh).hexdigest()}"
+
+
+def _storage_grant_scope() -> str:
+    """Scope aus der geprüften Gateway-Identität, nie aus Werkzeug-Argumenten."""
+    from auth import current_caller_verified_agent
+
+    return storage_grant_scope_for(current_caller_verified_agent())
+
+
+def _with_grant_scope(fields: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Kopie von `fields` mit dem Scope des Aufrufers; fremde Werte fliegen raus."""
+    out = dict(fields or {})
+    out.pop("grant_scope", None)
+    scope = _storage_grant_scope()
+    if scope:
+        out["grant_scope"] = scope
+    return out
+
+
 async def call_storage_api(
     method: str,
     endpoint: str,
@@ -324,6 +371,10 @@ async def call_storage_api(
     params: Optional[Dict[str, Any]] = None,
     json_body: Optional[Dict[str, Any]] = None,
 ) -> Any:
+    if endpoint in _STORAGE_SCOPE_QUERY:
+        params = _with_grant_scope(params)
+    if endpoint in _STORAGE_SCOPE_BODY:
+        json_body = _with_grant_scope(json_body)
     # storage-api expects X-API-KEY — caller's JWT not applicable here.
     return await _fetch_json(
         method,
@@ -344,7 +395,7 @@ async def call_storage_upload(
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
             files = {"file": (filename, file_bytes)}
-            data = form_fields or {}
+            data = _with_grant_scope(form_fields)
             response = await client.post(
                 f"{STORAGE_API_BASE}/storage/upload",
                 headers={"X-API-KEY": STORAGE_API_KEY},

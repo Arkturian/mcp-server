@@ -47,6 +47,11 @@ _current_jwt: contextvars.ContextVar[str] = contextvars.ContextVar(
 _current_agent_name: contextvars.ContextVar[str] = contextvars.ContextVar(
     "current_caller_agent", default=""
 )
+# Nur fuer Tokens mit type=agent gesetzt. Ein Benutzer-Token traegt im
+# Namensfeld seinen sub, das ist kein Agent (Storage-Freigabe-Scope, #5250).
+_current_is_agent: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "current_caller_is_agent", default=False
+)
 
 
 def current_caller_jwt() -> str:
@@ -59,6 +64,11 @@ def current_caller_jwt() -> str:
 def current_caller_agent_name() -> str:
     """Return the agent_name claim of the current caller, or empty string."""
     return _current_agent_name.get()
+
+
+def current_caller_verified_agent() -> str:
+    """Name des Agenten, wenn das geprüfte JWT ein Agenten-Token ist, sonst ""."""
+    return _current_agent_name.get() if _current_is_agent.get() else ""
 
 logger = logging.getLogger("mcp-auth")
 
@@ -415,6 +425,9 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             # response (no token-leak between requests).
             _jwt_token = _current_jwt.set(token)
             _name_token = _current_agent_name.set(agent.name)
+            _is_agent_token = _current_is_agent.set(
+                claims.get("type") == "agent" and bool(claims.get("agent_name"))
+            )
 
             # Permission check: server-level + tool-level
             mcp_server = _extract_mcp_server_from_path(request.url.path)
@@ -488,6 +501,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             try:
                 _current_jwt.reset(_jwt_token)
                 _current_agent_name.reset(_name_token)
+                _current_is_agent.reset(_is_agent_token)
             except (LookupError, NameError):
                 pass
 

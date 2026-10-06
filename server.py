@@ -715,6 +715,7 @@ async def call_comm_api(
     params: Optional[Dict[str, Any]] = None,
     json_body: Optional[Dict[str, Any]] = None,
     timeout: float = 120.0,
+    approval_token: Optional[str] = None,
 ) -> Any:
     """Call Comm API for email, telegram, and unified messaging.
 
@@ -723,10 +724,14 @@ async def call_comm_api(
     or user identity. Falls back to the static X-API-KEY when no caller
     JWT is in context (background jobs, legacy direct callers).
     """
+    headers = _caller_auth_headers(api_key_fallback=COMM_API_KEY)
+    if approval_token:
+        # Einmal-Freigabe (#5245): Comm loest sie vor dem geschuetzten Aufruf ein.
+        headers = {**headers, "X-Approval-Token": approval_token.strip()}
     return await _fetch_json(
         method,
         f"{COMM_API_BASE}{endpoint}",
-        headers=_caller_auth_headers(api_key_fallback=COMM_API_KEY),
+        headers=headers,
         params=params,
         json_body=json_body,
         timeout=timeout,
@@ -8321,14 +8326,23 @@ async def comm_contacts_get(
     Nutzen: Wenn Alex sagt „schick X eine Nachricht" oder „welche Nummer
     hat Y?", schlag hier nach bevor du Mail/Telegram/WhatsApp-Routing
     entscheidest. KEIN Massen-Export, kein list-all — gezielte Suche nur.
+
+    Freigabe (#5245): `403 needs_approval` heißt, der Besitzer bekommt eine
+    Freigabe-Karte. Beende dann deinen Zug; der Bescheid kommt per IACP.
+    Bei „einmal erlaubt“ enthält er ein Token — ruf das Werkzeug dann genau
+    einmal erneut mit `approval_token=<Token>` auf (gilt 5 Minuten). Bei
+    „immer“ einfach erneut aufrufen, bei „nie“/„abgelehnt“ nicht erneut.
+    Gilt genauso für addressbook_get/_count/_import_vcard.
     """,
 )
 async def comm_addressbook_search(
     q: str,
     limit: int = 20,
+    approval_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     params = _clean_params(q=q, limit=limit)
-    return await call_comm_api("GET", "/api/v1/addressbook/search", params=params)
+    return await call_comm_api("GET", "/api/v1/addressbook/search", params=params,
+                               approval_token=approval_token)
 
 
 @comm_mcp.tool(
@@ -8342,8 +8356,8 @@ async def comm_addressbook_search(
     (zB Notiz) brauchst.
     """,
 )
-async def comm_addressbook_get(contact_id: int) -> Dict[str, Any]:
-    return await call_comm_api("GET", f"/api/v1/addressbook/{contact_id}")
+async def comm_addressbook_get(contact_id: int, approval_token: Optional[str] = None) -> Dict[str, Any]:
+    return await call_comm_api("GET", f"/api/v1/addressbook/{contact_id}", approval_token=approval_token)
 
 
 @comm_mcp.tool(
@@ -8356,8 +8370,8 @@ async def comm_addressbook_get(contact_id: int) -> Dict[str, Any]:
     Antwort: {count: int, owner_email: str}.
     """,
 )
-async def comm_addressbook_count() -> Dict[str, Any]:
-    return await call_comm_api("GET", "/api/v1/addressbook/count")
+async def comm_addressbook_count(approval_token: Optional[str] = None) -> Dict[str, Any]:
+    return await call_comm_api("GET", "/api/v1/addressbook/count", approval_token=approval_token)
 
 
 @comm_mcp.tool(
@@ -8381,9 +8395,11 @@ async def comm_addressbook_count() -> Dict[str, Any]:
 async def comm_addressbook_import_vcard(
     storage_id: int,
     make_private_after: bool = True,
+    approval_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {"storage_id": storage_id, "make_private_after": make_private_after}
-    return await call_comm_api("POST", "/api/v1/addressbook/import_vcard", json_body=body)
+    return await call_comm_api("POST", "/api/v1/addressbook/import_vcard", json_body=body,
+                               approval_token=approval_token)
 
 
 # --- Incoming messages / Telegram files ---

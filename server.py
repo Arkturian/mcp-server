@@ -8725,6 +8725,32 @@ async def comm_message_history(
 
 
 @comm_mcp.tool(
+    name="message_status",
+    description=(
+        "Autorisierter Zustell-Status einer gesendeten Nachricht (Post #5291, "
+        "WhatsApp/Figma 2026-10-06). Liefert comm_status + transport-Details "
+        "(status/error/timestamps/read_status für WhatsApp aus wa-api 1.4.0) "
+        "+ provenance-Marker (agent/owner/unknown). "
+        "\n\n"
+        "Auth: Caller muss ENTWEDER der sendende Agent sein "
+        "(agent_session == requester_agent) ODER menschlicher Owner der "
+        "Source-Mailbox. Alle anderen Fälle → 404 message_not_found "
+        "(keine Enumeration via 403). "
+        "\n\n"
+        "Historische Rows ohne belegten requester_agent sind nur über "
+        "menschlichen Owner-Zugang lesbar (provenance=unknown). "
+        "\n\n"
+        "Response enthält KEIN body/recipient/sender/subject — nur Status "
+        "+ Zustell-Phasen-Timestamps. Verwendung: Agent prüft nach eigenem "
+        "Send ob die Nachricht tatsächlich delivered/read ist, statt sich "
+        "auf das sofortige HTTP-202-'queued' zu verlassen."
+    ),
+)
+async def comm_message_status(message_id: str) -> Dict[str, Any]:
+    return await call_comm_api("GET", f"/api/v1/messages/{message_id}/status")
+
+
+@comm_mcp.tool(
     name="service_health",
     description="Health check for Comm API.",
 )

@@ -8040,24 +8040,39 @@ async def comm_send_telegram_document(
             for WhatsApp. For Discord the Arkturian-bot must share at least
             one guild with the recipient (Alex's user-id is
             `897121650959581244`). For WhatsApp use source="whatsapp"
-            (account_id wa-main is bound to it); V1 is text-only, no
-            attachments or groups — the upstream whatsapp-api 422s them.
-            Also note: V1 can only route from WhatsApp-side absenders if
-            the sender resolves to a stable phone (unknown LID-only ids
+            (account_id wa-main is bound to it).
+            Also note: WhatsApp can only route from WhatsApp-side absenders
+            if the sender resolves to a stable phone (unknown LID-only ids
             get stored but not dispatched).
         body: Message body (Markdown-rendered on Discord/Telegram; WhatsApp
-            cap is 4096 chars, rate-limit is 12 messages/minute).
+            text send cap is 4096 chars, rate-limit is 12 messages/minute).
+            For WhatsApp-media (image/document) the body is used as caption,
+            max 1024 chars including the agent-header line.
         source: Source identity (default: "arkturian"; for WhatsApp use
             source="whatsapp")
         subject: Email subject (required for email, ignored otherwise)
         template: Optional template name
         template_data: Optional template rendering data
-        attachments: Optional list of files. Each entry carries one of:
-            {"url": "...", "filename": "...", "content_type": "..."}
-            (server-side fetch) or {"data": "<base64>", "filename": "...",
-            "content_type": "..."} (inline). For Discord: 10 files per
-            message, 20 MiB per file, 24 MiB combined. Not supported for
-            WhatsApp in V1 — attachments will cause the send to fail.
+        attachments: Optional list of files. Each entry has EXACTLY ONE
+            source: `{"storage_id": 129805, "filename": "...", "content_type":
+            "..."}` (private storage, scope-gebunden an den aufrufenden
+            Agent via storage-signer), `{"url": "...", "filename": "...",
+            "content_type": "..."}` (public URL, server-side fetch —
+            Discord/Email/Telegram only, NOT WhatsApp), or `{"data":
+            "<base64>", "filename": "...", "content_type": "..."}`
+            (inline bytes).
+            — **Discord**: up to 10 files per message, 20 MiB per file,
+              24 MiB combined (DM-cap without Nitro).
+            — **WhatsApp**: EXACTLY ONE attachment per send call (3 Bilder
+              = 3 separate send_message calls). Only `storage_id` or
+              `data` — rohe `url` wird abgelehnt (SSRF-Schutz, private
+              Caller-Bindung erzwingen). Image → `image/png` oder
+              `image/jpeg` bis 20 MiB. Document → `application/pdf` bis
+              20 MiB. Caption max 1024 chars inkl. `_von <Agent>_`-Header.
+              Returned status ist `queued` nach HTTP 202, nicht `sent` —
+              „queued ist keine Zustellung". `delivered`/`read` kommt
+              asynchron via message.status-Webhook, abfragbar via
+              message_status-Tool.
     """,
 )
 async def comm_send_message(

@@ -838,7 +838,10 @@ async def storage_assets_list(
     description="""Get complete storage object with AI-analyzed metadata.
     
     Returns comprehensive data including:
-    - Basic info: id, title, file_url, mime_type, dimensions
+    - Basic info: id, title, file_url, share_url, mime_type, dimensions
+    `share_url` (https://files.arkturian.com/<id>/<name>) is the readable link to hand to people
+    outside (mail, customer, supplier). It is set only for public objects; null means the file is
+    not public and must not be sent out that way.
     - AI fields: ai_title, ai_tags, ai_safety_rating, ai_collections
     - ai_context_metadata: Full structured analysis (product_analysis, visual_analysis, layout_intelligence, semantic_properties)
     
@@ -1042,6 +1045,9 @@ async def storage_assets_update_embedding_text(
     - ai_mode: AI analysis level — 'none', 'safety' (default), 'vision', 'full'
 
     Returns the created storage object with id, file_url, thumbnail_url, ai_title, etc.
+    `share_url` (https://files.arkturian.com/<id>/<name>) is the readable link to hand to people
+    outside (mail, customer, supplier). It is set only for public objects; null means the file is
+    not public and must not be sent out that way.
 
     Example: Upload a small file
       assets_upload(file_base64="iVBORw0KGgo...", filename="logo.png", context="branding")
@@ -1152,6 +1158,9 @@ async def storage_assets_upload(
     - ai_mode: none | safety | vision | full (default none — AI costs money)
 
     Returns the created storage object with id, file_url, thumbnail_url, etc.
+    `share_url` (https://files.arkturian.com/<id>/<name>) is the readable link to hand to people
+    outside (mail, customer, supplier). It is set only for public objects; null means the file is
+    not public and must not be sent out that way.
     """,
 )
 async def storage_assets_upload_file(
@@ -1333,6 +1342,9 @@ async def storage_assets_upload_chunked(
     - analyze: Trigger AI analysis (default true)
 
     Returns the created storage object with id, file_url, thumbnail_url, etc.
+    `share_url` (https://files.arkturian.com/<id>/<name>) is the readable link to hand to people
+    outside (mail, customer, supplier). It is set only for public objects; null means the file is
+    not public and must not be sent out that way.
 
     Example: Import an image from a URL
       assets_fetch(url="https://example.com/photo.jpg", context="imported", collection_id="web_imports")

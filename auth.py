@@ -518,9 +518,9 @@ def get_agent_headers(request: Request) -> dict[str, str]:
     agent: AgentContext = getattr(request.state, "agent", None) or AgentContext()
     if not agent.authenticated:
         return {}
-    return {
-        "X-Agent-Name": agent.name,
+    from agent_identity_header import set_agent_name
+    return set_agent_name({
         "X-Agent-Role": agent.role,
         "X-Agent-Department": agent.department,
         "X-Agent-Tenant": agent.tenant or "",
-    }
+    }, agent.name)

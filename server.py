@@ -31,6 +31,8 @@ from typing import Any, Dict, List, Optional
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
+
+from agent_identity_header import set_agent_name
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from mcp.server.fastmcp import FastMCP
@@ -303,7 +305,9 @@ def _caller_auth_headers(api_key_fallback: str = "") -> Dict[str, str]:
         # as from_session: that value is only an untrusted routing claim.
         agent_name = current_caller_agent_name()
         if agent_name:
-            headers["X-Agent-Name"] = agent_name
+            # Nicht-ASCII-Namen prozentkodiert + markiert (#2402): httpx wirft
+            # sonst vor dem Versand, der Agent hat kein einziges Werkzeug.
+            set_agent_name(headers, agent_name)
     elif api_key_fallback:
         headers["X-API-KEY"] = api_key_fallback
     return headers
@@ -6018,7 +6022,7 @@ async def ai_jev(
         extra["Authorization"] = f"Bearer {jwt_str}"
     agent = current_caller_agent_name()
     if agent:
-        extra["X-Agent-Name"] = agent
+        set_agent_name(extra, agent)
     return await call_ai_api("POST", "/ai/jev", json_body=body, extra_headers=extra or None)
 
 

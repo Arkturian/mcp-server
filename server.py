@@ -10247,7 +10247,9 @@ async def cloud_session_lifecycle(session_name: str) -> Dict[str, Any]:
         "ws_grace_seconds (int, delay after WS disconnect before cleanup), "
         "wipe_on_cleanup (bool, delete history on cleanup), "
         "max_idle_minutes (int, 0=never), auto_restart (bool), "
-        "effort (str: high/low), model (str)."
+        "effort (str: high/low), model (str), "
+        "parent (str: name of the parent agent, one level only; \"\" removes it). "
+        "Changing another agent needs its owner, an admin, or sessions:manage within the same tenant."
     ),
 )
 async def cloud_session_config(
@@ -10259,6 +10261,7 @@ async def cloud_session_config(
     auto_restart: bool | None = None,
     effort: str | None = None,
     model: str | None = None,
+    parent: str | None = None,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {}
     if ephemeral is not None:
@@ -10275,6 +10278,8 @@ async def cloud_session_config(
         body["effort"] = effort
     if model is not None:
         body["model"] = model
+    if parent is not None:
+        body["parent"] = parent   # cloud-api prueft: eine Ebene, keine Zyklen, Eltern existiert
     return await call_cloud_api("PATCH", f"/api/sessions/{session_name}/config", json_body=body)
 
 

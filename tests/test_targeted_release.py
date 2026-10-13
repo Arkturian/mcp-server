@@ -54,12 +54,12 @@ def test_dispatch_pins_pushed_head_without_promoting_main(release_repo, skip_bui
     repo, remote, capture, build, run = release_repo
     head = git(repo, 'rev-parse', 'HEAD')
     refs = git(remote, 'show-ref')
-    args = ['--target', 'arkserver'] + (['--no-build'] if skip_build else [])
+    args = ['--target', 'arkturian'] + (['--no-build'] if skip_build else [])
     result = run(*args)
     assert result.returncode == 0, result.stderr
     assert capture.read_text().splitlines() == [
         'workflow', 'run', 'deploy.yml', '--ref', 'feature/reviewed',
-        '--field', 'target=arkserver', '--field', 'revision=' + head,
+        '--field', 'target=arkturian', '--field', 'revision=' + head,
     ]
     assert build.exists() is not skip_build
     assert git(remote, 'show-ref') == refs
@@ -80,7 +80,7 @@ def test_refuses_unreviewable_state_without_dispatch(release_repo, state):
         if state == 'remote_advanced':
             git(repo, 'push', 'origin', 'HEAD')
             git(repo, 'reset', '--hard', old)
-    result = run('--target', 'arkserver')
+    result = run('--target', 'arkturian')
     assert result.returncode != 0
     assert not capture.exists()
     assert not build.exists()

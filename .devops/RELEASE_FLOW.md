@@ -18,7 +18,7 @@ For a reviewed integration branch that must reach only one host, push its clean
 HEAD and run:
 
 ```bash
-./devops release --target arkserver
+./devops release --target arkturian
 ```
 
 This dispatches `deploy.yml` for the current branch, with the expected full SHA,

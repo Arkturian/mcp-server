@@ -15,8 +15,8 @@ on:
       target:
         description: Deployment target
         type: choice
-        options: [arkserver, pdrei, all]
-        default: arkserver
+        options: [arkturian, pdrei, all]
+        default: arkturian
         required: true
       revision:
         description: Expected full commit SHA (abort if the selected ref moved)
@@ -25,10 +25,10 @@ on:
 
 jobs:
   # ─────────────────────────────────────────
-  # Production: arkserver — full MCP stack
+  # Production: arkturian — full MCP stack (CI runner: arkserver)
   # ─────────────────────────────────────────
   build-and-deploy:
-    if: github.event_name != 'workflow_dispatch' || inputs.target == 'arkserver' || inputs.target == 'all'
+    if: github.event_name != 'workflow_dispatch' || inputs.target == 'arkturian' || inputs.target == 'all'
     runs-on: [self-hosted, linux, arkserver]
 
     steps:

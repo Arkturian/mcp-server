@@ -12,7 +12,7 @@ BUILD_SCRIPT="$SCRIPT_DIR/build-local.sh"
 
 usage() {
   cat <<'USAGE'
-Usage: release.sh [--no-build] [--target arkserver|pdrei|all]
+Usage: release.sh [--no-build] [--target arkturian|pdrei|all]
 
 Fast-forwards main from dev, pushes to origin, and
 triggers the GitHub Actions deployment workflow. By default the local build
@@ -36,11 +36,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --target)
       if [[ $# -lt 2 ]]; then
-        echo "Error: --target requires arkserver, pdrei or all." >&2
+        echo "Error: --target requires arkturian, pdrei or all." >&2
         exit 1
       fi
       release_target="$2"
-      case "$release_target" in arkserver|pdrei|all) ;; *) usage; exit 1;; esac
+      case "$release_target" in arkturian|pdrei|all) ;; *) usage; exit 1;; esac
       shift 2
       ;;
     -h|--help)

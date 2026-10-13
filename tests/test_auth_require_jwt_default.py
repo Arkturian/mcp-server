@@ -5,30 +5,31 @@ lieferte HTTP 200 und schrieb wirklich — AUTH_REQUIRE_JWT stand per Default
 auf "false", und der Content-Helfer faellt ohne JWT auf den Service-Key
 zurueck. Der Default gehoert auf "true".
 """
-import importlib
 import os
+import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import pytest
 
 
-def _reload(monkeypatch, value):
+@pytest.mark.parametrize("value, expected", [(None, "True"), ("false", "False"), ("true", "True")])
+def test_require_jwt_at_startup(value, expected):
+    # Exercise import-time configuration in a fresh interpreter. Replacing
+    # sys.modules["auth"] in the test runner splits its caller ContextVars from
+    # references held by already-collected middleware/tool tests (#2454).
+    env = os.environ.copy()
     if value is None:
-        monkeypatch.delenv("AUTH_REQUIRE_JWT", raising=False)
+        env.pop("AUTH_REQUIRE_JWT", None)
     else:
-        monkeypatch.setenv("AUTH_REQUIRE_JWT", value)
-    sys.modules.pop("auth", None)
-    return importlib.import_module("auth")
-
-
-def test_default_is_strict(monkeypatch):
-    assert _reload(monkeypatch, None).AUTH_REQUIRE_JWT is True
-
-
-def test_explicit_false_still_possible(monkeypatch):
-    assert _reload(monkeypatch, "false").AUTH_REQUIRE_JWT is False
-
-
-def test_explicit_true(monkeypatch):
-    assert _reload(monkeypatch, "true").AUTH_REQUIRE_JWT is True
+        env["AUTH_REQUIRE_JWT"] = value
+    result = subprocess.run(
+        [sys.executable, "-c", "import auth; print(auth.AUTH_REQUIRE_JWT)"],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=15,
+    )
+    assert result.stdout.strip() == expected

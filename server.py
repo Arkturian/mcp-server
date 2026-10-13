@@ -26,11 +26,12 @@ import os
 import time
 import base64
 from contextlib import AsyncExitStack
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
+from pydantic import Field
 
 from agent_identity_header import set_agent_name
 from fastapi.middleware.cors import CORSMiddleware
@@ -8119,6 +8120,55 @@ async def comm_send_message(
     if attachments:
         json_body["attachments"] = attachments
     return await call_comm_api("POST", "/api/v1/send", json_body=json_body)
+
+
+# --- WhatsApp group text (Issue #2440) ---
+
+
+@comm_mcp.tool(
+    name="whatsapp_send_group_message",
+    description="""Send explicitly requested text to an authorized WhatsApp group.
+
+    group_token: opaque grp-... token from a received group message; never a JID.
+    body: message text, 1..4096 characters.
+    request_key: caller-created unique key for THIS send intent (8..200 printable
+        ASCII characters; a UUID is recommended). Keep the SAME key and payload
+        after a timeout or retry. A deliberately new message uses a NEW key,
+        even if its text is identical. Same key with changed text/quote fails.
+    in_reply_to: optional wa-api inbox message.id from the SAME group; not the
+        protocol ID, queue ID, attachment ID or group token.
+    attachments: unsupported; a non-empty list is rejected without sending text.
+
+    Comm derives owner, agent, source and account from the authenticated caller
+    and server configuration and checks the per-group send allowlist. This tool
+    neither changes permissions nor enables automatic replies to observer groups.
+    A queued/accepted response is NOT delivery. Group delivered/read means at
+    least one participant, not everyone. An *_acceptance_unknown error means the
+    first send may have been accepted: do not create a new key to force a resend.
+    """,
+)
+async def comm_whatsapp_send_group_message(
+    group_token: Annotated[str, Field(min_length=4, max_length=32, pattern=r"^grp-[A-Z0-9]+$")],
+    body: Annotated[str, Field(min_length=1, max_length=4096)],
+    request_key: Annotated[str, Field(min_length=8, max_length=200, pattern=r"^[\x21-\x7e]+$")],
+    in_reply_to: Optional[Annotated[str, Field(max_length=128)]] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    from auth import current_caller_jwt, current_caller_verified_agent
+
+    # This agent-only route must never use call_comm_api's legacy key fallback.
+    if not current_caller_jwt() or not current_caller_verified_agent():
+        raise ValueError("agent_identity_required")
+    if attachments:
+        raise ValueError("group_media_not_supported")
+    payload: Dict[str, Any] = {
+        "group_token": group_token,
+        "body": body,
+        "request_key": request_key,
+    }
+    if in_reply_to is not None:
+        payload["in_reply_to"] = in_reply_to
+    return await call_comm_api("POST", "/api/v1/whatsapp/group-send", json_body=payload)
 
 
 # --- WhatsApp Profilbild (Post #5229 / Issue #2272) ---

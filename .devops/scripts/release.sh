@@ -12,7 +12,7 @@ BUILD_SCRIPT="$SCRIPT_DIR/build-local.sh"
 
 usage() {
   cat <<'USAGE'
-Usage: release.sh [--no-build]
+Usage: release.sh [--no-build] [--target arkserver|pdrei|all]
 
 Fast-forwards main from dev, pushes to origin, and
 triggers the GitHub Actions deployment workflow. By default the local build
@@ -20,23 +20,35 @@ script runs beforehand.
 
 Options:
   --no-build   Skip running the local build before pushing
+  --target     Dispatch only the named target at this branch's pushed HEAD.
+               Does not promote main. Requires a clean, synchronized branch.
 USAGE
 }
 
 run_build=true
+release_target=""
 
-for arg in "$@"; do
-  case "$arg" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --no-build)
       run_build=false
       shift
+      ;;
+    --target)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --target requires arkserver, pdrei or all." >&2
+        exit 1
+      fi
+      release_target="$2"
+      case "$release_target" in arkserver|pdrei|all) ;; *) usage; exit 1;; esac
+      shift 2
       ;;
     -h|--help)
       usage
       exit 0
       ;;
     *)
-      echo "Unknown argument: $arg" >&2
+      echo "Unknown argument: $1" >&2
       usage
       exit 1
       ;;
@@ -48,6 +60,28 @@ cd "$REPO_ROOT"
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "Error: working tree has uncommitted changes. Please commit or stash them first." >&2
   exit 1
+fi
+
+if [[ -n "$release_target" ]]; then
+  release_branch="$(git symbolic-ref --quiet --short HEAD)" || {
+    echo "Error: targeted release requires a named branch." >&2
+    exit 1
+  }
+  release_revision="$(git rev-parse HEAD)"
+  remote_revision="$(git ls-remote --exit-code origin "refs/heads/$release_branch" | awk '{print $1}')"
+  if [[ "$remote_revision" != "$release_revision" ]]; then
+    echo "Error: push the reviewed branch before a targeted release." >&2
+    exit 1
+  fi
+  if [[ "$run_build" == true ]]; then
+    "$BUILD_SCRIPT"
+  fi
+  # The workflow compares this SHA with its resolved ref before any SSH action.
+  # A concurrent branch update fails closed, rather than deploying other code.
+  gh workflow run deploy.yml --ref "$release_branch" \
+    --field "target=$release_target" --field "revision=$release_revision"
+  echo "Targeted release dispatched: $release_target at $release_revision."
+  exit 0
 fi
 
 printf '\n==> Syncing %s branch\n' "$DEV_BRANCH"

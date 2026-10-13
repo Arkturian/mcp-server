@@ -11,17 +11,37 @@ on:
       - '**.md'
       - 'docs/**'
   workflow_dispatch:
+    inputs:
+      target:
+        description: Deployment target
+        type: choice
+        options: [arkturian, pdrei, all]
+        default: arkturian
+        required: true
+      revision:
+        description: Expected full commit SHA (abort if the selected ref moved)
+        type: string
+        required: true
 
 jobs:
   # ─────────────────────────────────────────
-  # Production: arkserver — full MCP stack
+  # Production: arkturian — full MCP stack (CI runner: arkserver)
   # ─────────────────────────────────────────
   build-and-deploy:
+    if: github.event_name != 'workflow_dispatch' || inputs.target == 'arkturian' || inputs.target == 'all'
     runs-on: [self-hosted, linux, arkserver]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Verify requested revision
+        env:
+          REQUESTED_REVISION: ${{ inputs.revision }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            test "$REQUESTED_REVISION" = "$GITHUB_SHA"
+          fi
 
       # Self-hosted arkserver-Runner (Debian 12, Python 3.11 im System): kein
       # setup-python (laedt fuer Debian nichts herunter) — Abhaengigkeiten in
@@ -30,7 +50,7 @@ jobs:
         run: |
           python3 -m venv .venv
           .venv/bin/pip install -q -r requirements.txt
-          .venv/bin/python -m py_compile auth.py main.py 2>/dev/null || .venv/bin/python -m py_compile auth.py
+          .venv/bin/python -m py_compile auth.py server.py
 
       - name: Guard - private DEPLOY_HOST braucht self-hosted Runner
         run: |
@@ -44,11 +64,14 @@ jobs:
 
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          MCP_DEPLOY_SHA: ${{ github.sha }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
+          envs: MCP_DEPLOY_SHA
           script: |
             set -e
 
@@ -66,10 +89,11 @@ jobs:
 
             cd "$DEPLOY_PATH"
 
-            # Pull latest code from main
-            echo "Fetching latest code..."
-            git fetch origin main
-            git reset --hard origin/main
+            # Deploy exactly the revision checked by this workflow.
+            test "${#MCP_DEPLOY_SHA}" -eq 40
+            case "$MCP_DEPLOY_SHA" in *[!0-9a-f]*) exit 1;; esac
+            git fetch origin "$MCP_DEPLOY_SHA"
+            git reset --hard "$MCP_DEPLOY_SHA"
 
             # Install/update Python dependencies
             echo "Installing dependencies..."
@@ -122,22 +146,32 @@ jobs:
   # Production: pdrei (jascha) — content only
   # ─────────────────────────────────────────
   deploy-pdrei:
+    if: github.event_name != 'workflow_dispatch' || inputs.target == 'pdrei' || inputs.target == 'all'
     runs-on: [self-hosted, linux, arkserver]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Verify requested revision
+        env:
+          REQUESTED_REVISION: ${{ inputs.revision }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            test "$REQUESTED_REVISION" = "$GITHUB_SHA"
+          fi
+
       - name: Deploy to pdrei
         uses: appleboy/ssh-action@v1.0.3
         env:
           CONTENT_API_KEY: ${{ secrets.PDREI_CONTENT_API_KEY }}
+          MCP_DEPLOY_SHA: ${{ github.sha }}
         with:
           host: ${{ secrets.PDREI_DEPLOY_HOST }}
           username: ${{ secrets.PDREI_DEPLOY_USER }}
           key: ${{ secrets.PDREI_DEPLOY_SSH_KEY }}
           port: 22
-          envs: CONTENT_API_KEY
+          envs: CONTENT_API_KEY,MCP_DEPLOY_SHA
           script: |
             set -e
 
@@ -157,10 +191,10 @@ jobs:
 
             cd "$DEPLOY_PATH"
 
-            # Pull latest code from main
-            echo "Fetching latest code..."
-            git fetch origin main
-            git reset --hard origin/main
+            test "${#MCP_DEPLOY_SHA}" -eq 40
+            case "$MCP_DEPLOY_SHA" in *[!0-9a-f]*) exit 1;; esac
+            git fetch origin "$MCP_DEPLOY_SHA"
+            git reset --hard "$MCP_DEPLOY_SHA"
 
             # Setup venv
             if [ ! -d "venv" ]; then

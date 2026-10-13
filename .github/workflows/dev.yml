@@ -6,23 +6,25 @@ on:
       - dev
   pull_request:
     branches:
+      - dev
       - main
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, arkserver]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -r requirements.txt pytest
 
       - name: Syntax check
-        run: python -m py_compile server.py
+        run: .venv/bin/python -m py_compile server.py
+
+      - name: WhatsApp tool contract and caller identity
+        env:
+          MCP_SERVERS: comm
+        run: .venv/bin/python -m pytest -q tests/test_whatsapp_group_send_tool.py tests/test_targeted_release.py test_agent_name_header_sites.py

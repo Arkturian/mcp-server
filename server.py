@@ -8145,6 +8145,8 @@ async def comm_send_message(
     A queued/accepted response is NOT delivery. Group delivered/read means at
     least one participant, not everyone. An *_acceptance_unknown error means the
     first send may have been accepted: do not create a new key to force a resend.
+    Use the returned idempotency_key with whatsapp_group_message_status to
+    inspect this command without sending it again.
     """,
 )
 async def comm_whatsapp_send_group_message(
@@ -8169,6 +8171,36 @@ async def comm_whatsapp_send_group_message(
     if in_reply_to is not None:
         payload["in_reply_to"] = in_reply_to
     return await call_comm_api("POST", "/api/v1/whatsapp/group-send", json_body=payload)
+
+
+@comm_mcp.tool(
+    name="whatsapp_group_message_status",
+    description="""Read a WhatsApp group-send command's current status without sending.
+
+    idempotency_key: the opaque wa-group:<64 hex> key RETURNED by
+        whatsapp_send_group_message; not the caller's request_key, a group token
+        or a WhatsApp message ID.
+
+    Uses the caller's JWT. Comm authorizes the original agent or the human owner.
+    Returns Comm's status, send_error, timestamps and group_delivery counters
+    unchanged. A queued/accepted state does not prove delivery. With
+    delivery_scope=any_participant, delivered/read means at least one participant,
+    not the whole group. *_acceptance_unknown means acceptance is unresolved;
+    never send under a new request_key merely because of that state.
+    """,
+)
+async def comm_whatsapp_group_message_status(
+    idempotency_key: Annotated[str, Field(pattern=r"^wa-group:[0-9a-f]{64}$", min_length=73, max_length=73)],
+) -> Dict[str, Any]:
+    from auth import current_caller_jwt
+
+    # The endpoint can admit a human owner; a static service key cannot identify
+    # either that owner or the original agent and must never be used here.
+    if not current_caller_jwt():
+        raise ValueError("caller_identity_required")
+    return await call_comm_api(
+        "GET", f"/api/v1/whatsapp/group-send/{idempotency_key}/status",
+    )
 
 
 # --- WhatsApp Profilbild (Post #5229 / Issue #2272) ---

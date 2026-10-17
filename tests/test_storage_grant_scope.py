@@ -326,3 +326,67 @@ def test_unbekannter_name_speichert_nichts(monkeypatch, tmp_path):
     finally:
         _ohne_jwt(t)
     assert calls == []
+
+
+def test_assets_upload_reicht_private_durch(monkeypatch):
+    """Post 5484: assets_upload kannte `private` nicht, der Gateway warf es still weg."""
+    import base64 as _b64
+    import server
+    gesendet, calls = {}, []
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"id": 1}
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, headers=None, files=None, data=None):
+            gesendet.update(data)
+            return _Resp()
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(server, "_fetch_json", _fake_fetch(calls))
+    t = _als("Cloud", True)
+    try:
+        b = _b64.b64encode(b"x").decode()
+        asyncio.run(server.storage_assets_upload(file_base64=b, filename="a.txt", private=True))
+        asyncio.run(server.storage_assets_upload(file_base64="TICKET", filename="a.txt", private=True))
+        asyncio.run(server.storage_assets_upload(
+            file_base64="CHUNK:u:0:1:" + b, filename="a.txt", private=True))
+    finally:
+        _zurueck(t)
+    assert gesendet["private"] == "true"
+    assert calls[0][1]["params"]["private"] == "true"
+    assert calls[1][1]["params"]["private"] == "true"
+
+
+def test_storage_werkzeuge_lehnen_unbekannte_argumente_ab(monkeypatch):
+    """Post 5484: ein unbekanntes Argument scheitert sichtbar, statt still zu verschwinden."""
+    import pytest
+    import server
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    calls = []
+    monkeypatch.setattr(server, "_fetch_json", _fake_fetch(calls))
+    t = _als("Cloud", True)
+    try:
+        with pytest.raises(ToolError, match="privat"):
+            asyncio.run(server.storage_mcp.call_tool(
+                "assets_upload_ticket", {"filename": "a.pdf", "privat": True}))
+        assert calls == []
+        asyncio.run(server.storage_mcp.call_tool(
+            "assets_upload_ticket", {"filename": "a.pdf", "private": True}))
+    finally:
+        _zurueck(t)
+    assert calls[0][1]["params"]["private"] == "true"

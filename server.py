@@ -1109,6 +1109,8 @@ async def storage_assets_update_embedding_text(
     - collection_id: Group into a collection (e.g. 'helmets_2026')
     - link_id: Link related files together
     - is_public: Make publicly accessible (default false)
+    - private: mark confidential — /storage/media then serves it only to
+      owner/admin or a signed link, never anonymously (default false)
     - ai_mode: AI analysis level — 'none', 'safety' (default), 'vision', 'full'
     - share_with: agent names that may also sign this file, e.g. ["Comm"] when Comm
       is to send it on. Each name is checked in auth-api (same tenant, active);
@@ -1144,6 +1146,7 @@ async def storage_assets_upload(
     is_public: bool = False,
     ai_mode: str = "safety",
     share_with: Optional[List[str]] = None,
+    private: bool = False,
 ) -> Dict[str, Any]:
     # Escape hatch for clients whose tool catalogue is capped and therefore
     # never sees assets_upload_ticket (ChatGPT loads 9 of our 16 tools, 2026-08-04).
@@ -1171,6 +1174,7 @@ async def storage_assets_upload(
             context=context,
             collection_id=collection_id,
             is_public=is_public,
+            private=private,
             ai_mode="none" if ai_mode == "safety" else ai_mode,
             share_with=share_with,
         )
@@ -1179,6 +1183,7 @@ async def storage_assets_upload(
         params: Dict[str, Any] = {
             "filename": filename,
             "is_public": str(is_public).lower(),
+            "private": str(private).lower(),
             "ai_mode": "none" if ai_mode == "safety" else ai_mode,
         }
         if context:
@@ -1197,6 +1202,8 @@ async def storage_assets_upload(
     share_scopes = await _share_with_scopes(share_with)
     file_bytes = base64.b64decode(file_base64)
     form_fields: Dict[str, str] = {"ai_mode": ai_mode, "is_public": str(is_public).lower()}
+    if private:
+        form_fields["private"] = "true"
     if context:
         form_fields["context"] = context
     if collection_id:
@@ -1465,6 +1472,29 @@ async def storage_assets_fetch(
     return await call_storage_api(
         "POST", "/storage/fetch", json_body=body,
         share_scopes=await _share_with_scopes(share_with))
+
+
+def _forbid_unknown_arguments(server: "FastMCP") -> None:
+    """Unbekannte Werkzeug-Argumente abweisen statt still verwerfen (Post 5484).
+
+    FastMCP baut je Werkzeug ein pydantic-Modell mit extra="ignore". Ein
+    Argument, das das Werkzeug nicht kennt, verschwindet dadurch ohne Meldung:
+    assets_upload(private=True) legte eine Datei ohne Vertraulichkeits-Markierung
+    ab, und der Aufrufer sah 200. Mit extra="forbid" scheitert der Aufruf sofort
+    und nennt das Argument.
+    """
+    from pydantic import ConfigDict
+
+    for tool in server._tool_manager.list_tools():
+        base = tool.fn_metadata.arg_model
+        tool.fn_metadata.arg_model = type(
+            base.__name__,
+            (base,),
+            {"__module__": base.__module__, "model_config": ConfigDict(**base.model_config, extra="forbid")},
+        )
+
+
+_forbid_unknown_arguments(storage_mcp)
 
 
 # O'Neal MCP ---------------------------------------------------------------

@@ -422,7 +422,7 @@ async def _share_with_scopes(share_with: Optional[Any]) -> List[str]:
         scopes: List[str] = []
         for name in names:
             row = await _agent(name)
-            if not row or not row.get("is_active", True):
+            if not row or row.get("is_active") is not True:
                 raise ValueError(f"share_with_unknown_agent: {name}")
             if row.get("tenant_id") != me["tenant_id"]:
                 raise ValueError(f"share_with_foreign_tenant: {name}")

@@ -159,6 +159,7 @@ _AGENTEN = {
     "Förderungen": {"name": "Förderungen", "tenant_id": "arkturian", "is_active": True},
     "Kunde": {"name": "Kunde", "tenant_id": "ele", "is_active": True},
     "Alt": {"name": "Alt", "tenant_id": "arkturian", "is_active": False},
+    "Ohnefeld": {"name": "Ohnefeld", "tenant_id": "arkturian"},
 }
 
 
@@ -225,6 +226,7 @@ def test_share_with_lehnt_ab(monkeypatch):
     for liste, code in ((["Comn"], "share_with_unknown_agent: Comn"),
                         (["Kunde"], "share_with_foreign_tenant: Kunde"),
                         (["Alt"], "share_with_unknown_agent: Alt"),
+                        (["Ohnefeld"], "share_with_unknown_agent: Ohnefeld"),
                         ([f"a{i}" for i in range(20)], "share_with_too_many")):
         t = _mit_jwt("DRONE-CHALLENGE")
         try:

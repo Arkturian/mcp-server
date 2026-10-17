@@ -360,14 +360,74 @@ def _storage_grant_scope() -> str:
     return storage_grant_scope_for(current_caller_verified_agent())
 
 
-def _with_grant_scope(fields: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Kopie von `fields` mit dem Scope des Aufrufers; fremde Werte fliegen raus."""
+def _with_grant_scope(
+    fields: Optional[Dict[str, Any]], share_scopes: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """Kopie von `fields` mit dem Scope des Aufrufers; fremde Werte fliegen raus.
+
+    `share_scopes` kommt nur aus _share_with_scopes (geprüfte Agentennamen),
+    nie roh aus Werkzeug-Argumenten. Ohne eigenen Scope wird nichts geteilt.
+    """
     out = dict(fields or {})
     out.pop("grant_scope", None)
     scope = _storage_grant_scope()
     if scope:
-        out["grant_scope"] = scope
+        out["grant_scope"] = ",".join(dict.fromkeys([scope, *(share_scopes or [])]))
     return out
+
+
+AUTH_API_BASE = os.getenv("AUTH_API_BASE", "https://auth-api.arkturian.com")
+# storage-api bindet höchstens 20 Scopes je Upload; einer ist der eigene.
+_SHARE_WITH_MAX = 19
+
+
+async def _share_with_scopes(share_with: Optional[Any]) -> List[str]:
+    """Agentennamen aus `share_with` -> Scopes, jeder Name in auth-api geprüft (Post 5484).
+
+    Nur echte, aktive Agenten desselben Mandanten wie der Aufrufer. Ein
+    unbekannter Name würde sonst still einen Grant auf `cloud-session:<Name>`
+    anlegen, den ein später so benannter Agent erben würde. Nachgeschlagen
+    wird mit dem JWT des Aufrufers, der Agenten-Token darf die Liste lesen.
+    """
+    from auth import current_caller_jwt, current_caller_verified_agent
+
+    if share_with is None:
+        return []
+    names = share_with.split(",") if isinstance(share_with, str) else list(share_with)
+    names = list(dict.fromkeys(str(n).strip() for n in names if str(n).strip()))
+    if not names:
+        return []
+    caller = current_caller_verified_agent()
+    if not caller:
+        raise ValueError("share_with_requires_agent: only an agent identity can share an upload")
+    if len(names) > _SHARE_WITH_MAX:
+        raise ValueError(f"share_with_too_many: at most {_SHARE_WITH_MAX} agents")
+
+    headers = {"Authorization": f"Bearer {current_caller_jwt()}"}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        async def _agent(name: str) -> Optional[Dict[str, Any]]:
+            from urllib.parse import quote
+            r = await client.get(
+                f"{AUTH_API_BASE}/api/v1/auth/rbac/agents/{quote(name, safe='')}",
+                headers=headers,
+            )
+            if r.status_code == 404:
+                return None
+            r.raise_for_status()
+            return r.json()
+
+        me = await _agent(caller)
+        if not me or not me.get("tenant_id"):
+            raise ValueError("share_with_unavailable: caller not found in auth-api")
+        scopes: List[str] = []
+        for name in names:
+            row = await _agent(name)
+            if not row or not row.get("is_active", True):
+                raise ValueError(f"share_with_unknown_agent: {name}")
+            if row.get("tenant_id") != me["tenant_id"]:
+                raise ValueError(f"share_with_foreign_tenant: {name}")
+            scopes.append(storage_grant_scope_for(row.get("name") or name))
+    return scopes
 
 
 async def call_storage_api(
@@ -376,11 +436,12 @@ async def call_storage_api(
     *,
     params: Optional[Dict[str, Any]] = None,
     json_body: Optional[Dict[str, Any]] = None,
+    share_scopes: Optional[List[str]] = None,
 ) -> Any:
     if endpoint in _STORAGE_SCOPE_QUERY:
-        params = _with_grant_scope(params)
+        params = _with_grant_scope(params, share_scopes)
     if endpoint in _STORAGE_SCOPE_BODY:
-        json_body = _with_grant_scope(json_body)
+        json_body = _with_grant_scope(json_body, share_scopes)
     # storage-api expects X-API-KEY — caller's JWT not applicable here.
     return await _fetch_json(
         method,
@@ -396,12 +457,13 @@ async def call_storage_upload(
     filename: str,
     *,
     form_fields: Optional[Dict[str, str]] = None,
+    share_scopes: Optional[List[str]] = None,
 ) -> Any:
     """Upload a file to Storage API via multipart form-data."""
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
             files = {"file": (filename, file_bytes)}
-            data = _with_grant_scope(form_fields)
+            data = _with_grant_scope(form_fields, share_scopes)
             response = await client.post(
                 f"{STORAGE_API_BASE}/storage/upload",
                 headers={"X-API-KEY": STORAGE_API_KEY},
@@ -1048,6 +1110,10 @@ async def storage_assets_update_embedding_text(
     - link_id: Link related files together
     - is_public: Make publicly accessible (default false)
     - ai_mode: AI analysis level — 'none', 'safety' (default), 'vision', 'full'
+    - share_with: agent names that may also sign this file, e.g. ["Comm"] when Comm
+      is to send it on. Each name is checked in auth-api (same tenant, active);
+      an unknown name fails the call with share_with_unknown_agent and nothing
+      is stored. Only works for agent callers.
 
     Returns the created storage object with id, file_url, thumbnail_url, ai_title, etc.
     `share_url` (https://files.arkturian.com/<id>/<name>) is the readable link to hand to people
@@ -1077,6 +1143,7 @@ async def storage_assets_upload(
     link_id: Optional[str] = None,
     is_public: bool = False,
     ai_mode: str = "safety",
+    share_with: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     # Escape hatch for clients whose tool catalogue is capped and therefore
     # never sees assets_upload_ticket (ChatGPT loads 9 of our 16 tools, 2026-08-04).
@@ -1105,6 +1172,7 @@ async def storage_assets_upload(
             collection_id=collection_id,
             is_public=is_public,
             ai_mode="none" if ai_mode == "safety" else ai_mode,
+            share_with=share_with,
         )
 
     if file_base64.strip().upper() in ("TICKET", "REQUEST_TICKET"):
@@ -1117,13 +1185,16 @@ async def storage_assets_upload(
             params["context"] = context
         if collection_id:
             params["collection_id"] = collection_id
-        ticket = await call_storage_api("POST", "/storage/upload-ticket", params=params)
+        ticket = await call_storage_api(
+            "POST", "/storage/upload-ticket", params=params,
+            share_scopes=await _share_with_scopes(share_with))
         ticket["next_step"] = (
             "HTTP PUT the raw file bytes to upload_url — no base64, no multipart, "
             "no API key. The PUT response is the created storage object."
         )
         return ticket
 
+    share_scopes = await _share_with_scopes(share_with)
     file_bytes = base64.b64decode(file_base64)
     form_fields: Dict[str, str] = {"ai_mode": ai_mode, "is_public": str(is_public).lower()}
     if context:
@@ -1132,7 +1203,7 @@ async def storage_assets_upload(
         form_fields["collection_id"] = collection_id
     if link_id:
         form_fields["link_id"] = link_id
-    return await call_storage_upload(file_bytes, filename, form_fields=form_fields)
+    return await call_storage_upload(file_bytes, filename, form_fields=form_fields, share_scopes=share_scopes)
 
 
 @storage_mcp.tool(
@@ -1161,6 +1232,10 @@ async def storage_assets_upload(
     - private: mark confidential — /storage/media then serves it only to
       owner/admin, never anonymously (default false)
     - ai_mode: none | safety | vision | full (default none — AI costs money)
+    - share_with: agent names that may also sign this file, e.g. ["Comm"] when Comm
+      is to send it on. Each name is checked in auth-api (same tenant, active);
+      an unknown name fails the call with share_with_unknown_agent and nothing
+      is stored. Only works for agent callers.
 
     Returns the created storage object with id, file_url, thumbnail_url, etc.
     `share_url` (https://files.arkturian.com/<id>/<name>) is the readable link to hand to people
@@ -1177,6 +1252,7 @@ async def storage_assets_upload_file(
     is_public: bool = False,
     private: bool = False,
     ai_mode: str = "none",
+    share_with: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     from pathlib import Path as _P
 
@@ -1198,6 +1274,7 @@ async def storage_assets_upload_file(
             "lives elsewhere, copy it here first, or use assets_fetch(url=...) "
             "if it is reachable by URL."
         )
+    share_scopes = await _share_with_scopes(share_with)
     try:
         file_bytes = p.read_bytes()
     except PermissionError as exc:
@@ -1218,7 +1295,8 @@ async def storage_assets_upload_file(
         form_fields["collection_id"] = collection_id
     if link_id:
         form_fields["link_id"] = link_id
-    return await call_storage_upload(file_bytes, filename or p.name, form_fields=form_fields)
+    return await call_storage_upload(
+        file_bytes, filename or p.name, form_fields=form_fields, share_scopes=share_scopes)
 
 
 @storage_mcp.tool(
@@ -1241,7 +1319,8 @@ async def storage_assets_upload_file(
     Parameters mirror assets_upload: filename (required), context,
     collection_id, is_public, private (confidential — media served to
     owner/admin only), ai_mode (none|safety|vision|full, default none because
-    AI analysis costs money), ttl_hours (auto-delete after N hours).
+    AI analysis costs money), ttl_hours (auto-delete after N hours),
+    share_with (agent names that may also sign the file, checked in auth-api).
     """,
 )
 async def storage_assets_upload_ticket(
@@ -1252,6 +1331,7 @@ async def storage_assets_upload_ticket(
     private: bool = False,
     ai_mode: str = "none",
     ttl_hours: Optional[int] = None,
+    share_with: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     params: Dict[str, Any] = {
         "filename": filename,
@@ -1265,7 +1345,9 @@ async def storage_assets_upload_ticket(
         params["collection_id"] = collection_id
     if ttl_hours is not None:
         params["ttl_hours"] = ttl_hours
-    return await call_storage_api("POST", "/storage/upload-ticket", params=params)
+    return await call_storage_api(
+        "POST", "/storage/upload-ticket", params=params,
+        share_scopes=await _share_with_scopes(share_with))
 
 
 @storage_mcp.tool(
@@ -1290,7 +1372,8 @@ async def storage_assets_upload_ticket(
 
     Sessions expire after 30 minutes. Other parameters mirror assets_upload:
     context, collection_id, is_public, private, ai_mode (default none — AI costs
-    money), ttl_hours.
+    money), ttl_hours, share_with (agent names that may also sign the file;
+    send the same list with every piece).
     """,
 )
 async def storage_assets_upload_chunked(
@@ -1305,6 +1388,7 @@ async def storage_assets_upload_chunked(
     private: bool = False,
     ai_mode: str = "none",
     ttl_hours: Optional[int] = None,
+    share_with: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     params: Dict[str, Any] = {
         "upload_id": upload_id,
@@ -1325,7 +1409,7 @@ async def storage_assets_upload_chunked(
         "POST",
         f"{STORAGE_API_BASE}/storage/upload-chunk",
         headers={"X-API-KEY": STORAGE_API_KEY, "Content-Type": "text/plain"},
-        params=_with_grant_scope(params),
+        params=_with_grant_scope(params, await _share_with_scopes(share_with)),
         content=chunk_base64,
     )
 
@@ -1345,6 +1429,10 @@ async def storage_assets_upload_chunked(
     - is_public: Make publicly accessible (default false)
     - filename: Override filename (auto-derived from URL if omitted)
     - analyze: Trigger AI analysis (default true)
+    - share_with: agent names that may also sign this file, e.g. ["Comm"] when Comm
+      is to send it on. Each name is checked in auth-api (same tenant, active);
+      an unknown name fails the call with share_with_unknown_agent and nothing
+      is stored. Only works for agent callers.
 
     Returns the created storage object with id, file_url, thumbnail_url, etc.
     `share_url` (https://files.arkturian.com/<id>/<name>) is the readable link to hand to people
@@ -1363,6 +1451,7 @@ async def storage_assets_fetch(
     is_public: bool = False,
     filename: Optional[str] = None,
     analyze: bool = True,
+    share_with: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {"url": url, "is_public": is_public, "analyze": analyze}
     if context:
@@ -1373,7 +1462,9 @@ async def storage_assets_fetch(
         body["link_id"] = link_id
     if filename:
         body["filename"] = filename
-    return await call_storage_api("POST", "/storage/fetch", json_body=body)
+    return await call_storage_api(
+        "POST", "/storage/fetch", json_body=body,
+        share_scopes=await _share_with_scopes(share_with))
 
 
 # O'Neal MCP ---------------------------------------------------------------

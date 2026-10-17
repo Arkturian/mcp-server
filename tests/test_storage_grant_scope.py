@@ -149,3 +149,178 @@ def test_stueck_upload_bekommt_scope(monkeypatch):
         _zurueck(t)
     assert calls[0][0].endswith("/storage/upload-chunk")
     assert calls[0][1]["params"]["grant_scope"] == "cloud-session:Cloud"
+
+
+# ── share_with (Post 5484): weitere Agenten beim Upload freigeben ──────────
+
+_AGENTEN = {
+    "DRONE-CHALLENGE": {"name": "DRONE-CHALLENGE", "tenant_id": "arkturian", "is_active": True},
+    "Comm": {"name": "Comm", "tenant_id": "arkturian", "is_active": True},
+    "Förderungen": {"name": "Förderungen", "tenant_id": "arkturian", "is_active": True},
+    "Kunde": {"name": "Kunde", "tenant_id": "ele", "is_active": True},
+    "Alt": {"name": "Alt", "tenant_id": "arkturian", "is_active": False},
+}
+
+
+def _fake_auth(monkeypatch, gesehen):
+    import server
+    from urllib.parse import unquote
+
+    class _R:
+        def __init__(self, row):
+            self.row = row
+            self.status_code = 200 if row else 404
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.row
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, headers=None):
+            gesehen.append((url, headers))
+            return _R(_AGENTEN.get(unquote(url.rsplit("/", 1)[1])))
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", _Client)
+
+
+def _mit_jwt(name, is_agent=True):
+    import auth
+    return _als(name, is_agent) + (auth._current_jwt.set("jwt-of-caller"),)
+
+
+def _ohne_jwt(tokens):
+    import auth
+    _zurueck(tokens[:2])
+    auth._current_jwt.reset(tokens[2])
+
+
+def test_share_with_bildet_namen_ab(monkeypatch):
+    import server
+    gesehen = []
+    _fake_auth(monkeypatch, gesehen)
+    t = _mit_jwt("DRONE-CHALLENGE")
+    try:
+        scopes = asyncio.run(server._share_with_scopes(["Comm", "Förderungen", "Comm"]))
+    finally:
+        _ohne_jwt(t)
+    assert scopes == ["cloud-session:Comm", "cloud-session-x:" + "Förderungen".encode().hex()]
+    assert all(h == {"Authorization": "Bearer jwt-of-caller"} for _, h in gesehen)
+
+
+def test_share_with_lehnt_ab(monkeypatch):
+    import pytest
+    import server
+    _fake_auth(monkeypatch, [])
+    for liste, code in ((["Comn"], "share_with_unknown_agent: Comn"),
+                        (["Kunde"], "share_with_foreign_tenant: Kunde"),
+                        (["Alt"], "share_with_unknown_agent: Alt"),
+                        ([f"a{i}" for i in range(20)], "share_with_too_many")):
+        t = _mit_jwt("DRONE-CHALLENGE")
+        try:
+            with pytest.raises(ValueError, match=code):
+                asyncio.run(server._share_with_scopes(liste))
+        finally:
+            _ohne_jwt(t)
+    t = _mit_jwt("user:abc", is_agent=False)
+    try:
+        with pytest.raises(ValueError, match="share_with_requires_agent"):
+            asyncio.run(server._share_with_scopes(["Comm"]))
+        assert asyncio.run(server._share_with_scopes(None)) == []
+    finally:
+        _ohne_jwt(t)
+
+
+def test_share_with_landet_im_grant_scope(monkeypatch):
+    import server
+    calls = []
+    monkeypatch.setattr(server, "_fetch_json", _fake_fetch(calls))
+
+    async def _scopes(sw):
+        return ["cloud-session:Comm"] if sw else []
+    monkeypatch.setattr(server, "_share_with_scopes", _scopes)
+    t = _als("DRONE-CHALLENGE", True)
+    try:
+        asyncio.run(server.storage_assets_upload_ticket(filename="a.pdf", share_with=["Comm"]))
+        asyncio.run(server.storage_assets_fetch(url="https://x/y.pdf", share_with=["Comm"]))
+        asyncio.run(server.storage_assets_upload_chunked(
+            upload_id="u", index=0, total_chunks=1, filename="a.pdf",
+            chunk_base64="QQ==", share_with=["Comm"]))
+        asyncio.run(server.storage_assets_upload_ticket(filename="b.pdf"))
+    finally:
+        _zurueck(t)
+    want = "cloud-session:DRONE-CHALLENGE,cloud-session:Comm"
+    assert calls[0][1]["params"]["grant_scope"] == want
+    assert calls[1][1]["json_body"]["grant_scope"] == want
+    assert calls[2][1]["params"]["grant_scope"] == want
+    assert calls[3][1]["params"]["grant_scope"] == "cloud-session:DRONE-CHALLENGE"
+
+
+def test_share_with_im_multipart_upload(monkeypatch, tmp_path):
+    import server
+    gesendet = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"id": 1}
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, headers=None, files=None, data=None):
+            gesendet.update(data)
+            return _Resp()
+
+    async def _scopes(sw):
+        return ["cloud-session:Comm"] if sw else []
+    monkeypatch.setattr(server.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(server, "_share_with_scopes", _scopes)
+    f = tmp_path / "a.pdf"
+    f.write_bytes(b"%PDF")
+    t = _als("DRONE-CHALLENGE", True)
+    try:
+        asyncio.run(server.storage_assets_upload_file(path=str(f), private=True, share_with=["Comm"]))
+    finally:
+        _zurueck(t)
+    assert gesendet["grant_scope"] == "cloud-session:DRONE-CHALLENGE,cloud-session:Comm"
+    assert gesendet["private"] == "true"
+
+
+def test_unbekannter_name_speichert_nichts(monkeypatch, tmp_path):
+    """Die Prüfung läuft vor dem Upload: bei einem Fehler geht nichts an storage-api."""
+    import pytest
+    import server
+    _fake_auth(monkeypatch, [])
+    calls = []
+    monkeypatch.setattr(server, "_fetch_json", _fake_fetch(calls))
+    f = tmp_path / "a.pdf"
+    f.write_bytes(b"%PDF")
+    t = _mit_jwt("DRONE-CHALLENGE")
+    try:
+        with pytest.raises(ValueError, match="share_with_unknown_agent"):
+            asyncio.run(server.storage_assets_upload_file(path=str(f), share_with=["Comn"]))
+        with pytest.raises(ValueError, match="share_with_unknown_agent"):
+            asyncio.run(server.storage_assets_upload_ticket(filename="a.pdf", share_with=["Comn"]))
+    finally:
+        _ohne_jwt(t)
+    assert calls == []

@@ -9738,7 +9738,7 @@ mount_mcp("story", STORY_PATH, story_app)
 # from_session (18.10., IACP ca296b59; Text: Login).
 CLOUD_MCP_INSTRUCTIONS = """AgentOS is a federation of AI agents. from_session is always your own fixed agent name, never a thread title, project or role. Agent names are case-sensitive: before the first send to an agent, look its name up with list_agents and copy it exactly (e.g. "3DNerd-Optimize", not "3dNerd-optimize"). Send with timeout=0; the reply arrives later as a new message, do not wait or poll. To reach a human use send_to_human (email address), not send_message.
 
-If you are ChatGPT (the ChatGPT connector): from_session is always exactly "ChatGPT", in every thread. Each ChatGPT thread is a channel: start EVERY message to an agent with [Kanal: <exact title of the current thread>]. Replies come back into that thread; without the marker they land in the standard thread. The server checks your login and treats any other from_session as your channel name."""
+If you are ChatGPT (the ChatGPT connector): from_session is always exactly "ChatGPT", in every thread. Each ChatGPT thread is a channel: start EVERY message to an agent with [Kanal: <exact title of the current thread>]. Replies come back into that thread; without the marker they land in the standard thread. The server verifies your login; a different from_session is corrected, not used."""
 
 cloud_mcp = FastMCP(
     name="cloud-api",

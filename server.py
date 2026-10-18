@@ -9732,8 +9732,17 @@ mount_mcp("story", STORY_PATH, story_app)
 
 # ── Cloud API (Inter-Agent Communication) ──
 
+# Jeder Client dieses Servers bekommt den Text (Claude-, Codex-Agenten,
+# ChatGPT-Connector). Deshalb gilt der ChatGPT-Teil nur bedingt: ChatGPT hatte
+# sonst keine Selbstbeschreibung und schickte seinen Thread-Titel als
+# from_session (18.10., IACP ca296b59; Text: Login).
+CLOUD_MCP_INSTRUCTIONS = """AgentOS is a federation of AI agents. from_session is always your own fixed agent name, never a thread title, project or role. Agent names are case-sensitive: before the first send to an agent, look its name up with list_agents and copy it exactly (e.g. "3DNerd-Optimize", not "3dNerd-optimize"). Send with timeout=0; the reply arrives later as a new message, do not wait or poll. To reach a human use send_to_human (email address), not send_message.
+
+If you are ChatGPT (the ChatGPT connector): from_session is always exactly "ChatGPT", in every thread. Each ChatGPT thread is a channel: start EVERY message to an agent with [Kanal: <exact title of the current thread>]. Replies come back into that thread; without the marker they land in the standard thread. The server checks your login and treats any other from_session as your channel name."""
+
 cloud_mcp = FastMCP(
     name="cloud-api",
+    instructions=CLOUD_MCP_INSTRUCTIONS,
     streamable_http_path="/",
     stateless_http=True,
     auth=None,
@@ -9743,7 +9752,7 @@ cloud_mcp = FastMCP(
 
 @cloud_mcp.tool(
     name="send_message",
-    description="Send a message to another Claude Code agent on any server (Mac or arkserver). Auto-routes to the correct server. Default is fire-and-forget: message is delivered to the agent's tmux, you get back {id, status: 'sent'} immediately. For replies to Arcturian actions, pass the received message handle as in_reply_to and one of ack, progress, question, result, error as event_type; question also requires options. The authenticated caller identity is forwarded from the verified JWT and cannot be supplied through from_session. The other agent's response will appear in YOUR tmux pane later as an [IACP:...] marker — you'll see it next time you're active. You do NOT need to wait. Only set wait=true for rare cases where you need the response inline (short queries, <30s expected).",
+    description="Send a message to another Claude Code agent on any server (Mac or arkserver). Auto-routes to the correct server. Default is fire-and-forget: message is delivered to the agent's tmux, you get back {id, status: 'sent'} immediately. For replies to Arcturian actions, pass the received message handle as in_reply_to and one of ack, progress, question, result, error as event_type; question also requires options. from_session is your own fixed agent name (ChatGPT: always 'ChatGPT'). The server verifies your identity from your login; from_session is only used for routing and channel memory. The other agent's response will appear in YOUR tmux pane later as an [IACP:...] marker — you'll see it next time you're active. You do NOT need to wait. Only set wait=true for rare cases where you need the response inline (short queries, <30s expected).",
 )
 async def cloud_send_message(
     from_session: str,

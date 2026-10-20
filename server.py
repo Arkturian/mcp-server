@@ -7468,7 +7468,7 @@ async def business_categories_list(cat_type: Optional[str] = None, api_key: Opti
 @business_mcp.tool(
     name="transactions_import",
     description=(
-        "Import a bank statement CSV (Erste Bank format) into transactions. "
+        "Import a bank statement CSV (Erste/George CSV schema, Bank-Burgenland-Konto) into transactions. "
         "Pass the CSV text content via csv_text. Defaults to dry_run=true so you "
         "can preview the categorization before persisting — set dry_run=false to "
         "actually create the transactions. Idempotent: re-running the same CSV "
@@ -7486,7 +7486,7 @@ async def business_categories_list(cat_type: Optional[str] = None, api_key: Opti
 async def business_transactions_import(
     csv_text: str,
     dry_run: bool = True,
-    provider_label: str = "bank_erste",
+    provider_label: Optional[str] = None,
     default_vat_rate: float = 0.0,
     preview_limit: int = 50,
     cross_dedup_days: int = 3,
@@ -7496,11 +7496,13 @@ async def business_transactions_import(
     body = {
         "csv_text": csv_text,
         "dry_run": dry_run,
-        "provider_label": provider_label,
         "default_vat_rate": default_vat_rate,
         "preview_limit": preview_limit,
         "cross_dedup_days": cross_dedup_days,
     }
+    # Unset → business-api picks its own default account label (bank_burgenland).
+    if provider_label is not None:
+        body["provider_label"] = provider_label
     if since_date is not None:
         body["since_date"] = since_date
     return await call_business_api(

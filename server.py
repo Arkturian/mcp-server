@@ -7787,7 +7787,7 @@ Used by Business API for document delivery, and directly for notifications.
 ### Gmail
 - gmail_list_messages(source, query, max_results) — List emails
 - outlook_list_accounts() / outlook_list_messages(source, query, max_results, folder) / outlook_get_message(source, message_id) / outlook_get_attachment(source, message_id, attachment_id) — Microsoft 365 mailboxes, read + draft creation (no send)
-- outlook_create_draft(source, body, idempotency_key, to?, subject?, cc?, bcc?, reply_to_message_id?, attachments?, html?) — create a draft in the Drafts folder; the human sends it from Outlook, this tool NEVER sends. Readback carries full body + body_content_type, Graph attachment list and in_drafts_folder (parentFolderId vs /me/mailFolders/drafts).
+- outlook_create_draft(source, body, idempotency_key, to?, subject?, cc?, bcc?, reply_to_message_id?, attachments?, html?) — create a draft in the Drafts folder; the human sends it from Outlook, this tool NEVER sends. Attachments on this instance accept ONLY `data` (base64, 3 MB each / 10 MB total); `url` is disabled (security review, backport). Readback carries full body + body_content_type, Graph attachment list and in_drafts_folder (parentFolderId vs /me/mailFolders/drafts).
 - gmail_get_message(source, message_id) — Get full email
 - gmail_latest(source, query) — Most recent email
 - gmail_send(source, to, subject, body) — Send email via Gmail
@@ -9128,11 +9128,12 @@ async def comm_outlook_get_attachment(
         "subject may be omitted — Graph pre-fills 'Re: ...'.\n"
         "reply_to_message_id: Graph message-id to reply to. Sets up the draft "
         "in the same conversation. Omit for a brand-new mail.\n"
-        "attachments: list of {filename, content_type, url?, data?}. Either "
-        "`url` (comm-api fetches server-side; preferred for Storage-hosted "
-        "files) or `data` (base64 inline). The idempotency hash covers the "
-        "actual bytes — the same URL serving different bytes still ends up "
-        "as 409 `idempotency_key_reused`.\n"
+        "attachments: list of {filename, content_type, data}. `data` is "
+        "base64-encoded bytes, up to 3 MB per attachment and 10 MB total. "
+        "URL-based attachments are DISABLED on this instance (steiner "
+        "security-review backport, comm-api Issue #2550); passing `url` "
+        "returns 422 `attachment_url_disabled`. The idempotency hash "
+        "covers the raw bytes.\n"
         "idempotency_key: REQUIRED. A unique string per intended draft. "
         "A retry with the same (source, idempotency_key) returns the first "
         "call's readback — a timeout + retry will NOT create a duplicate "
@@ -9141,7 +9142,7 @@ async def comm_outlook_get_attachment(
         "Returns {success, id, is_draft, parent_folder_id, in_drafts_folder, "
         "thread_id, subject, to, cc, bcc, body, body_content_type, "
         "body_preview, has_attachments, attachments, idempotent_replay}. "
-        "`in_drafts_folder` is the authoritative beweis (parent_folder_id "
+        "`in_drafts_folder` is the authoritative proof (parent_folder_id "
         "compared against /me/mailFolders/drafts). `attachments` is the "
         "Graph attachment metadata list (no contentBytes). Access is "
         "enforced per source by comm-api against the caller's identity — "

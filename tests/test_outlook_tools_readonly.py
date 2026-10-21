@@ -65,6 +65,41 @@ def test_outlook_create_draft_signature():
         assert p in sig.parameters, p
 
 
+def test_outlook_create_draft_idempotency_key_required_in_schema():
+    """Steiner-Nachforderung 2026-10-21 (`4baee9ff` §2): `idempotency_key`
+    hatte `str = ""` als Default → MCP-Schema zeigte das Feld als optional,
+    obwohl die Beschreibung "MANDATORY" sagt. Clients, die nach Schema
+    arbeiten, konnten den Key weglassen. Fix: Default raus."""
+    import inspect
+    import server
+    sig = inspect.signature(server.comm_outlook_create_draft)
+    param = sig.parameters["idempotency_key"]
+    # Kein Default → im Schema als "required" ausgewiesen.
+    assert param.default is inspect.Parameter.empty, (
+        f"idempotency_key hat Default {param.default!r} — das MCP-Schema "
+        f"zeigt es dann als optional, obwohl es Pflicht ist."
+    )
+
+
+def test_outlook_create_draft_signature_order_body_before_idempotency():
+    """Positional-Argumente: nach `source` und `body` muss
+    `idempotency_key` kommen (vor den anderen required-less Fields),
+    damit es im Schema als required gelistet wird. Steiner-Review
+    `4baee9ff` §2."""
+    import inspect
+    import server
+    sig = inspect.signature(server.comm_outlook_create_draft)
+    names = list(sig.parameters.keys())
+    # source, body, idempotency_key sind die drei required-Params; alle
+    # anderen haben Defaults und sind optional.
+    assert names[:3] == ["source", "body", "idempotency_key"]
+    for name in names[3:]:
+        assert sig.parameters[name].default is not inspect.Parameter.empty, (
+            f"{name!r} hat keinen Default — würde als zweiter required-"
+            f"Param im Schema stehen und die MCP-Erwartung brechen."
+        )
+
+
 def test_folder_is_only_sent_when_given():
     import inspect
     import server

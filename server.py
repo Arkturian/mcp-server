@@ -7786,7 +7786,8 @@ Used by Business API for document delivery, and directly for notifications.
 
 ### Gmail
 - gmail_list_messages(source, query, max_results) — List emails
-- outlook_list_accounts() / outlook_list_messages(source, query, max_results, folder) / outlook_get_message(source, message_id) — Microsoft 365 mailboxes, READ-ONLY
+- outlook_list_accounts() / outlook_list_messages(source, query, max_results, folder) / outlook_get_message(source, message_id) / outlook_get_attachment(source, message_id, attachment_id) — Microsoft 365 mailboxes, read + draft creation (no send)
+- outlook_create_draft(source, body, to, idempotency_key, subject?, cc?, bcc?, reply_to_message_id?, attachments?, html?) — create a draft in the Drafts folder; the human sends it from Outlook, this tool NEVER sends
 - gmail_get_message(source, message_id) — Get full email
 - gmail_latest(source, query) — Most recent email
 - gmail_send(source, to, subject, body) — Send email via Gmail
@@ -9110,6 +9111,82 @@ async def comm_outlook_get_attachment(
     }
     out["stored_by"] = "mcp-gateway"
     return out
+
+
+@comm_mcp.tool(
+    name="outlook_create_draft",
+    description=(
+        "Create a draft in a Microsoft 365 / Outlook mailbox. The draft lands "
+        "in the Drafts folder and the human presses Send inside Outlook — "
+        "this tool NEVER sends a mail. Use it when a human has asked for a "
+        "mail to be prepared, and they want to review or edit before it goes "
+        "out.\n"
+        "source: mailbox name from outlook_list_accounts (e.g. 'steiner').\n"
+        "body: the mail text. html=true turns the body into HTML.\n"
+        "to: list of recipient addresses. cc / bcc: optional lists.\n"
+        "subject: subject line. For a reply draft (reply_to_message_id set), "
+        "subject may be omitted — Graph pre-fills 'Re: ...'.\n"
+        "reply_to_message_id: Graph message-id to reply to. Sets up the draft "
+        "in the same conversation. Omit for a brand-new mail.\n"
+        "attachments: list of {filename, content_type, url?, data?}. Either "
+        "`url` (comm-api fetches server-side; preferred for Storage-hosted "
+        "files) or `data` (base64 inline).\n"
+        "idempotency_key: MANDATORY string. A retry with the same (source, "
+        "idempotency_key) returns the first call's readback — a timeout + "
+        "retry will NOT create a duplicate draft. Reusing the key with a "
+        "different payload returns 409 `idempotency_key_reused`.\n"
+        "Returns {success, id, is_draft, parent_folder_id, thread_id, "
+        "subject, to, cc, bcc, body_preview, has_attachments, "
+        "idempotent_replay}. Access is enforced per source by comm-api "
+        "against the caller's identity — 403 means this agent is not an "
+        "owner of that mailbox."
+    ),
+)
+async def comm_outlook_create_draft(
+    source: str,
+    body: str,
+    to: Optional[List[str]] = None,
+    idempotency_key: str = "",
+    subject: Optional[str] = None,
+    cc: Optional[List[str]] = None,
+    bcc: Optional[List[str]] = None,
+    reply_to_message_id: Optional[str] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
+    html: bool = False,
+) -> Dict[str, Any]:
+    # steiner Issue #60 (David) — Cloud 2026-10-21. comm-api legt den
+    # Entwurf an und liefert isDraft + parentFolderId im Readback. Der
+    # Weg hier reicht die Payload 1:1 weiter; Owner-Check, Scope-Guard
+    # und das No-Send-Invariant sitzen in comm-api, nicht hier.
+    if not (idempotency_key or "").strip():
+        return {
+            "error": "idempotency_key_required",
+            "hint": (
+                "A unique string per intended draft. Reusing it for a retry "
+                "is safe; reusing it for a different draft returns 409."
+            ),
+        }
+    payload: Dict[str, Any] = {
+        "to": list(to or []),
+        "body": body,
+        "html": bool(html),
+        "idempotency_key": idempotency_key.strip(),
+    }
+    if subject is not None:
+        payload["subject"] = subject
+    if cc:
+        payload["cc"] = list(cc)
+    if bcc:
+        payload["bcc"] = list(bcc)
+    if reply_to_message_id:
+        payload["reply_to_message_id"] = reply_to_message_id
+    if attachments:
+        payload["attachments"] = list(attachments)
+    return await call_comm_api(
+        "POST",
+        f"/api/v1/outlook/{source}/drafts",
+        json_body=payload,
+    )
 
 
 @comm_mcp.tool(

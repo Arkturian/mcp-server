@@ -1,7 +1,11 @@
-"""#1455: comm-MCP traegt Outlook-LESE-Tools — und nur die.
+"""#1455 + steiner Issue #60: comm-MCP traegt Outlook-LESE-Tools plus
+`outlook_create_draft` — und sonst keinen Schreibpfad.
 
-Steward (David) will Sent-Mails auswerten; ein Schreibpfad (send/mark/delete)
-darf ueber diesen Spiegel nicht entstehen.
+Steward (David) will Sent-Mails auswerten (Lesen). Fuer steiner's David
+kommt `outlook_create_draft` dazu (Cloud 2026-10-21): Entwuerfe landen
+im Drafts-Ordner, der Mensch sendet selbst in Outlook — der Code-Pfad
+hier wie in comm-api darf NIEMALS einen Send ausloesen (comm-api hat
+den adversarial Test dafuer, hier reicht der Namens-Blacklist-Check).
 """
 import asyncio
 import os
@@ -26,10 +30,39 @@ def test_outlook_read_tools_are_registered():
     assert {"outlook_list_accounts", "outlook_list_messages", "outlook_get_message"} <= names
 
 
-def test_no_outlook_write_tools():
+def test_no_outlook_send_tools():
+    """`send`/`mark`/`delete`/`move` bleiben verboten. `create_draft` ist
+    erlaubt (Entwurf != Send, steiner #60) — der Blacklist-Check prueft
+    jetzt gezielt die wirkenden Verben, nicht pauschal 'draft'."""
     names = {n for n in _tool_names() if n.startswith("outlook_")}
-    forbidden = {n for n in names if any(k in n for k in ("send", "mark", "delete", "move", "draft"))}
+    forbidden = {
+        n for n in names
+        if any(k in n for k in ("send", "mark", "delete", "move"))
+    }
     assert forbidden == set(), forbidden
+
+
+def test_outlook_create_draft_is_registered():
+    """steiner #60: Entwuerfe-Tool muss unter diesem Namen laufen, damit
+    der Prompt-Pointer in server.py:7883 nicht ins Leere zeigt."""
+    names = _tool_names()
+    assert "outlook_create_draft" in names
+
+
+def test_outlook_create_draft_signature():
+    """idempotency_key ist Pflicht und muss im Schema sichtbar sein —
+    sonst kann der Agent ihn nicht uebergeben. subject/cc/bcc optional."""
+    import inspect
+    import server
+    sig = inspect.signature(server.comm_outlook_create_draft)
+    required = {"source", "body"}
+    for p in required:
+        assert p in sig.parameters, p
+    assert "idempotency_key" in sig.parameters
+    # Optional fields present and defaulted
+    for p in ("subject", "cc", "bcc", "reply_to_message_id",
+             "attachments", "html", "to"):
+        assert p in sig.parameters, p
 
 
 def test_folder_is_only_sent_when_given():

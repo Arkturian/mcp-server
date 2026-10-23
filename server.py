@@ -7883,7 +7883,8 @@ Used by Business API for document delivery, and directly for notifications.
 
 ### Gmail
 - gmail_list_messages(source, query, max_results) — List emails
-- outlook_list_accounts() / outlook_list_messages(source, query, max_results, folder) / outlook_get_message(source, message_id) — Microsoft 365 mailboxes, READ-ONLY
+- outlook_list_accounts() / outlook_list_messages(source, query, max_results, folder) / outlook_get_message(source, message_id) / outlook_get_attachment(source, message_id, attachment_id) — Microsoft 365 mailboxes, read + draft creation (no send)
+- outlook_create_draft(source, body, to, idempotency_key, subject?, cc?, bcc?, reply_to_message_id?, attachments?, html?) — create a draft in the Drafts folder; the human sends it from Outlook, this tool NEVER sends
 - gmail_get_message(source, message_id) — Get full email
 - gmail_latest(source, query) — Most recent email
 - gmail_send(source, to, subject, body) — Send email via Gmail
@@ -7994,6 +7995,59 @@ async def comm_send_email(
         json_body["template"] = template
     if template_data:
         json_body["template_data"] = template_data
+    return await call_comm_api("POST", "/api/v1/email/send", json_body=json_body)
+
+
+@comm_mcp.tool(
+    name="send_email_from_draft",
+    description="""Send an email that was pre-approved via a Content-based
+    Draft-Review card (Post #5623 Variante K, Alex 23.10.2026).
+
+    Workflow:
+      1. You created the mail text as a Content-Beitrag (CollabDoc) with
+         `visibility=restricted` and a service-grant for `service:comm-api`.
+      2. You posted a `draft_review` user-message card to the owner naming
+         the post_id, kanal="email", empfaenger, betreff.
+      3. The owner opened the Content-Beitrag in the Portal's "Entwürfe"
+         Leiste, annotated/edited, and clicked "Senden". That click IS the
+         release — no additional approval dialog from Comm.
+      4. You receive IACP from cloud-api: card_id, post_id, doc_version.
+      5. You call THIS tool with the card_id. Comm then:
+         - verifies entscheidung=senden
+         - verifies via=you (the calling agent, from JWT session)
+         - re-reads the Beitrag text from Content in the released doc_version
+         - checks the doc_version has not drifted since release
+         - sends the mail (empfaenger+betreff+body ALL come from
+           card+Beitrag, NOT from you — passing them as args is rejected)
+         - fire-and-forgets POST /{card_id}/sent so the Portal closes
+           the card visually.
+
+    Error codes you may see:
+      - draft_card_not_found (404)
+      - draft_not_approved (409) — the card was rejected or still open
+      - draft_wrong_agent (403) — the card lists another `via`-agent
+      - draft_doc_version_changed (409) — owner edited after release;
+        either repost the card or send only after a fresh release
+      - draft_card_already_sent (409) — cloud-api already saw a /sent
+        callback for this card (idempotent, retries are safe)
+      - draft_content_api_error / draft_service_identity_error — infra
+
+    Args:
+        draft_card_id: The user-message card id from cloud-api
+            (e.g. "f87cba75a780436180c6031657e01485").
+        source: Optional mailbox identity (e.g. "apopovic", "edera").
+            Omit for the instance default. Access is still enforced via
+            require_source_access — your agent must be owner of the
+            source or whitelisted in COMM_SOURCE_AGENTS_JSON.
+    """,
+)
+async def comm_send_email_from_draft(
+    draft_card_id: str,
+    source: Optional[str] = None,
+) -> Dict[str, Any]:
+    json_body: Dict[str, Any] = {"draft_card_id": draft_card_id}
+    if source:
+        json_body["source"] = source
     return await call_comm_api("POST", "/api/v1/email/send", json_body=json_body)
 
 
@@ -9288,6 +9342,82 @@ async def comm_outlook_get_attachment(
     }
     out["stored_by"] = "mcp-gateway"
     return out
+
+
+@comm_mcp.tool(
+    name="outlook_create_draft",
+    description=(
+        "Create a draft in a Microsoft 365 / Outlook mailbox. The draft lands "
+        "in the Drafts folder and the human presses Send inside Outlook — "
+        "this tool NEVER sends a mail. Use it when a human has asked for a "
+        "mail to be prepared, and they want to review or edit before it goes "
+        "out.\n"
+        "source: mailbox name from outlook_list_accounts (e.g. 'steiner').\n"
+        "body: the mail text. html=true turns the body into HTML.\n"
+        "to: list of recipient addresses. cc / bcc: optional lists.\n"
+        "subject: subject line. For a reply draft (reply_to_message_id set), "
+        "subject may be omitted — Graph pre-fills 'Re: ...'.\n"
+        "reply_to_message_id: Graph message-id to reply to. Sets up the draft "
+        "in the same conversation. Omit for a brand-new mail.\n"
+        "attachments: list of {filename, content_type, url?, data?}. Either "
+        "`url` (comm-api fetches server-side; preferred for Storage-hosted "
+        "files) or `data` (base64 inline).\n"
+        "idempotency_key: MANDATORY string. A retry with the same (source, "
+        "idempotency_key) returns the first call's readback — a timeout + "
+        "retry will NOT create a duplicate draft. Reusing the key with a "
+        "different payload returns 409 `idempotency_key_reused`.\n"
+        "Returns {success, id, is_draft, parent_folder_id, thread_id, "
+        "subject, to, cc, bcc, body_preview, has_attachments, "
+        "idempotent_replay}. Access is enforced per source by comm-api "
+        "against the caller's identity — 403 means this agent is not an "
+        "owner of that mailbox."
+    ),
+)
+async def comm_outlook_create_draft(
+    source: str,
+    body: str,
+    to: Optional[List[str]] = None,
+    idempotency_key: str = "",
+    subject: Optional[str] = None,
+    cc: Optional[List[str]] = None,
+    bcc: Optional[List[str]] = None,
+    reply_to_message_id: Optional[str] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
+    html: bool = False,
+) -> Dict[str, Any]:
+    # steiner Issue #60 (David) — Cloud 2026-10-21. comm-api legt den
+    # Entwurf an und liefert isDraft + parentFolderId im Readback. Der
+    # Weg hier reicht die Payload 1:1 weiter; Owner-Check, Scope-Guard
+    # und das No-Send-Invariant sitzen in comm-api, nicht hier.
+    if not (idempotency_key or "").strip():
+        return {
+            "error": "idempotency_key_required",
+            "hint": (
+                "A unique string per intended draft. Reusing it for a retry "
+                "is safe; reusing it for a different draft returns 409."
+            ),
+        }
+    payload: Dict[str, Any] = {
+        "to": list(to or []),
+        "body": body,
+        "html": bool(html),
+        "idempotency_key": idempotency_key.strip(),
+    }
+    if subject is not None:
+        payload["subject"] = subject
+    if cc:
+        payload["cc"] = list(cc)
+    if bcc:
+        payload["bcc"] = list(bcc)
+    if reply_to_message_id:
+        payload["reply_to_message_id"] = reply_to_message_id
+    if attachments:
+        payload["attachments"] = list(attachments)
+    return await call_comm_api(
+        "POST",
+        f"/api/v1/outlook/{source}/drafts",
+        json_body=payload,
+    )
 
 
 @comm_mcp.tool(

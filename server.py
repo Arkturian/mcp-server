@@ -5856,40 +5856,61 @@ async def ai_transcribe_audio(file_url: str) -> Dict[str, Any]:
 
 @ai_mcp.tool(
     name="genimage",
-    description="""Generate an image from a text prompt using AI models.
+    description="""Bild erzeugen über api-ai, Ergebnis liegt im Storage.
 
-    Returns a generated image stored in the Storage API with:
-    - id: Storage object ID
-    - image_url: URL to the generated image
-    - storage_object_id: Same as id
-    - model: Model name used
-    - actual_model: Actual model ID
+    Rückgabe: image_url, storage_object_id, model, width, height
+    (bei model=gpt-image-* zusätzlich routed_via: subscription | api).
 
-    Available models:
-    - nano-banana (default): Fast image generation (gemini-2.5-flash-image)
-    - nano-banana-pro: Best quality (gemini-3-pro-image-preview)
-    - imagen-4: Google Imagen 4.0
+    Abo (0 EUR, ChatGPT-Abo über codex image_gen):
+    - model="codex-imagegen" — erzwingt das Abo. Bis ~2048x1152 (16:9), damit
+      auch Full-HD 1920x1080. Referenzbilder erlaubt (reference_image_urls),
+      z. B. ein eigenes Rendering als Vorlage, das GPT-Image überarbeitet.
+    - model="gpt-image-2" mit route="auto" (Vorgabe): kleine Größen (Kante
+      <= 1536, <= 1024x1536, ohne Referenzbilder) laufen über das Abo, alles
+      darüber über die bezahlte API.
 
-    Example:
-    genimage(prompt="a futuristic city at sunset", model="nano-banana")
+    Bezahlt (OpenAI-Schlüssel, pro Bild): route="api" oder große Formate
+    (2048x2048, 3840x2160) bzw. gpt-image-1/1.5/-mini. Für MiniMax-Modelle ist
+    confirm_api_billing=True Pflicht. nano-banana/imagen-4 sind abgeschaltet (503).
+
+    Parameter:
+    - reference_image_urls: bis 16 HTTPS-URLs (Storage-Links gehen), Bild-zu-Bild
+    - background="transparent": nur gpt-image-1 (bezahlt), PNG mit Alpha
+    - private=True: Ergebnis vertraulich ablegen (anonym nicht abrufbar)
+
+    Beispiel Rendering überarbeiten (Abo, Full-HD):
+    genimage(prompt="fotorealistisch, Abendlicht, Materialien wie Vorlage",
+             model="codex-imagegen", width=1920, height=1080,
+             reference_image_urls=["https://…/storage/media/123"])
     """,
 )
 async def ai_genimage(
     prompt: str,
-    model: Optional[str] = "nano-banana",
+    model: Optional[str] = "gpt-image-2",
     width: Optional[int] = 1024,
     height: Optional[int] = 1024,
     negative_prompt: Optional[str] = None,
+    route: Optional[str] = None,
+    reference_image_urls: Optional[List[str]] = None,
+    background: Optional[str] = None,
+    quality: Optional[str] = None,
+    private: Optional[bool] = None,
+    confirm_api_billing: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """Generate image from text prompt."""
+    """Generate image from text prompt (Abo-Weg und Referenzbilder, api-ai 582b64b)."""
     body = {
         "prompt": prompt,
         "model": model,
         "width": width,
         "height": height,
     }
-    if negative_prompt:
-        body["negative_prompt"] = negative_prompt
+    # Nur gesetzte Felder: api-ai setzt eigene Vorgaben (route=auto, private=false).
+    for key, value in (("negative_prompt", negative_prompt), ("route", route),
+                       ("reference_image_urls", reference_image_urls),
+                       ("background", background), ("quality", quality),
+                       ("private", private), ("confirm_api_billing", confirm_api_billing)):
+        if value not in (None, "", []):
+            body[key] = value
     return await call_ai_api("POST", "/ai/genimage", json_body=body)
 
 

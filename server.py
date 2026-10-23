@@ -4089,7 +4089,7 @@ async def content_sections_approve(
 
 @content_mcp.tool(
     name="sections_resolve",
-    description="""Mark a question or task section as `resolved`.
+    description="""Mark a question, task or annotation section as `resolved`.
 
     Iteration A.2: explicit positive close — the asker's question has
     been answered satisfactorily. Server stamps `resolved_by`,
@@ -4097,6 +4097,9 @@ async def content_sections_approve(
 
     State machine for question: open → resolved.
     State machine for task: open | in_progress → resolved.
+    State machine for annotation: open → resolved ("eingearbeitet",
+    content-api d97cdf8). Use it after you worked an annotation into
+    the text; resolved is final, disagreement comes as a new annotation.
 
     Use this after a sections_reply that addresses the question
     completely, or after consolidating multiple replies into a

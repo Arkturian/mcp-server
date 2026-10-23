@@ -7902,6 +7902,59 @@ async def comm_send_email(
 
 
 @comm_mcp.tool(
+    name="send_email_from_draft",
+    description="""Send an email that was pre-approved via a Content-based
+    Draft-Review card (Post #5623 Variante K, Alex 23.10.2026).
+
+    Workflow:
+      1. You created the mail text as a Content-Beitrag (CollabDoc) with
+         `visibility=restricted` and a service-grant for `service:comm-api`.
+      2. You posted a `draft_review` user-message card to the owner naming
+         the post_id, kanal="email", empfaenger, betreff.
+      3. The owner opened the Content-Beitrag in the Portal's "Entwürfe"
+         Leiste, annotated/edited, and clicked "Senden". That click IS the
+         release — no additional approval dialog from Comm.
+      4. You receive IACP from cloud-api: card_id, post_id, doc_version.
+      5. You call THIS tool with the card_id. Comm then:
+         - verifies entscheidung=senden
+         - verifies via=you (the calling agent, from JWT session)
+         - re-reads the Beitrag text from Content in the released doc_version
+         - checks the doc_version has not drifted since release
+         - sends the mail (empfaenger+betreff+body ALL come from
+           card+Beitrag, NOT from you — passing them as args is rejected)
+         - fire-and-forgets POST /{card_id}/sent so the Portal closes
+           the card visually.
+
+    Error codes you may see:
+      - draft_card_not_found (404)
+      - draft_not_approved (409) — the card was rejected or still open
+      - draft_wrong_agent (403) — the card lists another `via`-agent
+      - draft_doc_version_changed (409) — owner edited after release;
+        either repost the card or send only after a fresh release
+      - draft_card_already_sent (409) — cloud-api already saw a /sent
+        callback for this card (idempotent, retries are safe)
+      - draft_content_api_error / draft_service_identity_error — infra
+
+    Args:
+        draft_card_id: The user-message card id from cloud-api
+            (e.g. "f87cba75a780436180c6031657e01485").
+        source: Optional mailbox identity (e.g. "apopovic", "edera").
+            Omit for the instance default. Access is still enforced via
+            require_source_access — your agent must be owner of the
+            source or whitelisted in COMM_SOURCE_AGENTS_JSON.
+    """,
+)
+async def comm_send_email_from_draft(
+    draft_card_id: str,
+    source: Optional[str] = None,
+) -> Dict[str, Any]:
+    json_body: Dict[str, Any] = {"draft_card_id": draft_card_id}
+    if source:
+        json_body["source"] = source
+    return await call_comm_api("POST", "/api/v1/email/send", json_body=json_body)
+
+
+@comm_mcp.tool(
     name="send_telegram",
     description="""Send a Telegram message through the Comm API.
 

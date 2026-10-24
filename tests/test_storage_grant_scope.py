@@ -193,6 +193,7 @@ def _fake_auth(monkeypatch, gesehen):
             return _R(_AGENTEN.get(unquote(url.rsplit("/", 1)[1])))
 
     monkeypatch.setattr(server.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(server, "AUTH_API_BASE", "http://127.0.0.1:8010")
 
 
 def _mit_jwt(name, is_agent=True):
@@ -217,6 +218,35 @@ def test_share_with_bildet_namen_ab(monkeypatch):
         _ohne_jwt(t)
     assert scopes == ["cloud-session:Comm", "cloud-session-x:" + "Förderungen".encode().hex()]
     assert all(h == {"Authorization": "Bearer jwt-of-caller"} for _, h in gesehen)
+
+
+def test_share_with_ohne_auth_api_base_fragt_niemanden(monkeypatch):
+    # Kein Foederations-Vorgabewert mehr (P3, 24.10.2026): ohne AUTH_API_BASE
+    # verlaesst der Agenten-JWT die Instanz nicht, share_with schlaegt fehl.
+    import pytest
+    import server
+    gesehen = []
+    _fake_auth(monkeypatch, gesehen)
+    monkeypatch.setattr(server, "AUTH_API_BASE", "")
+    t = _mit_jwt("DRONE-CHALLENGE")
+    try:
+        with pytest.raises(ValueError, match="share_with_unavailable: AUTH_API_BASE"):
+            asyncio.run(server._share_with_scopes(["Comm"]))
+    finally:
+        _ohne_jwt(t)
+    assert gesehen == []
+
+
+def test_share_with_fragt_die_konfigurierte_auth_api(monkeypatch):
+    import server
+    gesehen = []
+    _fake_auth(monkeypatch, gesehen)
+    t = _mit_jwt("DRONE-CHALLENGE")
+    try:
+        asyncio.run(server._share_with_scopes(["Comm"]))
+    finally:
+        _ohne_jwt(t)
+    assert gesehen and all(u.startswith("http://127.0.0.1:8010/api/v1/auth/rbac/agents/") for u, _ in gesehen)
 
 
 def test_share_with_lehnt_ab(monkeypatch):

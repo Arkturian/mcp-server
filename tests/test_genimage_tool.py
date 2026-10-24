@@ -47,6 +47,28 @@ class GenimageToolTests(unittest.TestCase):
         b = self._rumpf(prompt="x", private=False)
         self.assertIs(b["private"], False)
 
+    def test_ergebnis_wird_an_den_aufrufer_gebunden(self):
+        import auth
+        with patch.object(auth, "current_caller_verified_agent", lambda: "PlanMaster"):
+            b = self._rumpf(prompt="x", private=True)
+        self.assertEqual(b["grant_scope"], "cloud-session:PlanMaster")
+
+    def test_ohne_gepruefte_identitaet_keine_bindung(self):
+        import auth
+        with patch.object(auth, "current_caller_verified_agent", lambda: ""):
+            b = self._rumpf(prompt="x", private=True)
+        self.assertNotIn("grant_scope", b)
+
+    def test_ein_scope_genuegt_der_api_ai_pruefung(self):
+        # api-ai prueft genau EINEN Scope (_SCOPE_RE, kein Komma) vor der
+        # Erzeugung; auch ein Name mit Leerzeichen muss durchgehen.
+        import re
+        import auth
+        muster = re.compile(r"^[a-z][a-z0-9-]{0,40}:[A-Za-z0-9._-]{1,120}$")
+        with patch.object(auth, "current_caller_verified_agent", lambda: "EDERA-HERMINE (CFO)"):
+            b = self._rumpf(prompt="x")
+        self.assertRegex(b["grant_scope"], muster)
+
 
 if __name__ == "__main__":
     unittest.main()

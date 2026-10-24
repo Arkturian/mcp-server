@@ -5911,6 +5911,10 @@ async def ai_genimage(
                        ("private", private), ("confirm_api_billing", confirm_api_billing)):
         if value not in (None, "", []):
             body[key] = value
+    # Ergebnis an den aufrufenden Agenten binden wie beim Upload: sonst liegt
+    # ein private=True-Bild ohne Bindung beim KI-Dienst und der Besteller
+    # bekommt 403 auf sein eigenes Bild (P3, 24.10.2026).
+    body = _with_grant_scope(body)
     return await call_ai_api("POST", "/ai/genimage", json_body=body)
 
 

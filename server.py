@@ -376,7 +376,10 @@ def _with_grant_scope(
     return out
 
 
-AUTH_API_BASE = os.getenv("AUTH_API_BASE", "https://auth-api.arkturian.com")
+# Ohne Vorgabewert (P3, 24.10.2026): der Default auth-api.arkturian.com
+# schickte auf jeder Kundeninstanz ohne die Variable den Agenten-JWT bei
+# share_with aus der Instanz hinaus. Fehlt sie, schlaegt share_with fehl.
+AUTH_API_BASE = os.getenv("AUTH_API_BASE", "").strip().rstrip("/")
 # storage-api bindet höchstens 20 Scopes je Upload; einer ist der eigene.
 _SHARE_WITH_MAX = 19
 
@@ -402,6 +405,8 @@ async def _share_with_scopes(share_with: Optional[Any]) -> List[str]:
         raise ValueError("share_with_requires_agent: only an agent identity can share an upload")
     if len(names) > _SHARE_WITH_MAX:
         raise ValueError(f"share_with_too_many: at most {_SHARE_WITH_MAX} agents")
+    if not AUTH_API_BASE:
+        raise ValueError("share_with_unavailable: AUTH_API_BASE is not configured on this gateway")
 
     headers = {"Authorization": f"Bearer {current_caller_jwt()}"}
     async with httpx.AsyncClient(timeout=10.0) as client:

@@ -10165,6 +10165,7 @@ async def cloud_create_session(
     ephemeral: bool = False,
     ttl_hours: float = 0,
     claude_md_source: str = "",
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """Spawn a new agent session in cloud-api.
 
@@ -10187,6 +10188,9 @@ async def cloud_create_session(
                     Either is rendered through the normal compose
                     pipeline (identity-block + memory + fragments
                     still apply on top).
+      project_id    put the new agent into this project folder right away
+                    (id from agent_projects_list). Needs `projects:manage`;
+                    the outcome is reported under "project".
     """
     body: Dict[str, Any] = {
         "name": name,
@@ -10212,7 +10216,8 @@ async def cloud_create_session(
         body["ttl_hours"] = ttl_hours
     if claude_md_source:
         body["claude_md_source"] = claude_md_source
-    return await call_cloud_api("POST", "/api/sessions", json_body=body)
+    result = await call_cloud_api("POST", "/api/sessions", json_body=body)
+    return await _with_project(result, name, project_id)
 
 
 @cloud_mcp.tool(
@@ -10240,6 +10245,7 @@ async def cloud_clone_session(
     ttl_hours: float = 0,
     start: bool = True,
     tenant_id: str = "",
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """Clone `source` agent's config to `new_name`.
 
@@ -10253,6 +10259,9 @@ async def cloud_clone_session(
     ephemeral      make the clone a throwaway (auto-cleanup, no auto_restart).
     ttl_hours      ephemeral only — time-based auto-kill (default 24h when ephemeral).
     start          spawn the clone immediately (default True).
+    project_id     put the clone into this project folder (agent_projects_list).
+                   Not inherited from the source: name it explicitly. Needs
+                   `projects:manage`; the outcome is reported under "project".
     """
     body: Dict[str, Any] = {
         "new_name": new_name,
@@ -10271,7 +10280,84 @@ async def cloud_clone_session(
         body["ttl_hours"] = ttl_hours
     if tenant_id:
         body["tenant_id"] = tenant_id
-    return await call_cloud_api("POST", f"/api/sessions/{source}/clone", json_body=body)
+    result = await call_cloud_api("POST", f"/api/sessions/{source}/clone", json_body=body)
+    return await _with_project(result, new_name, project_id)
+
+
+async def _with_project(result: Any, name: str, project_id: str) -> Any:
+    """After create/clone: assign the project if one was named.
+
+    Separate call on purpose: PUT /api/sessions/{name}/project runs the same
+    owner gate as in the portal (owner of the target project, agent visible to
+    them). A failed assignment does not undo the agent; it is reported."""
+    if not project_id or not isinstance(result, dict) or result.get("error"):
+        return result
+    try:
+        result["project"] = await call_cloud_api(
+            "PUT", f"/api/sessions/{name}/project", json_body={"project_id": project_id})
+    except Exception as e:  # noqa: BLE001
+        result["project"] = {"error": f"project assignment failed: {e}"}
+    return result
+
+
+@cloud_mcp.tool(
+    name="agent_projects_list",
+    description=(
+        "List the project folders that group agents in the portal sidebar "
+        "(id, name, parent_id, owner). Agents act as their owner and need the "
+        "permission `projects:manage`. Not the Tree or CodePilot projects."
+    ),
+)
+async def cloud_agent_projects_list() -> Dict[str, Any]:
+    return await call_cloud_api("GET", "/api/projects")
+
+
+@cloud_mcp.tool(
+    name="agent_projects_create",
+    description=(
+        "Create a project folder for agents. parent_id nests it under another "
+        "folder (max 6 levels). You become its owner via your agent's owner. "
+        "Returns the project with its id; assign agents with session_set_project "
+        "or pass project_id to create_session/clone_session."
+    ),
+)
+async def cloud_agent_projects_create(name: str, parent_id: str = "") -> Dict[str, Any]:
+    body: Dict[str, Any] = {"name": name}
+    if parent_id:
+        body["parent_id"] = parent_id
+    return await call_cloud_api("POST", "/api/projects", json_body=body)
+
+
+@cloud_mcp.tool(
+    name="agent_projects_update",
+    description=(
+        "Rename a project folder and/or move it. parent_id='-' moves it to the top "
+        "level; leave parent_id empty to keep its place. Only the folder's owner."
+    ),
+)
+async def cloud_agent_projects_update(project_id: str, name: str = "", parent_id: str = "") -> Dict[str, Any]:
+    body: Dict[str, Any] = {}
+    if name:
+        body["name"] = name
+    if parent_id:
+        body["parent_id"] = "" if parent_id == "-" else parent_id
+    if not body:
+        return {"error": "nothing to change: pass name and/or parent_id"}
+    return await call_cloud_api("PATCH", f"/api/projects/{project_id}", json_body=body)
+
+
+@cloud_mcp.tool(
+    name="session_set_project",
+    description=(
+        "Put an agent into a project folder (project_id) or take it out "
+        "(project_id=''). Allowed for the owner of the target folder, for agents "
+        "they may see. 409 agent_in_other_project = it sits in someone else's "
+        "folder; that owner has to move it."
+    ),
+)
+async def cloud_session_set_project(session_name: str, project_id: str = "") -> Dict[str, Any]:
+    return await call_cloud_api("PUT", f"/api/sessions/{session_name}/project",
+                                json_body={"project_id": project_id or None})
 
 
 @cloud_mcp.tool(

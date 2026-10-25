@@ -641,6 +641,7 @@ async def call_cloud_api(
     params: Optional[Dict[str, Any]] = None,
     json_body: Optional[Dict[str, Any]] = None,
     agent_gateway_proof: bool = False,
+    timeout: float = 180.0,
 ) -> Any:
     """Call Cloud API for inter-agent communication.
 
@@ -653,7 +654,7 @@ async def call_cloud_api(
         headers=_cloud_request_headers() if agent_gateway_proof else _caller_auth_headers(),
         params=params,
         json_body=json_body,
-        timeout=180.0,
+        timeout=timeout,
     )
 
 

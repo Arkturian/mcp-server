@@ -28,3 +28,12 @@ class HistoryExportToolTests(unittest.TestCase):
         p = call.call_args.kwargs["params"]
         self.assertEqual((p["format"], p["tools"], p["thinking"], p["deliver"], p["until"]),
                          ("md", "full", 1, "storage", "1d"))
+
+    def test_echter_aufrufpfad_mit_timeout(self):
+        """Issue #2585: der Mock auf call_cloud_api verdeckte, dass dessen Signatur
+        kein timeout kannte — hier laeuft der Aufruf durch die echte Funktion."""
+        with patch.object(server, "_fetch_json", new=AsyncMock(return_value={"turns": 1})) as fetch:
+            out = asyncio.run(server.cloud_history_export("Whatsapp", "Whatsapp", since="2h"))
+        self.assertEqual(out, {"turns": 1})
+        self.assertEqual(fetch.call_args.kwargs["timeout"], 90)
+        self.assertTrue(fetch.call_args.args[1].endswith("/api/sessions/Whatsapp/history/export"))

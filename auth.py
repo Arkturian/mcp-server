@@ -313,6 +313,21 @@ def _reject_if_revoked(claims: dict) -> None:
 # MCP path → permission mapping
 # ──────────────────────────────────────────────────────────────
 
+# Server, an denen Platzhalter ("*", "mcp:*", "mcp:*:*", "mcp:*:<tool>") nicht
+# zaehlen: durch kommt nur, wer mcp:<server>:* oder mcp:<server>:<tool>
+# ausdruecklich traegt. server.py meldet hier die Durchreichen an (Entscheid
+# Alex 26.10.2026: p3-buchhaltung nur mit ausdruecklichem Recht).
+EXPLICIT_ONLY_SERVERS: set[str] = set()
+
+
+def _permissions_for_server(permissions: list[str], mcp_server: str) -> list[str]:
+    """Die Rechte, die an diesem Server zaehlen."""
+    if mcp_server in EXPLICIT_ONLY_SERVERS:
+        prefix = f"mcp:{mcp_server}:"
+        return [p for p in permissions if p.startswith(prefix)]
+    return permissions
+
+
 def _extract_mcp_server_from_path(path: str) -> str:
     """Extract MCP server name from request path.
 
@@ -442,9 +457,10 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                 # The literal 2-part vs 3-part mismatch (mcp:* vs mcp:*:*)
                 # silently broke architect-role agents — both forms now valid.
                 server_prefix = f"mcp:{mcp_server}:"
+                perms = _permissions_for_server(agent.permissions, mcp_server)
                 has_any = any(
                     p == "*" or p == "mcp:*" or p == "mcp:*:*" or p.startswith(server_prefix)
-                    for p in agent.permissions
+                    for p in perms
                 )
                 if not has_any:
                     logger.warning(
@@ -463,13 +479,13 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                     )
 
                 # 2. Tool-level: check specific tool from the body we already parsed
-                if not agent.has_permission(f"mcp:{mcp_server}:*") and body_bytes:
+                if not any(_match_permission(p, f"mcp:{mcp_server}:*") for p in perms) and body_bytes:
                     try:
                         body_json = _json.loads(body_bytes)
                         tool_name = body_json.get("params", {}).get("name", "")
                         if tool_name:
                             required_perm = f"mcp:{mcp_server}:{tool_name}"
-                            if not agent.has_permission(required_perm):
+                            if not any(_match_permission(p, required_perm) for p in perms):
                                 logger.warning(
                                     "RBAC denied (tool): agent=%s role=%s perm=%s",
                                     agent.name, agent.role, required_perm,

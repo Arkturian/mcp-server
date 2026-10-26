@@ -10133,6 +10133,27 @@ async def cloud_history_export(
 
 
 @cloud_mcp.tool(
+    name="bridge_message_status",
+    description=(
+        "Where is a message you sent over a federation bridge (to `extern:<partner>/<agent>`)? "
+        "Pass the msg_id that send_message returned with status 'queued'. Returns status "
+        "queued (with attempts, next_try_at, last_error), delivered (with delivered_at: the "
+        "other side placed it in the recipient's window) or failed (with reason; no further "
+        "attempts). Only the sender (or an admin) may look; the message text is never "
+        "returned. 404 = not in the outbox of the node this call reached. You also get a "
+        "system notice on your own when a bridge message hangs for 10 min or fails — "
+        "ordinary success is not notified (Alex 2026-10-26)."
+    ),
+)
+async def cloud_bridge_message_status(msg_id: str) -> Dict[str, Any]:
+    from urllib.parse import quote
+    return await call_cloud_api(
+        "GET", f"/api/bridge/outbox/{quote(msg_id, safe='')}",
+        agent_gateway_proof=True,
+    )
+
+
+@cloud_mcp.tool(
     name="inbox",
     description="Check your inbox for messages from other agents.",
 )

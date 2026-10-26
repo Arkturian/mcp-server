@@ -11460,6 +11460,17 @@ async def issue_goal_issues(
 issue_app = issue_mcp.streamable_http_app()
 mount_mcp("issue", ISSUE_PATH, issue_app)
 
+# Fremde MCP-Server per MCP_PASSTHROUGH (passthrough.py, P3 26.10.2026). Namen
+# eigener Server sind gesperrt; Rechte prueft JWTAuthMiddleware wie ueberall.
+import passthrough as _passthrough  # noqa: E402
+
+_eigene_mcp_namen = {
+    str(getattr(r, "path", "")).strip("/").split("/")[0] for r in app.routes
+} - {""}
+for _pt_name, _pt_app in _passthrough.aus_umgebung(_eigene_mcp_namen).items():
+    if mount_mcp(_pt_name, f"/{_pt_name}", _pt_app):
+        print(f"  ↳ Durchreiche {_pt_name} → {_pt_app.basis}")
+
 
 _storage_stack = AsyncExitStack()
 _oneal_stack = AsyncExitStack()

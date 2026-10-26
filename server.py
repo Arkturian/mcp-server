@@ -6152,6 +6152,49 @@ async def ai_jev(
     return await call_ai_api("POST", "/ai/jev", json_body=body, extra_headers=extra or None)
 
 
+@ai_mcp.tool(
+    name="decisions",
+    description="""OpenAI Decisions — typisierte Urteile über gpt-6-luna (via AiApi /ai/decisions).
+
+Standard für typisierte Urteile bleibt jev (Alex, 26.10.2026, Post #5694). decisions NUR für: Fragen zu Bildern (Jev nimmt keine) und lange, immer gleiche Kontexte ab ~1 024 Tokens, die oft beurteilt werden (dann greift der Cache, prompt_cache_key setzen).
+
+Params: input (Text, oder Nachrichtenliste im Responses-Format, z. B. [{"role": "user", "content": [{"type": "input_image", "image_url": "https://..."}, {"type": "input_text", "text": "..."}]}]), questions (LISTE, 1-400, jede mit eindeutigem name), prompt_cache_key (optional).
+
+Drei Fragetypen:
+- predicate — Ja-Wahrscheinlichkeit. Beispiel: {"name": "defekt", "type": "predicate", "instructions": "Zeigt das Bild einen sichtbaren Schaden?"} -> {"probability": 0.91}
+- choice — choices = Liste {value, description}; eine Option "other" aufnehmen, wenn nicht alles passt. -> {choice, probabilities, confidence}
+- score — levels = 2-10 Stufen {label, description}, aufsteigend, Index ab 0. -> {score, probabilities, confidence}
+
+Antwort: {model, answers (Liste in Fragenreihenfolge), usage, cost_usd, latency_ms}. Eine Antwort kann type "refusal" sein (z. B. zu wenig Kontext) — abfangen, nicht als Nein lesen. confidence ist hier KEIN brauchbares Rückfall-Signal (gemessen: bei falschen Antworten nicht niedriger).
+
+Datenschutz: Keine echten personenbezogenen Daten (Kunden-, Behörden-, Personenmails) ohne Alex' Freigabe.
+
+Rechte: Urteile sind nie ein Berechtigungs-Tor. Ein Wahrscheinlichkeitsmodell darf nicht über Rechte entscheiden.
+
+Massenläufe über hunderte echte Datensätze nur mit Alex' Okay. Tagesbudget in AiApi.""",
+)
+async def ai_decisions(
+    input: Any,
+    questions: List[Dict[str, Any]],
+    prompt_cache_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    from auth import current_caller_agent_name, current_caller_jwt
+
+    body: Dict[str, Any] = {"input": input, "questions": questions}
+    if prompt_cache_key and str(prompt_cache_key).strip():
+        body["prompt_cache_key"] = str(prompt_cache_key).strip()
+    # Gleiches Tor wie /ai/jev: AiApi verlangt ein gepruefetes Agenten-JWT,
+    # sonst waere der OpenAI-Schluessel offen. X-Agent-Name ist nur Etikett.
+    extra: Dict[str, str] = {}
+    jwt_str = current_caller_jwt()
+    if jwt_str:
+        extra["Authorization"] = f"Bearer {jwt_str}"
+    agent = current_caller_agent_name()
+    if agent:
+        set_agent_name(extra, agent)
+    return await call_ai_api("POST", "/ai/decisions", json_body=body, extra_headers=extra or None)
+
+
 # NOTE deliberately NOT exposed as MCP tools:
 #   /ai/tts/clone          — multipart/form-data file upload; needs a
 #                            file-relay path (download-then-forward) that

@@ -36,7 +36,45 @@ from pydantic import Field
 from agent_identity_header import set_agent_name
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP as _FastMCP
+
+
+def _transport_security():
+    """Erlaubte Host-Namen fuer den Schutz gegen DNS-Rebinding.
+
+    mcp >= ~1.24 schaltet den Schutz von selbst ein, sobald der Server auf
+    127.0.0.1 lauscht, und laesst dann NUR localhost als Host zu. Hinter
+    nginx kommt aber der oeffentliche Name an (P3 27.10.2026: mcp 1.27.1,
+    jeder Aufruf an mcp.p3.arkturian.com bekam 421 Misdirected Request;
+    unser Gateway mit mcp 1.21 hatte den Schutz noch nicht).
+
+    MCP_ALLOWED_HOSTS (Komma-Liste, z. B. "mcp.p3.arkturian.com") laesst
+    genau diese Namen zu, der Schutz bleibt an. Ohne die Variable bleibt
+    das Verhalten der Bibliothek unveraendert."""
+    roh = (os.getenv("MCP_ALLOWED_HOSTS") or "").strip()
+    if not roh:
+        return None
+    try:
+        from mcp.server.transport_security import TransportSecuritySettings
+    except Exception:  # aeltere Bibliothek ohne den Schutz: nichts zu tun
+        return None
+    namen = [h.strip() for h in roh.split(",") if h.strip()]
+    hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    origins = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
+    for h in namen:
+        hosts += [h, f"{h}:*"]
+        origins += [f"https://{h}", f"https://{h}:*"]
+    return TransportSecuritySettings(enable_dns_rebinding_protection=True,
+                                     allowed_hosts=hosts, allowed_origins=origins)
+
+
+def FastMCP(*args, **kwargs):  # noqa: N802 - ersetzt die Klasse an allen 18 Stellen
+    """FastMCP mit den erlaubten Host-Namen aus MCP_ALLOWED_HOSTS."""
+    if "transport_security" not in kwargs:
+        ts = _transport_security()
+        if ts is not None:
+            kwargs["transport_security"] = ts
+    return _FastMCP(*args, **kwargs)
 
 # --------------------------------------------------------------------------- #
 # Configuration

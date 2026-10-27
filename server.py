@@ -1120,6 +1120,8 @@ async def storage_assets_update_embedding_text(
       is to send it on. Each name is checked in auth-api (same tenant, active);
       an unknown name fails the call with share_with_unknown_agent and nothing
       is stored. Only works for agent callers.
+    - ttl_hours: auto-delete after N hours (default: kept), on every path
+      (direct, CHUNK:, TICKET)
 
     Returns the created storage object with id, file_url, thumbnail_url, ai_title, etc.
     `share_url` (https://files.arkturian.com/<id>/<name>) is the readable link to hand to people
@@ -1150,6 +1152,7 @@ async def storage_assets_upload(
     is_public: bool = False,
     ai_mode: str = "safety",
     share_with: Optional[List[str]] = None,
+    ttl_hours: Optional[int] = None,
 ) -> Dict[str, Any]:
     # Escape hatch for clients whose tool catalogue is capped and therefore
     # never sees assets_upload_ticket (ChatGPT loads 9 of our 16 tools, 2026-08-04).
@@ -1178,6 +1181,7 @@ async def storage_assets_upload(
             collection_id=collection_id,
             is_public=is_public,
             ai_mode="none" if ai_mode == "safety" else ai_mode,
+            ttl_hours=ttl_hours,
             share_with=share_with,
         )
 
@@ -1191,6 +1195,8 @@ async def storage_assets_upload(
             params["context"] = context
         if collection_id:
             params["collection_id"] = collection_id
+        if ttl_hours is not None:
+            params["ttl_hours"] = ttl_hours
         ticket = await call_storage_api(
             "POST", "/storage/upload-ticket", params=params,
             share_scopes=await _share_with_scopes(share_with))
@@ -1209,6 +1215,8 @@ async def storage_assets_upload(
         form_fields["collection_id"] = collection_id
     if link_id:
         form_fields["link_id"] = link_id
+    if ttl_hours is not None:
+        form_fields["ttl_hours"] = str(ttl_hours)
     return await call_storage_upload(file_bytes, filename, form_fields=form_fields, share_scopes=share_scopes)
 
 
@@ -1242,6 +1250,8 @@ async def storage_assets_upload(
       is to send it on. Each name is checked in auth-api (same tenant, active);
       an unknown name fails the call with share_with_unknown_agent and nothing
       is stored. Only works for agent callers.
+    - ttl_hours: auto-delete after N hours (default: kept). Give public
+      throwaway copies a TTL, e.g. is_public=True, ttl_hours=24.
 
     Returns the created storage object with id, file_url, thumbnail_url, etc.
     `share_url` (https://files.arkturian.com/<id>/<name>) is the readable link to hand to people
@@ -1259,6 +1269,7 @@ async def storage_assets_upload_file(
     private: bool = False,
     ai_mode: str = "none",
     share_with: Optional[List[str]] = None,
+    ttl_hours: Optional[int] = None,
 ) -> Dict[str, Any]:
     from pathlib import Path as _P
 
@@ -1301,6 +1312,8 @@ async def storage_assets_upload_file(
         form_fields["collection_id"] = collection_id
     if link_id:
         form_fields["link_id"] = link_id
+    if ttl_hours is not None:
+        form_fields["ttl_hours"] = str(ttl_hours)
     return await call_storage_upload(
         file_bytes, filename or p.name, form_fields=form_fields, share_scopes=share_scopes)
 

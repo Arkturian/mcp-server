@@ -10179,9 +10179,12 @@ async def cloud_inbox(session_name: str) -> Dict[str, Any]:
     description=(
         "Create a new agent session, federation-aware. Returns {status, name, node}. "
         "Use agent='claude' (default), 'codex', or 'gemini'. "
-        "Set node='arkserver|arkturian|oneal|pdrei|mac' to spawn on a specific federation peer "
-        "(default: local node where the cloud-api receiving this MCP call runs). "
-        "owner_email assigns ownership for RBAC visibility/quota. "
+        "Set node=<node name> to spawn on a specific node of this instance; take the names "
+        "from list_agents or GET /api/cluster/nodes, never guess. Without node the agent lands "
+        "on the instance's default node (AGENT_DEFAULT_NODE), else on the node whose cloud-api "
+        "receives this call. "
+        "owner_email assigns ownership for RBAC visibility/quota; without it the agent belongs "
+        "to the caller's owner. "
         "Set pretty=True for JSON chat mode (queue/widget agents)."
     ),
 )

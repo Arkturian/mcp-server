@@ -10399,6 +10399,49 @@ async def cloud_session_set_project(session_name: str, project_id: str = "") -> 
 
 
 @cloud_mcp.tool(
+    name="session_set_assignment",
+    description=(
+        "Change an agent's owner (owner_email), role, department, tenant_id or project "
+        "folder (project_id) in ONE call: auth-api and the registry on the agent's node "
+        "are set together, checked first, rolled back on error. Only the fields you pass "
+        "change. restart='wenn_frei' restarts the agent only if it is idle (no running "
+        "turn, no background agents, empty input field), otherwise the change takes "
+        "effect at its next start. "
+        "Agents never change these from their own right: the call answers 202 "
+        "'freigabe_angefragt' and the responsible human gets an approval card. Do NOT "
+        "ask again; the outcome arrives as an IACP message. A human caller's own rights "
+        "are checked by auth-api. Errors come back with their status and reason "
+        "(e.g. 422 unknown_fields, 409 no_approver)."
+    ),
+)
+async def cloud_session_set_assignment(
+    session_name: str,
+    owner_email: Optional[str] = None,
+    role: Optional[str] = None,
+    department: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    restart: str = "nein",
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"restart": restart}
+    for k, v in (("owner_email", owner_email), ("role", role), ("department", department),
+                 ("tenant_id", tenant_id), ("project_id", project_id)):
+        if v is not None:
+            body[k] = v
+    try:
+        return await call_cloud_api("POST", f"/api/sessions/{session_name}/zuordnung",
+                                    json_body=body)
+    except httpx.HTTPStatusError as e:
+        # Die Begruendung steht im Rumpf; ohne sie raet der Agent.
+        try:
+            detail = e.response.json()
+        except Exception:
+            detail = {"error": e.response.text[:300]}
+        return {"status": e.response.status_code,
+                **(detail if isinstance(detail, dict) else {"detail": detail})}
+
+
+@cloud_mcp.tool(
     name="self_restart",
     description=(
         "Restart your own session. Use this as a last-resort self-heal when "

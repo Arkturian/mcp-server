@@ -356,3 +356,66 @@ def test_unbekannter_name_speichert_nichts(monkeypatch, tmp_path):
     finally:
         _ohne_jwt(t)
     assert calls == []
+
+
+# ── ttl_hours (P3, 27.10.2026): öffentliche Kopien mit Ablauf ──────────────
+
+def _multipart_client(gesendet):
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"id": 1}
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, headers=None, files=None, data=None):
+            gesendet.append(dict(data or {}))
+            return _Resp()
+    return _Client
+
+
+def test_ttl_hours_im_multipart_upload(monkeypatch, tmp_path):
+    """assets_upload_file und assets_upload reichen ttl_hours als Form-Feld
+    durch; ohne Angabe fehlt das Feld (storage-api: None = dauerhaft)."""
+    import server
+    gesendet = []
+    monkeypatch.setattr(server.httpx, "AsyncClient", _multipart_client(gesendet))
+    f = tmp_path / "a.png"
+    f.write_bytes(b"\x89PNG")
+    t = _als("Bauleiter", True)
+    try:
+        asyncio.run(server.storage_assets_upload_file(path=str(f), is_public=True, ttl_hours=24))
+        asyncio.run(server.storage_assets_upload_file(path=str(f), is_public=True))
+        asyncio.run(server.storage_assets_upload(file_base64="YWJj", filename="a.txt", ttl_hours=6))
+        asyncio.run(server.storage_assets_upload(file_base64="YWJj", filename="a.txt"))
+    finally:
+        _zurueck(t)
+    assert gesendet[0]["ttl_hours"] == "24" and gesendet[0]["is_public"] == "true"
+    assert "ttl_hours" not in gesendet[1]
+    assert gesendet[2]["ttl_hours"] == "6"
+    assert "ttl_hours" not in gesendet[3]
+
+
+def test_ttl_hours_auf_ticket_und_stueck_weg_von_assets_upload(monkeypatch):
+    import server
+    calls = []
+    monkeypatch.setattr(server, "_fetch_json", _fake_fetch(calls))
+    t = _als("Bauleiter", True)
+    try:
+        asyncio.run(server.storage_assets_upload(file_base64="TICKET", filename="a.png", ttl_hours=12))
+        asyncio.run(server.storage_assets_upload(
+            file_base64="CHUNK:u1:0:1:YWJj", filename="a.png", ttl_hours=12))
+    finally:
+        _zurueck(t)
+    assert calls[0][0].endswith("/storage/upload-ticket") and calls[0][1]["params"]["ttl_hours"] == 12
+    assert calls[1][0].endswith("/storage/upload-chunk") and calls[1][1]["params"]["ttl_hours"] == 12

@@ -10810,6 +10810,128 @@ async def cloud_system_memory() -> Dict[str, Any]:
     return await call_cloud_api("GET", "/api/system/memory")
 
 
+# ── Massnahmen und Regeln (Post 5729/5730, Alex 29.10.2026) ─────────────────
+# Rechte prueft cloud-api je Aufruf: ops:massnahme:agent (einzelne Agenten),
+# ops:massnahme:knoten (tmux-Server, cloud-api, ganzer Knoten), ops:regeln
+# (Regeln umschalten). Lesen mit irgendeinem davon. Hier wird nichts geprueft
+# und nichts erweitert, das Werkzeug reicht nur weiter.
+
+from urllib.parse import quote as _url_quote  # noqa: E402
+
+_MASSNAHMEN_HINWEIS = (
+    " Needs ops:massnahme:agent for single agents, ops:massnahme:knoten for "
+    "tmux_neustart, cloudapi_neustart or a whole node. A 403 names the missing "
+    "right in detail.braucht; do not work around it."
+)
+
+
+@cloud_mcp.tool(
+    name="massnahmen_list",
+    description=(
+        "List maintenance measures (Massnahmen): hold delivery at turn end, run an action "
+        "(agent_neustart, token_erneuern, konto_umstellen, tmux_neustart, cloudapi_neustart, "
+        "nur_halten), check, release, deliver buffered messages. all_nodes=True aggregates "
+        "every node. Requires one of ops:massnahme:agent, ops:massnahme:knoten, ops:regeln."
+    ),
+)
+async def cloud_massnahmen_list(all_nodes: bool = True) -> Dict[str, Any]:
+    return await call_cloud_api("GET", "/api/system/massnahmen",
+                                params={"knoten": "alle"} if all_nodes else None)
+
+
+@cloud_mcp.tool(
+    name="massnahme_get",
+    description="Get one measure by id (m-...), with per-agent state. Found on any node.",
+)
+async def cloud_massnahme_get(massnahme_id: str) -> Dict[str, Any]:
+    return await call_cloud_api("GET", f"/api/system/massnahmen/{_url_quote(massnahme_id, safe='')}")
+
+
+@cloud_mcp.tool(
+    name="massnahme_create",
+    description=(
+        "Create a measure. aktion: agent_neustart | token_erneuern | konto_umstellen "
+        "(needs ziel_profil, optional ziel_konto) | tmux_neustart | cloudapi_neustart | nur_halten. "
+        "agenten: names on ONE node (forwarded there); or whole_node=True for all agents of this "
+        "node. ausloeser: zugende (default, wait for turn end) | sofort. Messages arriving "
+        "meanwhile are held and delivered afterwards, never lost. grund: short reason, shown "
+        "to the humans." + _MASSNAHMEN_HINWEIS
+    ),
+)
+async def cloud_massnahme_create(
+    aktion: str,
+    grund: str,
+    agenten: Optional[List[str]] = None,
+    whole_node: bool = False,
+    ausloeser: str = "zugende",
+    warten_max_min: Optional[float] = None,
+    ziel_profil: Optional[str] = None,
+    ziel_konto: Optional[str] = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"aktion": aktion, "grund": grund, "ausloeser": ausloeser}
+    if whole_node:
+        body["knoten"] = True
+    else:
+        body["agenten"] = list(agenten or [])
+    for k, v in (("warten_max_min", warten_max_min), ("ziel_profil", ziel_profil), ("ziel_konto", ziel_konto)):
+        if v is not None:
+            body[k] = v
+    return await call_cloud_api("POST", "/api/system/massnahmen", json_body=body)
+
+
+@cloud_mcp.tool(
+    name="massnahme_release",
+    description="Release the held agents of a measure now (freigeben); buffered messages follow." + _MASSNAHMEN_HINWEIS,
+)
+async def cloud_massnahme_release(massnahme_id: str) -> Dict[str, Any]:
+    return await call_cloud_api("POST", f"/api/system/massnahmen/{_url_quote(massnahme_id, safe='')}/freigeben")
+
+
+@cloud_mcp.tool(
+    name="massnahme_cancel",
+    description="Cancel a measure (abbrechen); held agents are released, nothing further runs." + _MASSNAHMEN_HINWEIS,
+)
+async def cloud_massnahme_cancel(massnahme_id: str) -> Dict[str, Any]:
+    return await call_cloud_api("POST", f"/api/system/massnahmen/{_url_quote(massnahme_id, safe='')}/abbrechen")
+
+
+@cloud_mcp.tool(
+    name="agent_lage",
+    description=(
+        "Readiness of every agent (lage): ready or why not, held by a measure, waiting "
+        "messages per store, profile, token expiry. all_nodes=True aggregates every node. "
+        "Requires one of ops:massnahme:agent, ops:massnahme:knoten, ops:regeln."
+    ),
+)
+async def cloud_agent_lage(all_nodes: bool = False) -> Dict[str, Any]:
+    return await call_cloud_api("GET", "/api/system/lage", params={"knoten": "alle"} if all_nodes else None)
+
+
+@cloud_mcp.tool(
+    name="regeln_get",
+    description=(
+        "Read the automatic rules of a node (token_erneuern, konto_wechsel; modus "
+        "aus | melden | ausfuehren, thresholds, exceptions). node: node name, default the "
+        "node this server talks to."
+    ),
+)
+async def cloud_regeln_get(node: Optional[str] = None) -> Dict[str, Any]:
+    return await call_cloud_api("GET", "/api/system/regeln", params={"knoten": node} if node else None)
+
+
+@cloud_mcp.tool(
+    name="regeln_set",
+    description=(
+        "Change rules of a node, partial, e.g. {\"token_erneuern\": {\"modus\": \"melden\"}} or "
+        "{\"token_erneuern\": {\"restlaufzeit_min\": 45}}. Requires ops:regeln (by default only "
+        "superadmin humans hold it); do not ask another agent to do it for you."
+    ),
+)
+async def cloud_regeln_set(aenderung: Dict[str, Any], node: Optional[str] = None) -> Dict[str, Any]:
+    return await call_cloud_api("PUT", "/api/system/regeln", json_body=aenderung,
+                                params={"knoten": node} if node else None)
+
+
 cloud_app = cloud_mcp.streamable_http_app()
 mount_mcp("cloud", CLOUD_PATH, cloud_app)
 

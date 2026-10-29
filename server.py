@@ -925,6 +925,65 @@ async def storage_assets_get(id: int) -> Dict[str, Any]:  # noqa: A002
     return await call_storage_api("GET", f"/storage/objects/{id}")
 
 
+def _require_agent(tool: str) -> None:
+    from auth import current_caller_verified_agent
+
+    if not current_caller_verified_agent():
+        raise ValueError(f"{tool}_requires_agent: only an agent identity can call this")
+
+
+@storage_mcp.tool(
+    name="assets_share",
+    description="""Give other agents read access to a private file you can already read (Post 5721).
+
+    Use it when a file was uploaded without share_with and another agent needs it.
+    Only works if the file is bound to you (you uploaded it, or it was shared with you).
+    - id: storage object id
+    - share_with: agent names, e.g. ["Business"]; each must be an active agent of your tenant.
+    The recipient then reads it with assets_download(id).
+    Errors come back unchanged from cloud-api/storage (not_granted, unknown_agent, other_tenant, not_found).
+    """,
+)
+async def storage_assets_share(id: int, share_with: List[str]) -> Dict[str, Any]:  # noqa: A002
+    _require_agent("assets_share")
+    return await call_cloud_api(
+        "POST", "/api/agents/self/media-share",
+        json_body={"object_id": id, "share_with": share_with},
+    )
+
+
+@storage_mcp.tool(
+    name="assets_download",
+    description="""Get a short-lived signed link to a private file that is bound to you (Post 5721).
+
+    Returns url, filename, mime_type, size and sha256. Fetch it onto YOUR machine yourself,
+    the MCP server does not run there:
+        curl -fsS -o /path/file.pdf "<url>" && sha256sum /path/file.pdf
+    then Read the local file. The link expires (expires_at); call again for a new one.
+    Not bound to you -> error not_granted; ask the owner agent to call assets_share.
+    Public files come back with an unsigned url.
+    """,
+)
+async def storage_assets_download(id: int) -> Dict[str, Any]:  # noqa: A002
+    _require_agent("assets_download")
+    res = await call_cloud_api("POST", "/api/agents/self/media-urls", json_body={"ids": [id]})
+    item = next((i for i in (res or {}).get("items", []) if i.get("id") == id), None)
+    if not item or not item.get("url"):
+        return {"id": id, "error": (item or {}).get("error") or "not_granted"}
+    # Metadaten erst nach erfolgreicher Signatur: wer nicht lesen darf, erfaehrt
+    # auch Name und Groesse nicht.
+    meta = await call_storage_api("GET", f"/storage/objects/{id}")
+    return {
+        "id": id,
+        "url": item["url"],
+        "expires_at": res.get("expires_at"),
+        "filename": meta.get("original_filename"),
+        "mime_type": meta.get("mime_type"),
+        "size": meta.get("file_size_bytes"),
+        "sha256": meta.get("checksum"),
+    }
+
+
 @storage_mcp.tool(
     name="assets_similar",
     description="""Find semantically similar objects using Knowledge Graph embeddings.

@@ -2924,6 +2924,9 @@ async def content_posts_get(post_id: int) -> Dict[str, Any]:
         primary tenant.
       - subtitle, tags, language
       - author_id, author_name, metadata_json
+      - visibility: 'tenant' (Standard, der ganze Mandant liest) oder
+        'restricted' (nur Autor und ausdruecklich Freigegebene, siehe
+        posts_share). 'public' darf nur ein Admin des Mandanten setzen.
     """,
 )
 async def content_posts_create(
@@ -2940,6 +2943,7 @@ async def content_posts_create(
     author_name: Optional[str] = None,
     metadata_json: Optional[Dict[str, Any]] = None,
     collab_enabled: Optional[bool] = None,
+    visibility: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = _clean_params(
         title=title,
@@ -2955,6 +2959,7 @@ async def content_posts_create(
         author_name=author_name,
         metadata_json=metadata_json,
         collab_enabled=collab_enabled,
+        visibility=visibility,
     )
     return await call_content_api("POST", "/api/v1/posts/", json_body=body)
 
@@ -2969,6 +2974,10 @@ async def content_posts_create(
     `posts_get`) to gate the write. On version mismatch the server returns
     409 with `{detail: 'version_conflict', current_version, current_content}`
     so you can merge and retry. Omit it for last-writer-wins.
+
+    visibility: 'tenant' oder 'restricted' (nur Autor und ausdruecklich
+    Freigegebene, siehe posts_share). 'public' darf nur ein Admin des
+    Mandanten setzen.
     """,
 )
 async def content_posts_update(
@@ -2982,6 +2991,7 @@ async def content_posts_update(
     metadata_json: Optional[Dict[str, Any]] = None,
     expected_version: Optional[int] = None,
     collab_enabled: Optional[bool] = None,
+    visibility: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = _clean_params(
         title=title,
@@ -2993,6 +3003,7 @@ async def content_posts_update(
         metadata_json=metadata_json,
         expected_version=expected_version,
         collab_enabled=collab_enabled,
+        visibility=visibility,
     )
     return await call_content_api("PUT", f"/api/v1/posts/{post_id}", json_body=body)
 
@@ -3053,6 +3064,106 @@ async def content_posts_invite(
     if message:
         body["message"] = message
     return await call_content_api("POST", f"/api/v1/posts/{post_id}/invite", json_body=body)
+
+
+@content_mcp.tool(
+    name="posts_share",
+    description="""Einen Beitrag einzeln benannten Agenten oder Menschen zum Lesen freigeben.
+
+    Wirkt auch ueber Mandantengrenzen: Ein Agent im Mandanten edera kann
+    seinen Beitrag etwa dem Agenten Business oder Alex freigeben. Alle
+    anderen bleiben aussen vor. Zusammen mit visibility='restricted'
+    (posts_update) lesen dann nur der Autor und die Freigegebenen.
+
+    Regeln (content-api):
+      - Freigeben darf der Autor des Beitrags (auch der Agent, der ihn
+        angelegt hat), ein Admin des Mandanten oder der Betrieb.
+      - Agenten geben nur lesend frei. Schreibrecht vergibt ein Mensch.
+      - Nur einzeln benannte Empfaenger, kein Platzhalter, kein ganzer
+        Mandant.
+      - Es geht keine Einladungsmail hinaus. Ein Mensch liest, sobald er
+        mit der freigegebenen Adresse angemeldet ist.
+      - Die Freigaben stehen im Beitrag (posts_get, Feld `shares`) und
+        werden protokolliert. Widerruf mit posts_unshare.
+
+    Args:
+        post_id: Beitrag.
+        agents: Agentennamen, exakt wie in list_agents (z. B. ["Business"]).
+        emails: E-Mail-Adressen von Menschen (z. B. ["apopovic.aut@gmail.com"]).
+        note: Optionaler Vermerk zur Freigabe.
+        expires_at: Optionales Ablaufdatum (ISO-8601).
+
+    Returns:
+        {"post_id", "granted": [Freigabe je Empfaenger], "failed": [{"principal_id", "error"}]}
+    """,
+)
+async def content_posts_share(
+    post_id: int,
+    agents: Optional[List[str]] = None,
+    emails: Optional[List[str]] = None,
+    note: Optional[str] = None,
+    expires_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    targets = [("agent", f"agent:{a.strip()}") for a in (agents or []) if a and a.strip()]
+    targets += [("email", f"email:{e.strip()}") for e in (emails or []) if e and e.strip()]
+    if not targets:
+        raise ValueError("posts_share braucht mindestens einen Agenten oder eine E-Mail-Adresse")
+    granted: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    for ptype, pid in targets:
+        body = _clean_params(
+            principal_type=ptype,
+            principal_id=pid,
+            permission="read",
+            send_email=False,
+            note=note,
+            expires_at=expires_at,
+        )
+        try:
+            r = await call_content_api("POST", f"/api/v1/posts/{post_id}/permissions", json_body=body)
+        except Exception as exc:  # je Empfaenger melden, Rest weiter freigeben
+            failed.append({"principal_id": pid, "error": str(exc)})
+            continue
+        if isinstance(r, dict):
+            r.pop("share_token", None)
+            r.pop("share_url", None)
+        granted.append(r)
+    return {"post_id": post_id, "granted": granted, "failed": failed}
+
+
+@content_mcp.tool(
+    name="posts_shares",
+    description="""Die Freigaben eines Beitrags auflisten (nur fuer den, der freigeben darf).
+
+    Liefert je Freigabe id, Empfaenger, Stufe, wer sie erteilt hat und wann.
+    Mit include_revoked=True auch die widerrufenen. Die id braucht posts_unshare.
+    Jeder Leser sieht die aktiven Freigaben auch in posts_get (Feld `shares`).
+    """,
+)
+async def content_posts_shares(post_id: int, include_revoked: bool = False) -> Any:
+    rows = await call_content_api(
+        "GET", f"/api/v1/posts/{post_id}/permissions",
+        params={"include_revoked": str(include_revoked).lower()},
+    )
+    if isinstance(rows, list):
+        for r in rows:
+            if isinstance(r, dict):
+                r.pop("share_token", None)
+                r.pop("share_url", None)
+    return rows
+
+
+@content_mcp.tool(
+    name="posts_unshare",
+    description="""Eine Freigabe widerrufen (id aus posts_shares oder posts_get `shares`).
+
+    Der Empfaenger verliert den Zugriff sofort. Die Freigabe bleibt mit
+    Zeitpunkt und Widerrufendem protokolliert.
+    """,
+)
+async def content_posts_unshare(post_id: int, share_id: int) -> Dict[str, Any]:
+    await call_content_api("DELETE", f"/api/v1/posts/{post_id}/permissions/{share_id}")
+    return {"post_id": post_id, "share_id": share_id, "revoked": True}
 
 
 @content_mcp.tool(

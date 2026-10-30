@@ -11281,7 +11281,10 @@ async def issue_create(
       goal_id (parent Goal in three-tier work model),
       process_template (opt-in Phase-A gating, e.g. "design-impl-test" —
       when set, the issue cannot be resolved to `fixed` until all stages
-      are done; stages enforce strict sequential ordering).
+      are done; stages enforce strict sequential ordering),
+      abnahme_stufen (acceptance per environment, e.g. ["foederation","p3","ele"]:
+      foederation first, customer instances afterwards in parallel; alone it
+      sets process_template="abnahme", with another template it is appended).
     """,
 )
 async def issue_create_structured(
@@ -11295,6 +11298,7 @@ async def issue_create_structured(
     status: str = "open",
     goal_id: Optional[int] = None,
     process_template: Optional[str] = None,
+    abnahme_stufen: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {
         "title": title,
@@ -11314,6 +11318,8 @@ async def issue_create_structured(
         body["goal_id"] = goal_id
     if process_template is not None:
         body["process_template"] = process_template
+    if abnahme_stufen is not None:
+        body["abnahme_stufen"] = abnahme_stufen
     return await call_issue_api("POST", "/api/v1/issues", json_body=body)
 
 
@@ -11524,13 +11530,19 @@ async def issue_comment(id: int, body: str) -> Dict[str, Any]:
     description="""Phase A — transition a single stage of a gated issue.
 
     Only applicable when the issue was created with `process_template`
-    (e.g. "design-impl-test"). Stage status values:
-      pending | in_progress | done | skipped
+    (e.g. "design-impl-test") or has acceptance stages. Stage status values:
+      pending | in_progress | done | skipped | waiting
+    (German aliases: offen, bestanden, nicht_anwendbar, wartet)
+      skipped on an acceptance stage needs `grund` (why not applicable).
+      waiting needs `wartet_auf` {"wer": "user:<mail>|agent:<Name>|
+        extern:<bridge>/<Agent>|issue:<id>", "was": "..."}; it blocks
+        `fixed` like pending. If all open stages wait, no escalation.
 
-    STRICT SEQUENTIAL ORDERING: a stage can only transition to
-    `in_progress` or `done` if the PREVIOUS stage is already done or
-    skipped. Out-of-order transitions return HTTP 409 with the offending
-    prior stage in the error detail.
+    ORDERING: a stage can only transition to `in_progress`, `done` or
+    `waiting` if its prerequisites are done or skipped — for
+    design-impl-test the previous stage, for acceptance stages
+    "foederation" first, customer instances (p3, ele, ...) in parallel
+    after it. Out-of-order transitions return HTTP 409.
 
     Pending/skipped transitions don't violate sequence — you can reset
     a stage or skip a stage any time.
@@ -11547,11 +11559,32 @@ async def issue_stage_update(
     id: int,
     stage: str,
     status: str,
+    grund: Optional[str] = None,
+    wartet_auf: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     return await call_issue_api(
         "POST",
         f"/api/v1/issues/{id}/stages/{stage}",
-        json_body={"status": status},
+        json_body=_clean_params(status=status, grund=grund, wartet_auf=wartet_auf),
+    )
+
+
+@issue_mcp.tool(
+    name="add_acceptance_stages",
+    description="""Append acceptance stages per environment to an existing issue.
+
+    Example: add_acceptance_stages(id=2609, abnahme_stufen=["foederation","p3"]).
+    "foederation" comes first; the customer instances follow in parallel
+    after it. Appended after existing stages (e.g. after design-impl-test's
+    "test"); an issue without template gets process_template="abnahme".
+    From then on `resolve(status="fixed")` needs every stage done or skipped.
+    Set each stage with stage_update (bestanden / nicht_anwendbar + grund /
+    wartet + wartet_auf).
+    """,
+)
+async def issue_add_acceptance_stages(id: int, abnahme_stufen: List[str]) -> Dict[str, Any]:
+    return await call_issue_api(
+        "POST", f"/api/v1/issues/{id}/stages", json_body={"abnahme_stufen": abnahme_stufen},
     )
 
 

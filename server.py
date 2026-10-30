@@ -11372,19 +11372,28 @@ async def issue_get(id: int) -> Dict[str, Any]:
     status — what each value does to dispatch and escalation:
       open / in_progress  live work; dispatched, rotated by the stall sweep,
                           escalated without progress (comment = progress).
-      blocked             WAITING ON SOMEONE (a human, another agent, a delivery).
-                          Set it while the issue is active: frees your slot, no
-                          re-dispatch, no escalation, stays visible. Put the
-                          wait condition at the top of the description.
-                          Resume with status="in_progress". Nothing resumes it
-                          automatically.
+      blocked             WAITING ON SOMEONE. Needs `wartet_auf` (or use the
+                          `wait` tool): {"wer": "user:<mail> | agent:<Name> |
+                          extern:<bridge>/<Agent> | issue:<id>", "was": "...",
+                          "nachfassen_am": "<ISO, optional>"}. Without it → 422.
+                          Frees your slot, no escalation to you, stays visible.
+                          Resumes AUTOMATICALLY (back to in_progress and
+                          re-dispatched) when issue:<id> is resolved or
+                          nachfassen_am is reached (default 14 days for user:/
+                          extern:). An agent you wait on gets a daily reminder.
+                          Resume yourself any time with status="in_progress".
+                          Setting `wartet_auf` alone also sets status=blocked.
       deferred            your own choice to park low-priority work (no
                           external blocker). Same effect on dispatch.
       fixed/closed/wontfix/duplicate  terminal — use the `resolve` tool;
                           PATCH into a terminal state without a summary → 422.
 
-    The Work-Board (`set_status` waiting) does NOT change the issue; the
-    dispatcher only reads the issue status. Waiting → set both.
+    The Work-Board (`set_status` waiting) does NOT change the issue (yet); the
+    dispatcher only reads the issue status. Waiting → use `wait` here too.
+
+    `wartet_auf` and the service's bookkeeping in metadata_json cannot be set
+    or deleted via metadata_json (system keys). Escalation brake: after 3
+    escalations without any progress the issue stops pinging you.
 
     Tenant-isolation: only the issue's tenant can update; cross-tenant → 404.
     """,
@@ -11402,6 +11411,7 @@ async def issue_update(
     duplicate_of: Optional[int] = None,
     goal_id: Optional[int] = None,
     metadata_json: Optional[Dict[str, Any]] = None,
+    wartet_auf: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     body = _clean_params(
         title=title,
@@ -11415,8 +11425,41 @@ async def issue_update(
         duplicate_of=duplicate_of,
         goal_id=goal_id,
         metadata_json=metadata_json,
+        wartet_auf=wartet_auf,
     )
     return await call_issue_api("PATCH", f"/api/v1/issues/{id}", json_body=body)
+
+
+@issue_mcp.tool(
+    name="wait",
+    description="""Park an issue because you are WAITING ON SOMEONE (status=blocked + wait condition).
+
+    Required: id, wer, was.
+      wer  — who/what you wait for: "user:<mail>" (a human), "agent:<Name>"
+             (an agent here), "extern:<bridge>/<Agent>" (an agent across a
+             bridge; stored only, nothing is sent there), "issue:<id>"
+             (another issue must be resolved first).
+      was  — what exactly you need (min. 10 chars).
+    Optional: nachfassen_am (ISO time to follow up; default 14 days for
+      user:/extern:, none for agent:/issue:), bezug_msg_id (the IACP msg_id
+      of your request).
+
+    Effect: frees your slot, no escalation to you. The issue resumes
+    AUTOMATICALLY (in_progress, re-dispatched to you) when issue:<id> is
+    resolved or nachfassen_am is reached. An agent you wait on gets one
+    bundled reminder per day. Resume yourself with update(status="in_progress").
+    Not waiting on anyone, just low priority? Use update(status="deferred").
+    """,
+)
+async def issue_wait(
+    id: int,
+    wer: str,
+    was: str,
+    nachfassen_am: Optional[str] = None,
+    bezug_msg_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    body = _clean_params(wer=wer, was=was, nachfassen_am=nachfassen_am, bezug_msg_id=bezug_msg_id)
+    return await call_issue_api("POST", f"/api/v1/issues/{id}/warten", json_body=body)
 
 
 @issue_mcp.tool(

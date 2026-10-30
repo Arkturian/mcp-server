@@ -939,15 +939,37 @@ def _require_agent(tool: str) -> None:
     Use it when a file was uploaded without share_with and another agent needs it.
     Only works if the file is bound to you (you uploaded it, or it was shared with you).
     - id: storage object id
-    - share_with: agent names, e.g. ["Business"]; each must be an active agent of your tenant.
-    The recipient then reads it with assets_download(id).
-    Errors come back unchanged from cloud-api/storage (not_granted, unknown_agent, other_tenant, not_found).
+    - share_with: each recipient named one by one, never "all" or a whole tenant:
+      an agent name (e.g. ["Business"]) or a person's e-mail address.
+      Recipients in another tenant get read-only access: they may not pass it on.
+    The recipient then reads it with assets_download(id) and sees who shared it.
+    Take it back with assets_unshare(id, [...]).
+    Errors come back unchanged from cloud-api/storage (not_granted, unknown_agent,
+    reshare_not_allowed, not_found).
     """,
 )
 async def storage_assets_share(id: int, share_with: List[str]) -> Dict[str, Any]:  # noqa: A002
     _require_agent("assets_share")
     return await call_cloud_api(
         "POST", "/api/agents/self/media-share",
+        json_body={"object_id": id, "share_with": share_with},
+    )
+
+
+@storage_mcp.tool(
+    name="assets_unshare",
+    description="""Take back read access you gave with assets_share (Post 5721).
+
+    Only removes shares YOU made; whatever a recipient passed on falls with it.
+    - id: storage object id
+    - share_with: the agent names / e-mail addresses to revoke
+    Returns revoked, cascade (removed along with them) and not_shared_by_you.
+    """,
+)
+async def storage_assets_unshare(id: int, share_with: List[str]) -> Dict[str, Any]:  # noqa: A002
+    _require_agent("assets_unshare")
+    return await call_cloud_api(
+        "POST", "/api/agents/self/media-unshare",
         json_body={"object_id": id, "share_with": share_with},
     )
 
@@ -960,6 +982,7 @@ async def storage_assets_share(id: int, share_with: List[str]) -> Dict[str, Any]
     the MCP server does not run there:
         curl -fsS -o /path/file.pdf "<url>" && sha256sum /path/file.pdf
     then Read the local file. The link expires (expires_at); call again for a new one.
+    shared_by names who shared it with you (empty if you uploaded it yourself).
     Not bound to you -> error not_granted; ask the owner agent to call assets_share.
     Public files come back with an unsigned url.
     """,
@@ -981,6 +1004,7 @@ async def storage_assets_download(id: int) -> Dict[str, Any]:  # noqa: A002
         "mime_type": meta.get("mime_type"),
         "size": meta.get("file_size_bytes"),
         "sha256": meta.get("checksum"),
+        "shared_by": item.get("shared_by"),
     }
 
 

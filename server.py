@@ -11284,7 +11284,13 @@ async def issue_create(
       are done; stages enforce strict sequential ordering),
       abnahme_stufen (acceptance per environment, e.g. ["foederation","p3","ele"]:
       foederation first, customer instances afterwards in parallel; alone it
-      sets process_template="abnahme", with another template it is appended).
+      sets process_template="abnahme", with another template it is appended),
+      force (create even if similar open issues exist).
+
+    DUPLICATES: the API looks for open issues with a similar title (and the
+    same component, if given). Hits come back as `moegliche_duplikate` plus a
+    `hinweis` — check them before working twice. Currently a hint only; it
+    may later reject with 409 unless force=true.
     """,
 )
 async def issue_create_structured(
@@ -11299,6 +11305,7 @@ async def issue_create_structured(
     goal_id: Optional[int] = None,
     process_template: Optional[str] = None,
     abnahme_stufen: Optional[List[str]] = None,
+    force: bool = False,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {
         "title": title,
@@ -11320,6 +11327,8 @@ async def issue_create_structured(
         body["process_template"] = process_template
     if abnahme_stufen is not None:
         body["abnahme_stufen"] = abnahme_stufen
+    if force:
+        body["force"] = True
     return await call_issue_api("POST", "/api/v1/issues", json_body=body)
 
 
@@ -11386,7 +11395,10 @@ async def issue_get(id: int) -> Dict[str, Any]:
                           Resumes AUTOMATICALLY (back to in_progress and
                           re-dispatched) when issue:<id> is resolved or
                           nachfassen_am is reached (default 14 days for user:/
-                          extern:). An agent you wait on gets a daily reminder.
+                          extern:); a second unchanged return fades out and is
+                          closed after 7 days without objection (see `wait`).
+                          An agent you wait on gets a reminder (daily if
+                          running, weekly otherwise).
                           Resume yourself any time with status="in_progress".
                           Setting `wartet_auf` alone also sets status=blocked.
       deferred            your own choice to park low-priority work (no
@@ -11398,7 +11410,9 @@ async def issue_get(id: int) -> Dict[str, Any]:
     dispatcher only reads the issue status. Waiting → use `wait` here too.
 
     `wartet_auf` and the service's bookkeeping in metadata_json cannot be set
-    or deleted via metadata_json (system keys). Escalation brake: after 3
+    or deleted via metadata_json (system keys).
+    Reopening (terminal → open/in_progress/blocked) is allowed; the previous
+    resolution moves to metadata_json.abschluesse with who reopened it. Escalation brake: after 3
     escalations without any progress the issue stops pinging you.
 
     Tenant-isolation: only the issue's tenant can update; cross-tenant → 404.
@@ -11453,7 +11467,13 @@ async def issue_update(
     Effect: frees your slot, no escalation to you. The issue resumes
     AUTOMATICALLY (in_progress, re-dispatched to you) when issue:<id> is
     resolved or nachfassen_am is reached. An agent you wait on gets one
-    bundled reminder per day. Resume yourself with update(status="in_progress").
+    bundled reminder (daily if running, weekly if not). Resume yourself with
+    update(status="in_progress").
+    FADING OUT: if it comes back via nachfassen_am a SECOND time unchanged
+    (same wer/was, no comment from you or the reporter in between), it is
+    not re-dispatched but announced as "probably obsolete" and closed after
+    7 days unless you or the reporter comment, change the status or set a
+    new wartet_auf (critical/security issues are never auto-closed).
     Not waiting on anyone, just low priority? Use update(status="deferred").
     """,
 )

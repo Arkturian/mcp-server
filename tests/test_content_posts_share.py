@@ -73,3 +73,15 @@ def test_visibility_wird_durchgereicht(monkeypatch):
     asyncio.run(server.content_posts_update(post_id=9, visibility="restricted"))
     asyncio.run(server.content_posts_create(title="T", visibility="restricted"))
     assert [c[2]["visibility"] for c in calls] == ["restricted", "restricted"]
+
+
+def test_update_reicht_alle_metadaten_durch(monkeypatch):
+    """P3-Cloud 01.11.2026: subtitle, tags, category, language fehlten im Werkzeug."""
+    import server
+    calls = []
+    monkeypatch.setattr(server, "_fetch_json", _fake(calls, {"id": 9}))
+    asyncio.run(server.content_posts_update(
+        post_id=9, subtitle="U", tags=["a", "b"], category="k", language="de",
+        doc_type="docu", metadata_merge={"x": None}))
+    assert calls[0][2] == {"subtitle": "U", "tags": ["a", "b"], "category": "k", "language": "de",
+                           "doc_type": "docu", "metadata_merge": {"x": None}}

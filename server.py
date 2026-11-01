@@ -2997,6 +2997,10 @@ async def content_posts_create(
 
     All fields are optional. Only provided fields will be updated.
 
+    `metadata_json` REPLACES the whole field. To set or remove single keys use
+    `metadata_merge` (shallow merge; a value of None deletes the key). Do not
+    combine both in one call.
+
     Optimistic concurrency: pass `expected_version` (the version you read from
     `posts_get`) to gate the write. On version mismatch the server returns
     409 with `{detail: 'version_conflict', current_version, current_content}`
@@ -3019,7 +3023,16 @@ async def content_posts_update(
     expected_version: Optional[int] = None,
     collab_enabled: Optional[bool] = None,
     visibility: Optional[str] = None,
+    doc_type: Optional[str] = None,
+    subtitle: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    category: Optional[str] = None,
+    language: Optional[str] = None,
+    metadata_merge: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    # doc_type/subtitle/tags/category/language/metadata_merge nimmt PostUpdate
+    # der content-api seit langem an; das Werkzeug reichte sie nicht durch, ein
+    # Agent konnte z. B. den Untertitel nicht aendern (P3-Cloud, 01.11.2026).
     body = _clean_params(
         title=title,
         content=content,
@@ -3031,6 +3044,12 @@ async def content_posts_update(
         expected_version=expected_version,
         collab_enabled=collab_enabled,
         visibility=visibility,
+        doc_type=doc_type,
+        subtitle=subtitle,
+        tags=tags,
+        category=category,
+        language=language,
+        metadata_merge=metadata_merge,
     )
     return await call_content_api("PUT", f"/api/v1/posts/{post_id}", json_body=body)
 

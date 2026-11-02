@@ -49,13 +49,14 @@ def test_download_signiert_dann_metadaten(monkeypatch, als_agent):
     import server
     calls = []
     monkeypatch.setattr(server, "_fetch_json", _fake(calls, {
-        "/api/agents/self/media-urls": {"expires_at": "t", "items": [{"id": 7, "url": "https://s/m/7?sig=x"}]},
+        "/api/agents/self/media-urls": {"expires_at": "t", "items": [{"id": 7, "url": "https://s/m/7?sig=x",
+                                                                   "shared_by": "EDERA-HERMINE (CFO)"}]},
         "/storage/objects/7": {"original_filename": "v.pdf", "mime_type": "application/pdf",
                                "file_size_bytes": 3, "checksum": "ab"},
     }))
     r = asyncio.run(server.storage_assets_download(id=7))
     assert r == {"id": 7, "url": "https://s/m/7?sig=x", "expires_at": "t", "filename": "v.pdf",
-                 "mime_type": "application/pdf", "size": 3, "sha256": "ab"}
+                 "mime_type": "application/pdf", "size": 3, "sha256": "ab", "shared_by": "EDERA-HERMINE (CFO)"}
     assert calls[0][1].endswith("/api/agents/self/media-urls") and calls[0][2] == {"ids": [7]}
 
 
@@ -69,7 +70,16 @@ def test_download_ohne_bindung_verraet_keine_metadaten(monkeypatch, als_agent):
     assert not any("/storage/objects/" in u for _, u, _ in calls)
 
 
-@pytest.mark.parametrize("werkzeug", ["share", "download"])
+def test_unshare_reicht_durch(monkeypatch, als_agent):
+    import server
+    calls = []
+    monkeypatch.setattr(server, "_fetch_json", _fake(calls, {"/api/agents/self/media-unshare": {"revoked": ["Business"]}}))
+    r = asyncio.run(server.storage_assets_unshare(id=132600, share_with=["Business", "a@b.c"]))
+    assert r == {"revoked": ["Business"]}
+    assert calls[0][0] == "POST" and calls[0][2] == {"object_id": 132600, "share_with": ["Business", "a@b.c"]}
+
+
+@pytest.mark.parametrize("werkzeug", ["share", "download", "unshare"])
 def test_ohne_agenten_identitaet_abgelehnt(monkeypatch, werkzeug):
     import server
     calls = []
@@ -77,6 +87,8 @@ def test_ohne_agenten_identitaet_abgelehnt(monkeypatch, werkzeug):
     with pytest.raises(ValueError, match="requires_agent"):
         if werkzeug == "share":
             asyncio.run(server.storage_assets_share(id=1, share_with=["X"]))
+        elif werkzeug == "unshare":
+            asyncio.run(server.storage_assets_unshare(id=1, share_with=["X"]))
         else:
             asyncio.run(server.storage_assets_download(id=1))
     assert calls == []

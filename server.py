@@ -10308,6 +10308,24 @@ async def cloud_get_status(session_name: str) -> Dict[str, Any]:
 
 
 @cloud_mcp.tool(
+    name="turn_initiator",
+    description=(
+        "Wer hat deinen laufenden Zug begonnen? Fragt die cloud-api nach dem Initiator "
+        "deines aktuellen Zugs (zug_initiator, auch ueber Ketten). Pass your OWN session "
+        "name. Rueckgabe: art (mensch|agent|queue|keiner), email (wenn ein Mensch den Zug "
+        "begonnen hat), menschen, andere (beteiligte Agenten), gueltig/grund; begann der "
+        "Zug mit einer gestempelten Agenten-Nachricht zusaetzlich kette_email und kette "
+        "(Mensch und Weg der Kette). Nutze das, wenn du fuer eine Freigabe oder eine "
+        "Entscheidung wissen musst, welcher Mensch hinter der Eingabe steht. Schliesse den "
+        "Menschen NIE aus userEmail oder dem Login-Konto der CLI: das ist das Claude-Konto, "
+        "nicht der Mensch am Portal. Nur der Agent selbst (sein Token) darf fragen."
+    ),
+)
+async def cloud_turn_initiator(session_name: str) -> Dict[str, Any]:
+    return await call_cloud_api("GET", f"/api/sessions/{session_name}/initiator")
+
+
+@cloud_mcp.tool(
     name="read_session",
     description="Read the current screen content of any agent's tmux session across all servers. Returns plain text, no ANSI codes.",
 )

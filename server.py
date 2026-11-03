@@ -10415,6 +10415,25 @@ async def cloud_history_export(
 
 
 @cloud_mcp.tool(
+    name="token_lage",
+    description=(
+        "How much Claude/Codex subscription quota is left, and who is using it "
+        "(Alex 2026-11-03, #2640). Per account: current 7-day and 5-hour usage, reset time, "
+        "pace of the last 6 h (points per hour), forecast at that pace (leer_am = runs out "
+        "before the reset; verfaellt_pct = share that will expire unused at the reset), and "
+        "the biggest consumers of the last 24 h with their estimated share in points "
+        "(pct_geschaetzt) plus what no agent accounts for (pct_ungemessen). Codex accounts "
+        "show their latest window readings. eigenes_konto marks the account your own last "
+        "answers ran on; pass agent=<name> to mark another agent's account. Read before "
+        "starting large work: if your account runs out before the reset, say so; if a lot "
+        "will expire unused, that is room for backlog work. Operator agents and admins only."
+    ),
+)
+async def cloud_token_lage(agent: str = "") -> Dict[str, Any]:
+    return await call_cloud_api("GET", "/api/usage/lage", params={"agent": agent}, timeout=90)
+
+
+@cloud_mcp.tool(
     name="bridge_message_status",
     description=(
         "Where is a message you sent over a federation bridge (to `extern:<partner>/<agent>`)? "

@@ -252,6 +252,7 @@ async def _fetch_json(
     params: Optional[Dict[str, Any]] = None,
     json_body: Optional[Dict[str, Any]] = None,
     content: Optional[str] = None,
+    form: Optional[Dict[str, str]] = None,
     timeout: Optional[float] = None,
 ) -> Any:
     async with httpx.AsyncClient(timeout=timeout or HTTP_TIMEOUT) as client:
@@ -268,7 +269,9 @@ async def _fetch_json(
             elif method == "POST":
                 # `content` sends a raw body instead of JSON — used by the
                 # chunked upload, where the body IS the base64 text.
-                if content is not None:
+                if form is not None:
+                    response = await client.post(url, headers=headers, params=params, data=form)
+                elif content is not None:
                     response = await client.post(url, headers=headers, params=params, content=content)
                 else:
                     response = await client.post(url, headers=headers, params=params, json=json_body or {})
@@ -578,6 +581,8 @@ async def call_ai_api(
     params: Optional[Dict[str, Any]] = None,
     json_body: Optional[Dict[str, Any]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
+    form: Optional[Dict[str, str]] = None,
+    timeout: Optional[float] = None,
 ) -> Any:
     """Call AI API (text/image/audio) with API key if provided.
 
@@ -595,7 +600,8 @@ async def call_ai_api(
         headers=headers,
         params=params,
         json_body=json_body,
-        timeout=AI_HTTP_TIMEOUT,
+        form=form,
+        timeout=timeout or AI_HTTP_TIMEOUT,
     )
 
 
@@ -6116,12 +6122,120 @@ async def ai_gemini_text(
     return await call_ai_api("POST", "/ai/gemini", json_body=body)
 
 
+# Ein Dienst liest private Dateien nur im Auftrag eines gebundenen Aufrufers
+# (Post 5782). Die Adresse gilt 10 Minuten fuer jeden, der sie hat: Sie geht nur
+# an AiApi und nie zurueck in das Werkzeug-Ergebnis.
+async def _signiere_fuer_aufrufer(tool: str, id: int) -> Dict[str, Any]:  # noqa: A002
+    _require_agent(tool)
+    res = await call_cloud_api("POST", "/api/agents/self/media-urls", json_body={"ids": [id]})
+    item = next((i for i in (res or {}).get("items", []) if i.get("id") == id), None)
+    if not item or not item.get("url"):
+        return {"error": (item or {}).get("error") or "not_granted"}
+    return {"url": item["url"]}
+
+
+def _mmss(sekunden: Any) -> str:
+    gesamt = int(float(sekunden or 0))
+    return f"{gesamt // 3600:02d}:{gesamt % 3600 // 60:02d}:{gesamt % 60:02d}"
+
+
+def _transkript_als_text(ergebnis: Dict[str, Any]) -> str:
+    """Lesbarer Text: aufeinanderfolgende Abschnitte eines Sprechers als ein Absatz."""
+    segmente = ((ergebnis.get("diarized") or {}).get("segments")) or []
+    if not segmente:
+        return str(ergebnis.get("text") or "").strip() + "\n"
+    absaetze: List[List[Any]] = []
+    for s in segmente:
+        sprecher = s.get("speaker") or "?"
+        text = str(s.get("text") or "").strip()
+        if not text:
+            continue
+        if absaetze and absaetze[-1][1] == sprecher:
+            absaetze[-1][2].append(text)
+        else:
+            absaetze.append([s.get("start"), sprecher, [text]])
+    return "\n\n".join(f"[{_mmss(st)}] Sprecher {sp}: {' '.join(tx)}" for st, sp, tx in absaetze) + "\n"
+
+
 @ai_mcp.tool(
     name="transcribe_audio",
-    description="Proxy to AI API /ai/transcribe (expects audio file URL). Provide `file_url` pointing to accessible audio.",
+    description="""Audio transkribieren, auch mit Sprechertrennung. Kostet je Minute (OpenAI).
+
+    Quelle, genau eine von beiden:
+    - storage_id: Datei im Storage, auch privat. Sie muss an dich gebunden sein, sonst
+      not_granted. Signiert wird mit deiner Identitaet, du brauchst keinen Link.
+    - file_url: oeffentlich erreichbare Adresse. Private Storage-Dateien gehen so nicht
+      (403 private_media), dafuer storage_id nehmen.
+
+    speakers=True: wer hat was gesagt (Modell gpt-4o-transcribe-diarize, hoechstens
+    23 min je Aufnahme). Sonst model (Vorgabe whisper-1) und response_format frei.
+    language: ISO-Code wie "de" oder "sl", ohne Angabe wird sie erkannt.
+
+    save_result=True legt das Transkript als PRIVATE Textdatei an dich gebunden im Storage
+    ab und gibt nur storage_id, file_url und einen Anfang zurueck. Das ist der richtige Weg
+    fuer lange Aufnahmen, sonst landet der ganze Text in deinem Kontext.
+
+    Laeuft synchron, 20 Minuten Audio dauern mehrere Minuten.
+    """,
 )
-async def ai_transcribe_audio(file_url: str) -> Dict[str, Any]:
-    return await call_ai_api("POST", "/ai/transcribe", json_body={"file_url": file_url})
+async def ai_transcribe_audio(
+    storage_id: Optional[int] = None,
+    file_url: Optional[str] = None,
+    speakers: bool = False,
+    model: Optional[str] = None,
+    response_format: Optional[str] = None,
+    language: Optional[str] = None,
+    prompt: Optional[str] = None,
+    save_result: bool = False,
+) -> Dict[str, Any]:
+    if (storage_id is None) == (not file_url):
+        raise ValueError("transcribe_audio: genau eins von storage_id und file_url angeben")
+    if speakers and (model or response_format):
+        raise ValueError("transcribe_audio: speakers legt model und response_format selbst fest")
+    if save_result:
+        _require_agent("transcribe_audio")
+
+    quelle = file_url
+    if storage_id is not None:
+        signiert = await _signiere_fuer_aufrufer("transcribe_audio", storage_id)
+        if signiert.get("error"):
+            return {"id": storage_id, "error": signiert["error"]}
+        quelle = signiert["url"]
+
+    felder: Dict[str, str] = {"file_url": quelle}
+    if speakers:
+        felder.update(model="gpt-4o-transcribe-diarize", response_format="diarized_json")
+    if model:
+        felder["model"] = model
+    if response_format:
+        felder["response_format"] = response_format
+    if language:
+        felder["language"] = language
+    if prompt:
+        felder["prompt"] = prompt
+    # Formular, nicht Query: Die Adresse traegt eine Signatur, und die Query steht im
+    # Zugriffsprotokoll. Lange Aufnahmen brauchen mehr als die 300 s der Vorgabe.
+    ergebnis = await call_ai_api("POST", "/ai/transcribe", form=felder, timeout=max(AI_HTTP_TIMEOUT, 1200.0))
+    if not save_result:
+        return ergebnis
+
+    text = _transkript_als_text(ergebnis)
+    name = f"transkript-{storage_id}.txt" if storage_id is not None else "transkript.txt"
+    obj = await call_storage_upload(
+        text.encode("utf-8"), name,
+        form_fields={"ai_mode": "none", "is_public": "false", "private": "true",
+                     "reuse_existing": "false", "context": "transcribe"},
+    )
+    segmente = ((ergebnis.get("diarized") or {}).get("segments")) or []
+    return {
+        "storage_id": obj.get("id"),
+        "file_url": f"{STORAGE_API_BASE}/storage/media/{obj.get('id')}",
+        "source_id": storage_id,
+        "model": ergebnis.get("model"),
+        "speakers": sorted({str(s.get("speaker")) for s in segmente if s.get("speaker")}),
+        "chars": len(text),
+        "preview": text[:600],
+    }
 
 
 @ai_mcp.tool(

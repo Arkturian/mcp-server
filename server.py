@@ -6134,6 +6134,18 @@ async def _signiere_fuer_aufrufer(tool: str, id: int) -> Dict[str, Any]:  # noqa
     return {"url": item["url"]}
 
 
+def _pruefe_file_url(url: str) -> None:
+    """Nur https, keine Storage-Adressen: Die haben mit storage_id einen Weg mit Bindung."""
+    from urllib.parse import urlsplit
+
+    teile = urlsplit(url)
+    eigene = {urlsplit(b).hostname for b in (STORAGE_API_BASE, ONEAL_API_BASE) if b}
+    if teile.scheme != "https" or not teile.hostname:
+        raise ValueError("transcribe_audio: file_url muss eine https-Adresse sein")
+    if teile.hostname in eigene or "/storage/media/" in teile.path or "/storage/files/" in teile.path:
+        raise ValueError("transcribe_audio: Storage-Dateien bitte mit storage_id angeben, nicht als file_url")
+
+
 def _mmss(sekunden: Any) -> str:
     gesamt = int(float(sekunden or 0))
     return f"{gesamt // 3600:02d}:{gesamt % 3600 // 60:02d}:{gesamt % 60:02d}"
@@ -6143,7 +6155,8 @@ def _transkript_als_text(ergebnis: Dict[str, Any]) -> str:
     """Lesbarer Text: aufeinanderfolgende Abschnitte eines Sprechers als ein Absatz."""
     segmente = ((ergebnis.get("diarized") or {}).get("segments")) or []
     if not segmente:
-        return str(ergebnis.get("text") or "").strip() + "\n"
+        roh = str(ergebnis.get("text") or ergebnis.get("raw") or "").strip()
+        return roh + "\n" if roh else ""
     absaetze: List[List[Any]] = []
     for s in segmente:
         sprecher = s.get("speaker") or "?"
@@ -6164,8 +6177,8 @@ def _transkript_als_text(ergebnis: Dict[str, Any]) -> str:
     Quelle, genau eine von beiden:
     - storage_id: Datei im Storage, auch privat. Sie muss an dich gebunden sein, sonst
       not_granted. Signiert wird mit deiner Identitaet, du brauchst keinen Link.
-    - file_url: oeffentlich erreichbare Adresse. Private Storage-Dateien gehen so nicht
-      (403 private_media), dafuer storage_id nehmen.
+    - file_url: https-Adresse ausserhalb des Storage. Storage-Dateien, auch oeffentliche,
+      immer ueber storage_id.
 
     speakers=True: wer hat was gesagt (Modell gpt-4o-transcribe-diarize, hoechstens
     23 min je Aufnahme). Sonst model (Vorgabe whisper-1) und response_format frei.
@@ -6194,6 +6207,8 @@ async def ai_transcribe_audio(
         raise ValueError("transcribe_audio: speakers legt model und response_format selbst fest")
     if save_result:
         _require_agent("transcribe_audio")
+    if file_url:
+        _pruefe_file_url(file_url)
 
     quelle = file_url
     if storage_id is not None:
@@ -6220,12 +6235,18 @@ async def ai_transcribe_audio(
         return ergebnis
 
     text = _transkript_als_text(ergebnis)
+    if not text.strip():
+        return {"error": "empty_transcript", "result": ergebnis}
     name = f"transkript-{storage_id}.txt" if storage_id is not None else "transkript.txt"
-    obj = await call_storage_upload(
-        text.encode("utf-8"), name,
-        form_fields={"ai_mode": "none", "is_public": "false", "private": "true",
-                     "reuse_existing": "false", "context": "transcribe"},
-    )
+    try:
+        obj = await call_storage_upload(
+            text.encode("utf-8"), name,
+            form_fields={"ai_mode": "none", "is_public": "false", "private": "true",
+                         "reuse_existing": "false", "context": "transcribe"},
+        )
+    except httpx.HTTPError as exc:
+        # Der Text ist bezahlt: lieber in den Kontext als verloren.
+        return {"error": "upload_failed", "detail": str(exc)[:200], "transcript": text}
     segmente = ((ergebnis.get("diarized") or {}).get("segments")) or []
     return {
         "storage_id": obj.get("id"),

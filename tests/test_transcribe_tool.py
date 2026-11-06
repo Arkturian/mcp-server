@@ -128,3 +128,67 @@ def test_ablage_ist_privat_an_den_aufrufer_gebunden(als_agent, netz, monkeypatch
 def test_ablage_nur_fuer_agenten(netz):
     with pytest.raises(Exception, match="requires_agent"):
         _aufruf(file_url="https://example.com/a.mp3", save_result=True)
+
+
+@pytest.mark.parametrize("url", [
+    "https://api-storage.arkturian.com/storage/media/7",
+    "https://andere-instanz.example/storage/media/7",
+    "https://andere-instanz.example/storage/files/7",
+    "http://example.com/a.mp3",
+    "http://127.0.0.1:8000/x",
+    "ftp://example.com/a.mp3",
+])
+def test_file_url_nur_https_und_nie_storage(netz, monkeypatch, url):
+    import server
+    monkeypatch.setattr(server, "STORAGE_API_BASE", "https://api-storage.arkturian.com")
+    with pytest.raises(ValueError):
+        _aufruf(file_url=url)
+    assert netz == []
+
+
+def test_leeres_transkript_wird_nicht_abgelegt(als_agent, monkeypatch):
+    import server
+
+    async def fetch(method, url, **kw):
+        if "media-urls" in url:
+            return {"items": [{"id": 7, "url": SIGNIERT}]}
+        return {"text": "", "model": "whisper-1"}
+
+    async def upload(*a, **k):
+        raise AssertionError("darf nicht ablegen")
+
+    monkeypatch.setattr(server, "_fetch_json", fetch)
+    monkeypatch.setattr(server, "call_storage_upload", upload)
+    assert _aufruf(storage_id=7, save_result=True)["error"] == "empty_transcript"
+
+
+def test_text_aus_raw_wird_abgelegt(als_agent, monkeypatch):
+    import server
+    seen = {}
+
+    async def fetch(method, url, **kw):
+        if "media-urls" in url:
+            return {"items": [{"id": 7, "url": SIGNIERT}]}
+        return {"raw": "1\\n00:00 Hallo", "model": "whisper-1"}
+
+    async def upload(data, name, **k):
+        seen["data"] = data
+        return {"id": 9}
+
+    monkeypatch.setattr(server, "_fetch_json", fetch)
+    monkeypatch.setattr(server, "call_storage_upload", upload)
+    assert _aufruf(storage_id=7, response_format="srt", save_result=True)["storage_id"] == 9
+    assert b"Hallo" in seen["data"]
+
+
+def test_upload_fehler_gibt_den_bezahlten_text_zurueck(als_agent, netz, monkeypatch):
+    import httpx
+    import server
+
+    async def upload(*a, **k):
+        raise httpx.ConnectError("weg")
+
+    monkeypatch.setattr(server, "call_storage_upload", upload)
+    r = _aufruf(storage_id=7, speakers=True, save_result=True)
+    assert r["error"] == "upload_failed" and "Hallo Servus" in r["transcript"]
+    assert "sig=" not in str(r)

@@ -11560,13 +11560,15 @@ async def issue_get(id: int) -> Dict[str, Any]:
                           escalated without progress (comment = progress).
       blocked             WAITING ON SOMEONE. Needs `wartet_auf` (or use the
                           `wait` tool): {"wer": "user:<mail> | agent:<Name> |
-                          extern:<bridge>/<Agent> | issue:<id>", "was": "...",
+                          extern:<bridge>/<Agent> | issue:<id> |
+                          ereignis:<type>:<key>", "was": "...",
                           "nachfassen_am": "<ISO, optional>"}. Without it → 422.
                           Frees your slot, no escalation to you, stays visible.
                           Resumes AUTOMATICALLY (back to in_progress and
-                          re-dispatched) when issue:<id> is resolved or
+                          re-dispatched) when issue:<id> is resolved, the
+                          event for ereignis:<type>:<key> arrives, or
                           nachfassen_am is reached (default 14 days for user:/
-                          extern:); a second unchanged return fades out and is
+                          extern:/ereignis:); a second unchanged return fades out and is
                           closed after 7 days without objection (see `wait`).
                           An agent you wait on gets a reminder (daily if
                           running, weekly otherwise).
@@ -11629,15 +11631,18 @@ async def issue_update(
       wer  — who/what you wait for: "user:<mail>" (a human), "agent:<Name>"
              (an agent here), "extern:<bridge>/<Agent>" (an agent across a
              bridge; stored only, nothing is sent there), "issue:<id>"
-             (another issue must be resolved first).
+             (another issue must be resolved first), "ereignis:<type>:<key>"
+             (an event on the bus, e.g. "ereignis:knoten.zurueck:tommy" =
+             node tommy is reachable again; only events arriving AFTER you
+             set this count).
       was  — what exactly you need (min. 10 chars).
     Optional: nachfassen_am (ISO time to follow up; default 14 days for
-      user:/extern:, none for agent:/issue:), bezug_msg_id (the IACP msg_id
+      user:/extern:/ereignis:, none for agent:/issue:), bezug_msg_id (the IACP msg_id
       of your request).
 
     Effect: frees your slot, no escalation to you. The issue resumes
     AUTOMATICALLY (in_progress, re-dispatched to you) when issue:<id> is
-    resolved or nachfassen_am is reached. An agent you wait on gets one
+    resolved, the awaited event arrives, or nachfassen_am is reached. An agent you wait on gets one
     bundled reminder (daily if running, weekly if not). Resume yourself with
     update(status="in_progress").
     FADING OUT: if it comes back via nachfassen_am a SECOND time unchanged

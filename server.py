@@ -2984,6 +2984,11 @@ async def content_posts_get(post_id: int) -> Dict[str, Any]:
       - visibility: 'tenant' (Standard, der ganze Mandant liest) oder
         'restricted' (nur Autor und ausdruecklich Freigegebene, siehe
         posts_share). 'public' darf nur ein Admin des Mandanten setzen.
+      - draft_reviewer: E-Mail des Menschen, der einen E-Mail-Entwurf
+        prueft und freigibt (Post #5623). Setzt beim Anlegen genau zwei
+        Rechte: Schreiben fuer diesen Menschen und Lesen fuer Comm
+        (service:comm-api), damit Comm nach der Freigabe den Text holen
+        kann. Nur zusammen mit visibility='restricted'.
     """,
 )
 async def content_posts_create(
@@ -3001,6 +3006,7 @@ async def content_posts_create(
     metadata_json: Optional[Dict[str, Any]] = None,
     collab_enabled: Optional[bool] = None,
     visibility: Optional[str] = None,
+    draft_reviewer: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = _clean_params(
         title=title,
@@ -3018,6 +3024,17 @@ async def content_posts_create(
         collab_enabled=collab_enabled,
         visibility=visibility,
     )
+    reviewer = (draft_reviewer or "").strip().lower()
+    if reviewer:
+        if visibility != "restricted":
+            return {"error": "draft_reviewer_needs_restricted",
+                    "detail": "Ein Entwurf zur Freigabe braucht visibility='restricted'."}
+        if "@" not in reviewer:
+            return {"error": "draft_reviewer_not_email", "detail": "draft_reviewer: E-Mail-Adresse"}
+        body["grants"] = [
+            {"principal_type": "email", "principal_id": reviewer, "permission": "write"},
+            {"principal_type": "service", "principal_id": "service:comm-api", "permission": "read"},
+        ]
     return await call_content_api("POST", "/api/v1/posts/", json_body=body)
 
 

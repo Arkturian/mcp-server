@@ -10240,6 +10240,49 @@ async def cloud_send_to_human(to: str, text: str, message_id: Optional[str] = No
     return await call_cloud_api("POST", "/api/user-messages", json_body=body)
 
 
+@cloud_mcp.tool(
+    name="send_draft_for_review",
+    description=(
+        "Ask a HUMAN of the federation to review and release an e-mail draft (Post #5623). "
+        "The mail text lives in a Content post (visibility=restricted); this tool puts ONE "
+        "'Entwurf prüfen' card into the human's portal naming that post. Calling it again for "
+        "the same post_id updates the open card instead of creating a second one: do that after "
+        "every revision, with the post's current doc_version and a one-line `aenderung` "
+        "(max 200 chars, e.g. 'Absatz 3 gekürzt'). The human clicks 'Senden' or 'Verwerfen' on "
+        "the card; you then get one IACP line with the card id. On 'Senden' call "
+        "comm send_email_from_draft(draft_card_id=<id>) without asking again — recipients, "
+        "subject and body come from card and post, never from you. `to` = the human's e-mail, "
+        "`empfaenger` = the mail recipients (max 20), `text` = one short line for the card. "
+        "Returns {id, ...}; keep the id."
+    ),
+)
+async def cloud_send_draft_for_review(
+    to: str,
+    post_id: int,
+    doc_version: int,
+    empfaenger: List[str],
+    betreff: str,
+    text: str = "",
+    aenderung: Optional[str] = None,
+) -> Dict[str, Any]:
+    draft: Dict[str, Any] = {
+        "post_id": str(post_id),
+        "doc_version": doc_version,
+        "kanal": "email",
+        "empfaenger": [e.strip() for e in (empfaenger or []) if e and e.strip()],
+        "betreff": betreff,
+    }
+    if aenderung:
+        draft["aenderung"] = aenderung
+    body: Dict[str, Any] = {
+        "to": (to or "").strip(),
+        "text": text or f"Entwurf prüfen: {betreff}",
+        "kind": "draft_review",
+        "draft": draft,
+    }
+    return await call_cloud_api("POST", "/api/user-messages", json_body=body)
+
+
 def _cloud_message_body(
     *,
     from_session: str,

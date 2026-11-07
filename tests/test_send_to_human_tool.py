@@ -30,3 +30,35 @@ class SendToHumanToolTests(unittest.TestCase):
     def test_werkzeug_ist_registriert(self):
         namen = {t.name for t in asyncio.run(server.cloud_mcp.list_tools())}
         self.assertIn("send_to_human", namen)
+
+
+class SendDraftForReviewToolTests(unittest.TestCase):
+    """Entwurf pruefen (Post 5623): Karte kind=draft_review, Absender aus dem JWT."""
+
+    def test_baut_draft_review_karte(self):
+        with patch.object(server, "call_cloud_api", new=AsyncMock(return_value={"id": "k1"})) as call:
+            out = asyncio.run(server.cloud_send_draft_for_review(
+                " a.popovic@edera-safety.com ", 5900, 7, [" kunde@example.com "], "Angebot",
+                aenderung="Absatz 3 gekürzt"))
+        self.assertEqual(out["id"], "k1")
+        args, kwargs = call.call_args
+        self.assertEqual(args, ("POST", "/api/user-messages"))
+        body = kwargs["json_body"]
+        self.assertEqual(body["to"], "a.popovic@edera-safety.com")
+        self.assertEqual(body["kind"], "draft_review")
+        self.assertEqual(body["text"], "Entwurf prüfen: Angebot")
+        self.assertEqual(body["draft"], {"post_id": "5900", "doc_version": 7, "kanal": "email",
+                                         "empfaenger": ["kunde@example.com"], "betreff": "Angebot",
+                                         "aenderung": "Absatz 3 gekürzt"})
+        self.assertNotIn("from", body)
+
+    def test_ohne_aenderung_kein_feld(self):
+        with patch.object(server, "call_cloud_api", new=AsyncMock(return_value={})) as call:
+            asyncio.run(server.cloud_send_draft_for_review("a@b.at", 1, 0, ["x@y.at"], "B", text="Bitte prüfen"))
+        body = call.call_args.kwargs["json_body"]
+        self.assertNotIn("aenderung", body["draft"])
+        self.assertEqual(body["text"], "Bitte prüfen")
+
+    def test_werkzeug_ist_registriert(self):
+        namen = {t.name for t in asyncio.run(server.cloud_mcp.list_tools())}
+        self.assertIn("send_draft_for_review", namen)

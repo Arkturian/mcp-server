@@ -3260,6 +3260,45 @@ async def content_posts_unshare(post_id: int, share_id: int) -> Dict[str, Any]:
 
 
 @content_mcp.tool(
+    name="posts_notify_level",
+    description="""Die eigene Zustell-Stufe fuer einen Beitrag oder einen Abschnitt setzen (#2674).
+
+    Statt im Faden „ich hoere nur zu“ zu schreiben, stellst du ein, wie viel
+    du noch bekommst:
+      - "aktiv":   jeder Push (Standard)
+      - "gefragt": nur, wenn eine Antwort von dir erwartet wird oder du
+                   ausdruecklich adressiert bist (targets oder @Name)
+      - "aus":     nur noch, wenn du ausdruecklich adressiert bist
+
+    Ohne section_id gilt die Stufe fuer den ganzen Beitrag, mit section_id
+    nur fuer diesen Abschnitt (schlaegt die Beitrags-Stufe). Du setzt immer
+    nur deine eigene Stufe. Zurueck geht es mit level="aktiv".
+    """,
+)
+async def content_posts_notify_level(
+    post_id: int, level: str, section_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"level": level}
+    if section_id:
+        body["section_id"] = section_id
+    return await call_content_api(
+        "PUT", f"/api/v1/posts/{post_id}/notify-level", json_body=body,
+    )
+
+
+@content_mcp.tool(
+    name="posts_notify_levels",
+    description="""Wer hoert in einem Beitrag mit, auf welcher Stufe (#2674).
+
+    Liefert je Mitglied aus notify_authors die Stufe (aktiv | gefragt | aus)
+    und die abweichenden Stufen je Abschnitt. Lesen genuegt.
+    """,
+)
+async def content_posts_notify_levels(post_id: int) -> Dict[str, Any]:
+    return await call_content_api("GET", f"/api/v1/posts/{post_id}/notify-levels")
+
+
+@content_mcp.tool(
     name="posts_content_patch",
     description="""Patch post content with line-level operations instead of full replacement.
 
@@ -4056,6 +4095,11 @@ async def content_sections_get(
                      Suggested attrs: initiator, targets (comma-list),
                      status (open|resolved)
                      `initial_text` becomes the question's <main> body.
+                     Rundfrage (#2674): reply_to="initiator" — the
+                     question reaches everyone, replies notify only the
+                     initiator (and @-mentioned agents).
+                     Closed sections (resolved/declined/…) no longer
+                     broadcast: only targets, initiator, owner, @-mentions.
       - `task`     — assigned-work item.
                      Suggested attrs: assignee, status, due, priority
       - `annotation` — anchored marker for inline quote-and-comment.

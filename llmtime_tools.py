@@ -23,6 +23,14 @@ FORECAST_RULE = (
 )
 
 
+AUSSCHLUSS = (
+    "`bis_ausschluss`: einmalige Sonderereignisse, die bewusst aus der "
+    "Stichprobe fallen (je Eintrag `YYYY-MM-DD` oder `von..bis`). Normale Tage "
+    "ohne Abschluss NICHT ausschließen, sie zählen als 0 — auch Ausfälle wie "
+    "ein Kontolimit. Nur so misst das Fenster die echte Kapazität."
+)
+
+
 def _drop_none(d: Dict[str, Any]) -> Dict[str, Any]:
     """Keep explicit falsy values (0, False, ""), drop only unset ones."""
     return {k: v for k, v in d.items() if v is not None}
@@ -148,8 +156,8 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         Wann: IMMER, wenn du sonst „das dauert etwa X Tage“ oder „bis Freitag“
         sagen würdest. {FORECAST_RULE}
         `rest` leer = offene Pakete im Projekt bzw. Meilenstein.
-        `fenster_tage` Vorgabe 14. `bis_ausschluss`: Tage ohne Arbeit,
-        je Eintrag `YYYY-MM-DD` oder `von..bis`. `stichtag` Vorgabe heute.
+        `fenster_tage` Vorgabe 14. `stichtag` Vorgabe heute.
+        {AUSSCHLUSS}
         Ein Perzentil mit `tage: null` liegt jenseits des Horizonts (3650 Tage).""",
     )
     async def forecast_when(
@@ -175,7 +183,8 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         Wann: bei „was schaffen wir bis …?“ (fester Termin, offener Umfang).
         {FORECAST_RULE}
         P85 ist die Anzahl, die in mindestens 85 % der Läufe erreicht wird,
-        daher P95 ≤ P85 ≤ P50. `bis` Pflicht, `YYYY-MM-DD`.""",
+        daher P95 ≤ P85 ≤ P50. `bis` Pflicht, `YYYY-MM-DD`.
+        {AUSSCHLUSS}""",
     )
     async def forecast_how_many(
         projekt: str,

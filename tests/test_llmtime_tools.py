@@ -2,7 +2,7 @@ import unittest
 
 from mcp.server.fastmcp import FastMCP
 
-from llmtime_tools import FORECAST_RULE, register_llmtime_tools
+from llmtime_tools import AUSSCHLUSS, FORECAST_RULE, register_llmtime_tools
 
 
 class LlmtimeToolsTests(unittest.IsolatedAsyncioTestCase):
@@ -28,6 +28,12 @@ class LlmtimeToolsTests(unittest.IsolatedAsyncioTestCase):
         tools = {t.name: t for t in await self.mcp.list_tools()}
         for name in ("forecast_when", "forecast_how_many", "forecast_aufwand"):
             self.assertIn(FORECAST_RULE, tools[name].description, name)
+
+    async def test_exclusion_is_described_as_one_off_events_not_quiet_days(self):
+        tools = {t.name: t for t in await self.mcp.list_tools()}
+        for name in ("forecast_when", "forecast_how_many"):
+            self.assertIn(AUSSCHLUSS, tools[name].description, name)
+            self.assertNotIn("Tage ohne Arbeit", tools[name].description, name)
 
     async def test_item_add_drops_only_unset_fields(self):
         await self.mcp.call_tool("item_add", {"projekt": "demo", "meilenstein": "M1"})

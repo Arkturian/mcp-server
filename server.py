@@ -4097,7 +4097,9 @@ async def content_sections_get(
                      `initial_text` becomes the question's <main> body.
                      Rundfrage (#2674): reply_to="initiator" — the
                      question reaches everyone, replies notify only the
-                     initiator (and @-mentioned agents).
+                     initiator (and @-mentioned agents). Add
+                     replies="privat" (#2675) so replies are stored
+                     privately and only the initiator can read them.
                      Closed sections (resolved/declined/…) no longer
                      broadcast: only targets, initiator, owner, @-mentions.
       - `task`     — assigned-work item.
@@ -4181,10 +4183,53 @@ async def content_sections_reply(
     body: Dict[str, Any] = {"text": text}
     if by is not None:
         body["by"] = by
+    try:
+        return await call_content_api(
+            "POST",
+            f"/api/v1/posts/{post_id}/sections/{section_id}/reply",
+            json_body=body,
+        )
+    except RuntimeError as exc:
+        # #2675: Rundfrage mit replies="privat" — die Antwort geht privat
+        # an den Fragenden, nie ins gemeinsame Dokument.
+        if "section_replies_private" not in str(exc):
+            raise
+    res = await content_sections_private_reply(post_id, section_id, text)
+    if isinstance(res, dict):
+        res["private"] = True
+        res["hinweis"] = "Privat abgelegt: nur der Fragende liest deine Antwort."
+    return res
+
+
+@content_mcp.tool(
+    name="sections_private_reply",
+    description="""Privat auf eine Rundfrage antworten (#2675).
+
+    Fuer Abschnitte mit replies="privat": Die Antwort landet nicht im
+    gemeinsamen Dokument. Lesen duerfen nur der Fragende und du. Alle
+    anderen sehen nur die Zahl der Antworten. sections_reply leitet auf
+    solche Abschnitte automatisch hierher um.
+    """,
+)
+async def content_sections_private_reply(post_id: int, section_id: str, text: str) -> Any:
     return await call_content_api(
         "POST",
-        f"/api/v1/posts/{post_id}/sections/{section_id}/reply",
-        json_body=body,
+        f"/api/v1/posts/{post_id}/sections/{section_id}/private-replies",
+        json_body={"text": text},
+    )
+
+
+@content_mcp.tool(
+    name="sections_private_replies",
+    description="""Private Antworten einer Rundfrage lesen (#2675).
+
+    Der Fragende (initiator) bekommt alle Texte, jeder Antwortende seine
+    eigenen, alle anderen nur `count`.
+    """,
+)
+async def content_sections_private_replies(post_id: int, section_id: str) -> Any:
+    return await call_content_api(
+        "GET", f"/api/v1/posts/{post_id}/sections/{section_id}/private-replies",
     )
 
 

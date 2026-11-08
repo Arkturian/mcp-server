@@ -320,6 +320,21 @@ def _reject_if_revoked(claims: dict) -> None:
 EXPLICIT_ONLY_SERVERS: set[str] = set()
 
 
+# Server, die JEDER angemeldete Agent dieser Instanz nutzen darf, ohne eigenes
+# mcp:<server>:*-Recht (Alex 08.11.2026 zu llmtime, #2679: "die Agents sollen das
+# Recht haben" -- und es soll einfach funktionieren, ohne Rollenpflege je neuem
+# Dienst). Je Gateway per MCP_OFFENE_SERVER (kommagetrennt), Vorgabe leer: eine
+# Kundeninstanz oeffnet so nichts, was sie nicht selbst einstellt. Die
+# Anmeldung (gueltiges JWT) bleibt Pflicht; EXPLICIT_ONLY_SERVERS gewinnt.
+OFFENE_SERVER: set[str] = {
+    s.strip().lower() for s in os.getenv("MCP_OFFENE_SERVER", "").split(",") if s.strip()
+}
+
+
+def _offen(mcp_server: str) -> bool:
+    return mcp_server in OFFENE_SERVER and mcp_server not in EXPLICIT_ONLY_SERVERS
+
+
 def _permissions_for_server(permissions: list[str], mcp_server: str) -> list[str]:
     """Die Rechte, die an diesem Server zaehlen."""
     if mcp_server in EXPLICIT_ONLY_SERVERS:
@@ -446,7 +461,9 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
 
             # Permission check: server-level + tool-level
             mcp_server = _extract_mcp_server_from_path(request.url.path)
-            if mcp_server:
+            if mcp_server and _offen(mcp_server):
+                pass  # offener Server: jedes gueltige Agenten-JWT genuegt
+            elif mcp_server:
                 # 1. Server-level: does agent have ANY permission on this MCP?
                 # Recognized claims:
                 #   "*"                       — global wildcard

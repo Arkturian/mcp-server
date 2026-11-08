@@ -203,6 +203,14 @@ CONVERSATION_PATH = "/conversation"
 # Issue API (AgentOS Issue-Tracking)
 ISSUE_API_BASE = os.getenv("ISSUE_API_BASE", "https://issue-api.arkturian.com")
 ISSUE_PATH = "/issue"
+
+# LLM-TIME-API (measured forecasts, Post #5801). Inside the federation the
+# caller's JWT is forwarded. A customer gateway (other auth-api, its JWTs are
+# not valid there) sets LLMTIME_API_KEY: then the instance key is sent and the
+# caller's own JWT never leaves the instance.
+LLMTIME_API_BASE = os.getenv("LLMTIME_API_BASE", "https://llm-time.arkturian.com").rstrip("/")
+LLMTIME_API_KEY = os.getenv("LLMTIME_API_KEY", "").strip()
+LLMTIME_PATH = "/llmtime"
 # Shared secret for cross-node IACP role addressing. Must match IACP_TOKEN
 # env on every cloud-api in the federation. Used by send_to_role().
 IACP_TOKEN = os.getenv("IACP_TOKEN", "").strip()
@@ -276,7 +284,9 @@ async def _fetch_json(
                 else:
                     response = await client.post(url, headers=headers, params=params, json=json_body or {})
             elif method == "PUT":
-                response = await client.put(url, headers=headers, params=params, json=json_body or {})
+                # `is None`, not `or`: an empty list is a real body (PUT rules = []).
+                response = await client.put(url, headers=headers, params=params,
+                                            json=json_body if json_body is not None else {})
             elif method == "PATCH":
                 response = await client.patch(url, headers=headers, params=params, json=json_body or {})
             elif method == "DELETE":
@@ -801,6 +811,30 @@ async def call_issue_api(
         method,
         f"{ISSUE_API_BASE}{endpoint}",
         headers=_caller_auth_headers(),
+        params=params,
+        json_body=json_body,
+    )
+
+
+def _llmtime_headers() -> Dict[str, str]:
+    """Instance key wins; never forward a JWT the upstream cannot verify."""
+    if LLMTIME_API_KEY:
+        return {"X-API-Key": LLMTIME_API_KEY}
+    return _caller_auth_headers()
+
+
+async def call_llmtime_api(
+    method: str,
+    endpoint: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Any = None,
+) -> Any:
+    """Call the LLM-TIME-API (see llmtime_tools)."""
+    return await _fetch_json(
+        method,
+        f"{LLMTIME_API_BASE}{endpoint}",
+        headers=_llmtime_headers(),
         params=params,
         json_body=json_body,
     )
@@ -12314,6 +12348,22 @@ async def issue_goal_issues(
 issue_app = issue_mcp.streamable_http_app()
 mount_mcp("issue", ISSUE_PATH, issue_app)
 
+
+# LLM-TIME-API MCP -----------------------------------------------------------
+llmtime_mcp = FastMCP(
+    name="llmtime",
+    streamable_http_path="/",
+    stateless_http=True,
+    auth=None,
+    log_level="INFO",
+)
+
+from llmtime_tools import register_llmtime_tools
+register_llmtime_tools(llmtime_mcp, call_llmtime_api)
+
+llmtime_app = llmtime_mcp.streamable_http_app()
+mount_mcp("llmtime", LLMTIME_PATH, llmtime_app)
+
 # Fremde MCP-Server per MCP_PASSTHROUGH (passthrough.py, P3 26.10.2026). Namen
 # eigener Server sind gesperrt; Rechte prueft JWTAuthMiddleware, Platzhalter zaehlen nicht.
 import passthrough as _passthrough  # noqa: E402
@@ -12346,6 +12396,7 @@ _story_stack = AsyncExitStack()
 _cloud_stack = AsyncExitStack()
 _conversation_stack = AsyncExitStack()
 _issue_stack = AsyncExitStack()
+_llmtime_stack = AsyncExitStack()
 
 
 # Track which MCP sessions were started (for shutdown ordering)
@@ -12372,6 +12423,7 @@ def _all_mcps():
         ("cloud", _cloud_stack, cloud_mcp),
         ("conversation", _conversation_stack, conversation_mcp),
         ("issue", _issue_stack, issue_mcp),
+        ("llmtime", _llmtime_stack, llmtime_mcp),
     ]
 
 
@@ -12498,6 +12550,12 @@ async def root() -> Dict[str, Any]:
                 "tools": [tool.name for tool in issue_mcp._tool_manager.list_tools()],
                 "upstream": ISSUE_API_BASE,
                 "description": "AgentOS Issue-Tracking — create, list, update, resolve issues via free-text intake (AI-classified) or structured input",
+            },
+            "llmtime": {
+                "path": LLMTIME_PATH,
+                "tools": [tool.name for tool in llmtime_mcp._tool_manager.list_tools()],
+                "upstream": LLMTIME_API_BASE,
+                "description": "LLM-TIME: Arbeitspakete erfassen, Prognosen (wann, wie viel, Aufwand) aus gemessener Erfahrung, Merge-Import",
             },
         },
     }

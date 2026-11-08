@@ -10733,6 +10733,33 @@ async def cloud_history_export(
 
 
 @cloud_mcp.tool(
+    name="history_activity",
+    description=(
+        "Content-free activity of an agent for a look-back window (TIME-LLM 2026-11-08, "
+        "LLM-TIME measurement). Same source, window forms and access gate as "
+        "history_export (agents sharing your owner or tenant; admins all; opt-out via "
+        ".no_history_share). Per turn: timestamp (input arrived), ended_at (last "
+        "assistant record), duration_s (null = unknown, not 0), source, mid_turn. Per "
+        "section: kind, timestamp (when the record was written; for tools = the CALL), "
+        "tool (name only, no arguments), ergebnis_ts (when the tool result arrived), and "
+        "for Edit/MultiEdit/Write/NotebookEdit zeilen_neu / zeilen_alt (line counts only). "
+        "Never any text, label, path or command. Background jobs that outlive a turn are "
+        "not covered. Claude transcripts carry ergebnis_ts and line counts; Codex/Gemini "
+        "sources only times. Pass your OWN session name as from_session."
+    ),
+)
+async def cloud_history_activity(
+    from_session: str, session_name: str, since: str = "24h", until: str = "",
+) -> Dict[str, Any]:
+    return await call_cloud_api(
+        "GET",
+        f"/api/sessions/{session_name}/history/activity",
+        params={"since": since, "until": until, "requester": from_session},
+        timeout=90,
+    )
+
+
+@cloud_mcp.tool(
     name="token_lage",
     description=(
         "How much Claude/Codex subscription quota is left, and who is using it "

@@ -45,6 +45,13 @@ class LlmtimeToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [("POST", "/api/v1/items/a%2Fb/finish",
                                        {"json_body": {"tokens": 0}})])
 
+    async def test_finish_passes_zeilen_and_aufwand_names_new_sizes(self):
+        await self.mcp.call_tool("item_finish", {"id": "x", "zeilen": 42})
+        self.assertEqual(self.calls[-1][2]["json_body"], {"zeilen": 42})
+        tools = {t.name: t for t in await self.mcp.list_tools()}
+        for groesse in ("aktiv_stunden", "zeilen", "tokens", "stunden"):
+            self.assertIn(groesse, tools["forecast_aufwand"].description)
+
     async def test_when_joins_exclusions(self):
         await self.mcp.call_tool("forecast_when", {
             "projekt": "demo", "rest": 0,

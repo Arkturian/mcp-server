@@ -110,12 +110,15 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         description="""Paket fertig (POST /items/{id}/finish). Erst das macht es zum Durchsatz.
 
         `at` ISO-8601, leer = jetzt. `tokens` = Opus-Input-Äquivalente
-        (Formel cloud-api usage_fusion), nur wenn du sie kennst. 409 bei einem
-        zweiten finish.""",
+        (Formel cloud-api usage_fusion), nur wenn du sie kennst. `zeilen` =
+        geänderte Codezeilen (hinzu + entfernt, z. B. aus `git diff --numstat`),
+        falls bekannt. 409 bei einem zweiten finish.""",
     )
-    async def item_finish(id: str, at: Optional[str] = None, tokens: Optional[int] = None) -> Any:
+    async def item_finish(id: str, at: Optional[str] = None, tokens: Optional[int] = None,
+                          zeilen: Optional[int] = None) -> Any:
         return await transport(
-            "POST", _item_path(id, "finish"), json_body=_drop_none({"at": at, "tokens": tokens})
+            "POST", _item_path(id, "finish"),
+            json_body=_drop_none({"at": at, "tokens": tokens, "zeilen": zeilen}),
         )
 
     @mcp.tool(
@@ -208,11 +211,14 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         Wann: bevor du eine Aufgabe übernimmst oder ein Budget nennst.
         {FORECAST_RULE}
         `projekt`, `agent`, `typ`, `bereich` bilden die Referenzklasse.
-        `groesse`: stunden (Vorgabe) | tokens. `anzahl` Vorgabe 1.
+        `groesse`: stunden (Vorgabe, Durchlaufzeit inkl. Warten) |
+        aktiv_stunden (reine Agentenzeit aus den Turns, ohne Warten) |
+        tokens | zeilen (geänderte Codezeilen). `anzahl` Vorgabe 1.
         P85 wird in 85 % der Läufe NICHT überschritten (Budgetsicht).
         Gib `quellen` mit aus: es zeigt, wie viel eigene und wie viel
         allgemeine Erfahrung eingeflossen ist. Tokens gibt es nur, wenn Pakete
-        mit `tokens` abgeschlossen wurden.""",
+        mit `tokens` abgeschlossen wurden, aktiv_stunden nur mit eingespielten
+        Turns, zeilen nur mit `zeilen` am Paket.""",
     )
     async def forecast_aufwand(
         projekt: Optional[str] = None,
@@ -237,7 +243,9 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         Du liest selbst aus Git, z. B. `git log --first-parent --merges`.
         Je Merge: `commit` (Hash = Id), `nachricht`, `merged_at`,
         `first_commit_at` (erster Commit von merge-base..^2), optional
-        `zweig`, `autor`, `meilenstein` (nicht leer; gilt vor den Regeln).
+        `zweig`, `autor`, `meilenstein` (nicht leer; gilt vor den Regeln),
+        `zeilen` (geänderte Zeilen des Merges, z. B. `git diff --numstat ^1..merge`).
+        `commit` ohne '/' und Leerraum.
         `typ`, `bereich` und PR-Nummer liest der Dienst aus der Nachricht.
         `regeln`: [{muster, meilenstein, feld: nachricht|zweig|beide}];
         fehlt es, gelten die gespeicherten Regeln des Projekts.

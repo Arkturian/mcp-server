@@ -36,3 +36,31 @@ def test_stufen_lesen(monkeypatch):
     monkeypatch.setattr(server, "_fetch_json", _fake(calls, {"members": []}))
     asyncio.run(server.content_posts_notify_levels(post_id=5))
     assert calls[0][0] == "GET" and calls[0][1].endswith("/api/v1/posts/5/notify-levels")
+
+
+def test_reply_leitet_bei_privat_um(monkeypatch):
+    import server
+    calls = []
+
+    async def _f(method, url, **kw):
+        calls.append((method, url, kw.get("json_body")))
+        if url.endswith("/reply"):
+            raise RuntimeError('Upstream 409 from POST x: {"error": "section_replies_private"}')
+        return {"id": 1, "count": 1}
+
+    monkeypatch.setattr(server, "_fetch_json", _f)
+    r = asyncio.run(server.content_sections_reply(post_id=5, section_id="q-1", text="Ich"))
+    assert calls[1][1].endswith("/sections/q-1/private-replies") and calls[1][2] == {"text": "Ich"}
+    assert r["private"] is True
+
+
+def test_reply_andere_fehler_bleiben(monkeypatch):
+    import pytest
+    import server
+
+    async def _f(method, url, **kw):
+        raise RuntimeError("Upstream 403 from POST x: forbidden")
+
+    monkeypatch.setattr(server, "_fetch_json", _f)
+    with pytest.raises(RuntimeError):
+        asyncio.run(server.content_sections_reply(post_id=5, section_id="q-1", text="Ich"))

@@ -159,6 +159,9 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         Wann: IMMER, wenn du sonst „das dauert etwa X Tage“ oder „bis Freitag“
         sagen würdest. {FORECAST_RULE}
         `rest` leer = offene Pakete im Projekt bzw. Meilenstein.
+        `zufluss`: leer = aus bei angegebenem `rest` (feste Menge: wann sind
+        diese N fertig), an bei offenen Paketen (wann ist der Rückstand leer,
+        während neue Arbeit dazukommt). `true` kann „nicht konvergent“ ergeben.
         `fenster_tage` Vorgabe 14. `stichtag` Vorgabe heute.
         {AUSSCHLUSS}
         Ein Perzentil mit `tage: null` liegt jenseits des Horizonts (3650 Tage).""",
@@ -167,6 +170,7 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         projekt: str,
         meilenstein: Optional[str] = None,
         rest: Optional[int] = None,
+        zufluss: Optional[bool] = None,
         fenster_tage: Optional[int] = None,
         bis_ausschluss: Optional[List[str]] = None,
         stichtag: Optional[str] = None,
@@ -177,6 +181,8 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
                                   stichtag, seed, stichproben)
         if rest is not None:
             params["rest"] = rest
+        if zufluss is not None:
+            params["zufluss"] = "true" if zufluss else "false"
         return await transport("GET", f"{API}/forecast/when", params=params)
 
     @mcp.tool(

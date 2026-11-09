@@ -62,6 +62,14 @@ class LlmtimeToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kw["params"], {"projekt": "demo", "rest": 0,
                                         "bis_ausschluss": "2026-12-24..2026-12-26,2026-12-31"})
 
+    async def test_when_passes_zufluss_only_when_set(self):
+        await self.mcp.call_tool("forecast_when", {"projekt": "demo", "rest": 3, "zufluss": False})
+        self.assertEqual(self.calls[-1][2]["params"], {"projekt": "demo", "rest": 3, "zufluss": "false"})
+        await self.mcp.call_tool("forecast_when", {"projekt": "demo"})
+        self.assertNotIn("zufluss", self.calls[-1][2]["params"])
+        tools = {t.name: t for t in await self.mcp.list_tools()}
+        self.assertIn("nicht konvergent", tools["forecast_when"].description)
+
     async def test_how_many_requires_bis(self):
         await self.mcp.call_tool("forecast_how_many", {"projekt": "demo", "bis": "2026-11-21"})
         self.assertEqual(self.calls[0][2]["params"], {"projekt": "demo", "bis": "2026-11-21"})

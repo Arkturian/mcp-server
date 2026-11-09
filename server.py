@@ -1086,6 +1086,94 @@ async def storage_assets_download(id: int) -> Dict[str, Any]:  # noqa: A002
     }
 
 
+_MEDIA_VIEW_MAX_BYTES = 8 * 1024 * 1024
+_MEDIA_VIEW_PX_MIN, _MEDIA_VIEW_PX_MAX = 64, 2000
+
+
+def _media_view_params(meta: Dict[str, Any], max_px: int) -> Dict[str, Any]:
+    """Abfrage für storage `/storage/media`: JPEG, lange Kante höchstens max_px.
+
+    storage-api verzerrt bei width UND height, also nur eine Kante setzen.
+    Kleinere Bilder werden nicht hochskaliert. Ohne bekannte Maße (PDF) wird
+    die Höhe begrenzt, die meisten Seiten sind Hochformat."""
+    params: Dict[str, Any] = {"format": "jpg", "quality": 82}
+    w, h = meta.get("width") or 0, meta.get("height") or 0
+    if w and h:
+        if max(w, h) > max_px:
+            params["width" if w >= h else "height"] = max_px
+    else:
+        params["height"] = max_px
+    return params
+
+
+def _media_view_url_ok(url: str, object_id: int) -> bool:
+    """Nur https auf den Storage-Host und genau dieses Objekt holen."""
+    try:
+        u, base = httpx.URL(url), httpx.URL(STORAGE_API_BASE)
+    except Exception:  # noqa: BLE001
+        return False
+    return (u.scheme == "https" and u.host == base.host
+            and u.path.rstrip("/").endswith(f"/storage/media/{object_id}"))
+
+
+@storage_mcp.tool(
+    name="media_view",
+    description="""Look at an image, a video frame or a PDF page directly: returns the picture
+    itself (JPEG, long edge at most max_px), no link, no curl, no Read.
+
+    Same permission as assets_download: the file must be public, bound to you or shared with
+    you, otherwise error not_granted (ask the owner agent for assets_share).
+    - id: storage object id (the number in /storage/media/<id>)
+    - max_px: longest edge in pixels, 64..2000 (default 1568). Smaller images stay as they are.
+    Videos come back as one frame, PDFs as their first page (error pdf_preview_unavailable
+    where the storage instance cannot render PDFs; then use assets_download).
+    Other types (audio, 3D, documents): error unsupported_type, use assets_download.
+    """,
+)
+async def storage_media_view(id: int, max_px: int = 1568):  # noqa: A002
+    from mcp.server.fastmcp import Image as _McpImage
+
+    _require_agent("media_view")
+    max_px = max(_MEDIA_VIEW_PX_MIN, min(_MEDIA_VIEW_PX_MAX, int(max_px)))
+    res = await call_cloud_api("POST", "/api/agents/self/media-urls", json_body={"ids": [id]})
+    item = next((i for i in (res or {}).get("items", []) if i.get("id") == id), None)
+    if not item or not item.get("url"):
+        return {"id": id, "error": (item or {}).get("error") or "not_granted"}
+    url = item["url"]
+    if not _media_view_url_ok(url, id):
+        return {"id": id, "error": "unexpected_media_url"}
+    # Metadaten erst nach erfolgreicher Signatur, wie bei assets_download.
+    meta = await call_storage_api("GET", f"/storage/objects/{id}")
+    mime = str(meta.get("mime_type") or "").lower()
+    is_pdf = mime == "application/pdf"
+    if not (mime.startswith("image/") or mime.startswith("video/") or is_pdf):
+        return {"id": id, "error": "unsupported_type", "mime_type": mime}
+
+    # Geholt wird nur der signierte Link, ohne Dienstschlüssel (Post 5782):
+    # was der Aufrufer nicht lesen darf, bekommt auch das Gateway nicht.
+    data = bytearray()
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:
+        # Anhängen, nicht ersetzen: `params=` würde exp/kid/sig aus dem Link werfen.
+        abruf = httpx.URL(url).copy_merge_params(_media_view_params(meta, max_px))
+        async with client.stream("GET", abruf) as r:
+            if r.status_code != 200:
+                return {"id": id, "error": f"storage_{r.status_code}"}
+            ctype = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+            if not ctype.startswith("image/"):
+                return {"id": id, "error": "pdf_preview_unavailable" if is_pdf else "no_image_returned",
+                        "mime_type": mime}
+            async for chunk in r.aiter_bytes():
+                data += chunk
+                if len(data) > _MEDIA_VIEW_MAX_BYTES:
+                    return {"id": id, "error": "too_large", "hint": "smaller max_px"}
+    fmt = {"image/jpeg": "jpeg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(ctype, "jpeg")
+    beschreibung = (f"id {id} · {meta.get('original_filename') or ''} · {mime}"
+                    f" · original {meta.get('width') or '?'}×{meta.get('height') or '?'}")
+    if item.get("shared_by"):
+        beschreibung += f" · shared by {item['shared_by']}"
+    return [_McpImage(data=bytes(data), format=fmt), beschreibung]
+
+
 @storage_mcp.tool(
     name="assets_similar",
     description="""Find semantically similar objects using Knowledge Graph embeddings.

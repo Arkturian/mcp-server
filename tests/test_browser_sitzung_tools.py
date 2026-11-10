@@ -30,6 +30,13 @@ class BrowserSitzungToolTests(unittest.TestCase):
         self.assertEqual(a.kwargs["json_body"], {"methode": "click", "parameter": {"selector": "#ok"}, "sitzung": "S1"})
         self.assertGreaterEqual(a.kwargs["timeout"], 40)
 
+    def test_beschreibung_nennt_devtools(self):
+        tools = asyncio.run(server.cloud_mcp.list_tools()) if hasattr(server.cloud_mcp, "list_tools") else []
+        beschr = {t.name: t.description for t in tools}.get("browser_aufruf", "")
+        if beschr:
+            for m in ("performance", "network", "profile", "coverage", "heap", "evaluate"):
+                self.assertIn(m, beschr)
+
     def test_beenden(self):
         a = self._ruf(lambda: server.cloud_browser_freigabe_beenden())
         self.assertEqual(a.args, ("POST", "/api/browser/freigaben/beenden"))

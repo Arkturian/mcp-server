@@ -10756,6 +10756,41 @@ async def cloud_turn_initiator(session_name: str) -> Dict[str, Any]:
 
 
 @cloud_mcp.tool(
+    name="browser_anfrage",
+    description=(
+        "Den aktiven Tab im Chrome eines Menschen anfragen, ueber seine AgentOS-Extension "
+        "und mit seiner Freigabe je Anfrage (Alex 10.11.2026, Post 5856). art: "
+        "'screenshot' (sichtbarer Bereich), 'seite' (URL ohne Abfrage, Titel, markierter und "
+        "sichtbarer Text), 'konsole' (letzte Fehler/Warnungen, fehlgeschlagene Anfragen), "
+        "'abfrage' (Treffer fuer selector, hoechstens 20). grund: eine Zeile, die der Mensch "
+        "in der Freigabe sieht. Ziel ist der Mensch hinter deinem laufenden Zug, sonst dein "
+        "Besitzer, nie ein anderer. Wartet bis ~20 s; status 'offen' heisst: Ergebnis kommt "
+        "spaeter als Eingabe [Browser-Ergebnis <id>] oder ueber browser_ergebnis(request_id). "
+        "Ein Screenshot kommt als private storage_id, lesen mit assets_download. Fehler: "
+        "browser_nicht_verbunden (keine Extension offen), abgelehnt, nicht_moeglich. "
+        "Hoechstens 10 Anfragen je Minute."
+    ),
+)
+async def cloud_browser_anfrage(art: str, grund: str, selector: str = "") -> Dict[str, Any]:
+    body: Dict[str, Any] = {"art": art, "grund": grund}
+    if selector:
+        body["selector"] = selector
+    return await call_cloud_api("POST", "/api/browser/requests", json_body=body, timeout=60.0)
+
+
+@cloud_mcp.tool(
+    name="browser_ergebnis",
+    description=(
+        "Stand und Ergebnis einer eigenen Browser-Anfrage (request_id aus browser_anfrage): "
+        "status offen | fertig | abgelaufen, bei fertig das ergebnis {ok, art, text?, daten?, "
+        "storage_id? | fehler}. Nur der anfragende Agent darf lesen."
+    ),
+)
+async def cloud_browser_ergebnis(request_id: str) -> Dict[str, Any]:
+    return await call_cloud_api("GET", f"/api/browser/requests/{request_id}")
+
+
+@cloud_mcp.tool(
     name="read_session",
     description="Read the current screen content of any agent's tmux session across all servers. Returns plain text, no ANSI codes.",
 )

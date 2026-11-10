@@ -23,6 +23,11 @@ class BrowserAnfrageToolTests(unittest.TestCase):
             asyncio.run(server.cloud_browser_anfrage("screenshot", "Layout ansehen"))
         self.assertNotIn("selector", call.call_args.kwargs["json_body"])
 
+    def test_datei_mit_adresse(self):
+        with patch.object(server, "call_cloud_api", new=AsyncMock(return_value={})) as call:
+            asyncio.run(server.cloud_browser_anfrage("datei", "PDF lesen", adresse="https://x.at/a.pdf"))
+        self.assertEqual(call.call_args.kwargs["json_body"]["adresse"], "https://x.at/a.pdf")
+
     def test_ergebnis_liest_eigene_anfrage(self):
         with patch.object(server, "call_cloud_api", new=AsyncMock(return_value={"status": "fertig"})) as call:
             asyncio.run(server.cloud_browser_ergebnis("abc123"))

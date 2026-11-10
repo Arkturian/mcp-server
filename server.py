@@ -10762,19 +10762,24 @@ async def cloud_turn_initiator(session_name: str) -> Dict[str, Any]:
         "und mit seiner Freigabe je Anfrage (Alex 10.11.2026, Post 5856). art: "
         "'screenshot' (sichtbarer Bereich), 'seite' (URL ohne Abfrage, Titel, markierter und "
         "sichtbarer Text), 'konsole' (letzte Fehler/Warnungen, fehlgeschlagene Anfragen), "
-        "'abfrage' (Treffer fuer selector, hoechstens 20). grund: eine Zeile, die der Mensch "
+        "'abfrage' (Treffer fuer selector, hoechstens 20), 'html' (outerHTML zu selector oder "
+        "ganze Seite, bis 200 KB, als Datei), 'datei' (die angezeigte Datei, z. B. ein PDF, oder "
+        "adresse von derselben Website, bis 25 MB, als Datei). grund: eine Zeile, die der Mensch "
         "in der Freigabe sieht. Ziel ist der Mensch hinter deinem laufenden Zug, sonst dein "
         "Besitzer, nie ein anderer. Wartet bis ~20 s; status 'offen' heisst: Ergebnis kommt "
         "spaeter als Eingabe [Browser-Ergebnis <id>] oder ueber browser_ergebnis(request_id). "
-        "Ein Screenshot kommt als private storage_id, lesen mit assets_download. Fehler: "
+        "Screenshot, html und datei kommen als private storage_id: Bild mit media_view, Datei "
+        "mit assets_download. Nur lesend, kein Klicken oder Tippen. Fehler: "
         "browser_nicht_verbunden (keine Extension offen), abgelehnt, nicht_moeglich. "
         "Hoechstens 10 Anfragen je Minute."
     ),
 )
-async def cloud_browser_anfrage(art: str, grund: str, selector: str = "") -> Dict[str, Any]:
+async def cloud_browser_anfrage(art: str, grund: str, selector: str = "", adresse: str = "") -> Dict[str, Any]:
     body: Dict[str, Any] = {"art": art, "grund": grund}
     if selector:
         body["selector"] = selector
+    if adresse:
+        body["adresse"] = adresse
     return await call_cloud_api("POST", "/api/browser/requests", json_body=body, timeout=60.0)
 
 

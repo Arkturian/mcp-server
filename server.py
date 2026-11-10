@@ -10796,6 +10796,66 @@ async def cloud_browser_ergebnis(request_id: str) -> Dict[str, Any]:
 
 
 @cloud_mcp.tool(
+    name="browser_sitzungen",
+    description=(
+        "Browser-Sitzungen (offene AgentOS-Seitenleisten) des Menschen hinter deinem Zug, "
+        "sonst deines Besitzers; die aktive zuerst (Post 5857). Ohne deine Freigabe nur grob: "
+        "sitzung_id, geraet, aktiv, zuletzt_aktiv. Mit gueltiger Freigabe dazu freigabe "
+        "{freigabe_id, stufe, host, bis} und tab {titel, adresse, host}, solange der aktive Tab "
+        "auf dem freigegebenen Host steht."
+    ),
+)
+async def cloud_browser_sitzungen() -> Dict[str, Any]:
+    return await call_cloud_api("GET", "/api/browser/sitzungen")
+
+
+@cloud_mcp.tool(
+    name="browser_freigabe",
+    description=(
+        "Freigabe auf Zeit fuer eine Browser-Sitzung anfragen (Post 5857). stufe 'lesen' oder "
+        "'steuern' (steuern schliesst lesen ein), grund: eine Zeile fuer den Menschen, minuten "
+        "1..60 (Vorgabe 15), sitzung: sitzung_id oder 'aktiv'. Gilt nur fuer den Host des "
+        "aktiven Tabs in diesem Moment. Banking-, Zahlungs- und Finanzseiten sind gesperrt "
+        "(host_gesperrt). Wartet bis ~20 s; status 'offen' heisst: Ergebnis kommt als Eingabe "
+        "[Browser-Freigabe <id>]. Der Mensch kann die Dauer kuerzen und jederzeit widerrufen."
+    ),
+)
+async def cloud_browser_freigabe(stufe: str, grund: str, minuten: int = 15, sitzung: str = "aktiv") -> Dict[str, Any]:
+    return await call_cloud_api("POST", "/api/browser/freigaben",
+                                json_body={"stufe": stufe, "grund": grund, "minuten": minuten, "sitzung": sitzung},
+                                timeout=60.0)
+
+
+@cloud_mcp.tool(
+    name="browser_aufruf",
+    description=(
+        "Eine Methode in der freigegebenen Browser-Sitzung ausfuehren, ohne Karte (Post 5857). "
+        "lesen: getMarkedText, getText{selector?}, getHtml{selector?} (Datei), query{selector}, "
+        "screenshot (Datei), console, download{adresse?} (Datei, gleiche Website), getTab. "
+        "steuern: click{selector | x,y}, type{selector, text, enter?}, scroll{y | selector}, "
+        "navigate{adresse, gleicher Host}, back, waitFor{selector, ms<=10000}. "
+        "Ohne gueltige Freigabe: freigabe_noetig (dann browser_freigabe). Dateien kommen als "
+        "private storage_id (media_view / assets_download). Verlaesst der Tab den Host, lehnt die "
+        "Extension mit host_gewechselt ab. Nie in Passwort-, Karten- oder Code-Felder tippen. "
+        "Hoechstens 60 Aufrufe je Minute, 600 je Freigabe."
+    ),
+)
+async def cloud_browser_aufruf(methode: str, parameter: Optional[Dict[str, Any]] = None,
+                               sitzung: str = "aktiv") -> Dict[str, Any]:
+    return await call_cloud_api("POST", "/api/browser/aufrufe",
+                                json_body={"methode": methode, "parameter": parameter or {}, "sitzung": sitzung},
+                                timeout=60.0)
+
+
+@cloud_mcp.tool(
+    name="browser_freigabe_beenden",
+    description="Deine eigene Browser-Freigabe fuer eine Sitzung (sitzung_id oder 'aktiv') sofort beenden.",
+)
+async def cloud_browser_freigabe_beenden(sitzung: str = "aktiv") -> Dict[str, Any]:
+    return await call_cloud_api("POST", "/api/browser/freigaben/beenden", json_body={"sitzung": sitzung})
+
+
+@cloud_mcp.tool(
     name="read_session",
     description="Read the current screen content of any agent's tmux session across all servers. Returns plain text, no ANSI codes.",
 )

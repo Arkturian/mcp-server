@@ -11054,6 +11054,11 @@ async def cloud_token_lage(agent: str = "") -> Dict[str, Any]:
     return await call_cloud_api("GET", "/api/usage/lage", params={"agent": agent}, timeout=90)
 
 
+# Zeit eines Tages in Summen (Post #5880, Cloud 11.11.2026): siehe zeit_tools.
+from zeit_tools import register_zeit_tools  # noqa: E402
+register_zeit_tools(cloud_mcp, call_cloud_api)
+
+
 @cloud_mcp.tool(
     name="bridge_message_status",
     description=(

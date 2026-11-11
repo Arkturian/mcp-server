@@ -6297,7 +6297,9 @@ async def ai_claude_text(
 
 @ai_mcp.tool(
     name="chatgpt_text",
-    description="Call AI API /ai/chatgpt. Params: prompt, system?, max_tokens?, temperature?, model?, effort?",
+    description=("Call AI API /ai/chatgpt. Params: prompt, system?, max_tokens?, temperature?, model?, effort?, tools?. "
+                 "tools=false: reiner Textaufruf, codex ohne Shell/Code-Modus/Apps/Plugins (eine Modellrunde, schneller). "
+                 "Weggelassen = Vorgabe von /ai/chatgpt (Werkzeuge an)."),
 )
 async def ai_chatgpt_text(
     prompt: str,
@@ -6306,6 +6308,7 @@ async def ai_chatgpt_text(
     temperature: Optional[float] = 0.7,
     model: Optional[str] = None,
     effort: Optional[str] = None,
+    tools: Optional[bool] = None,
 ) -> Dict[str, Any]:
     body = {
         "prompt": prompt,
@@ -6318,6 +6321,10 @@ async def ai_chatgpt_text(
         if normalized_effort not in {"minimal", "low", "medium", "high", "xhigh"}:
             raise ValueError(f"Unsupported Codex reasoning effort: {effort}")
         body["effort"] = normalized_effort
+    # Nur mitschicken, wenn gesetzt: sonst gilt die Vorgabe von /ai/chatgpt
+    # (tools=true) fuer alle anderen Aufrufer unveraendert (api-ai 3159a36).
+    if tools is not None:
+        body["tools"] = bool(tools)
 
     # api-ai declares `model` as a FastAPI query parameter, while `effort`
     # belongs to the Prompt body. Sending both in the JSON body silently made

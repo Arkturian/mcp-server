@@ -52,3 +52,36 @@ def test_chatgpt_tool_rejects_unknown_reasoning_effort():
     for effort in ("minimal", "low", "medium", "high", "xhigh"):
         assert f'"{effort}"' in source
     assert "raise ValueError" in source
+
+
+def _chatgpt_mit_attrappe():
+    """Fuehrt ai_chatgpt_text mit einer Attrappe fuer call_ai_api aus."""
+    import asyncio
+    from typing import Any, Dict, Optional
+
+    gesendet = []
+
+    async def call_ai_api(method, path, params=None, json_body=None):
+        gesendet.append({"path": path, "params": params, "body": json_body})
+        return {"ok": True}
+
+    function = _async_function("ai_chatgpt_text")
+    function.decorator_list = []
+    modul = ast.Module(body=[function], type_ignores=[])
+    ns = {"call_ai_api": call_ai_api, "Optional": Optional, "Dict": Dict, "Any": Any}
+    exec(compile(modul, "server.py", "exec"), ns)
+    return lambda **kw: (asyncio.run(ns["ai_chatgpt_text"](**kw)), gesendet[-1])[1]
+
+
+def test_tools_false_geht_im_rumpf_an_ai_chatgpt():
+    aufruf = _chatgpt_mit_attrappe()
+    gesendet = aufruf(prompt="x", effort="low", tools=False, model="gpt-5.6-luna")
+    assert gesendet["path"] == "/ai/chatgpt"
+    assert gesendet["body"]["tools"] is False
+    assert gesendet["params"] == {"model": "gpt-5.6-luna"}
+
+
+def test_ohne_tools_bleibt_der_rumpf_wie_bisher():
+    aufruf = _chatgpt_mit_attrappe()
+    assert "tools" not in aufruf(prompt="x")["body"]
+    assert aufruf(prompt="x", tools=True)["body"]["tools"] is True

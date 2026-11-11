@@ -15,6 +15,7 @@ Registrierung getrennt von server.py, damit das Werkzeug gegen einen falschen
 Transport geprueft werden kann.
 """
 
+import json
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -147,4 +148,6 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
         d = await transport("GET", "/api/usage/tag", params=params, timeout=90)
         if not isinstance(d, dict) or "mensch" not in d:
             return d
-        return tag_zusammenfassen(d, zuege=zuege)
+        # Kompakt als Text: Ein dict gibt FastMCP eingerueckt aus, das machte am 11.11.
+        # aus 15,7 KB live 27,5 KB (gemessen am Gateway mit zuege=true).
+        return json.dumps(tag_zusammenfassen(d, zuege=zuege), ensure_ascii=False, separators=(",", ":"))

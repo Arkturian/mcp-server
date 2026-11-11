@@ -192,6 +192,36 @@ class VollerTag(unittest.TestCase):
                          len(self.tag["mensch"]["vereinigt"]["abschnitte"]))
 
 
+def _geliefert(ergebnis) -> str:
+    """Der Text, den der Agent wirklich bekommt (call_tool liefert je nach mcp-Version
+    eine Liste oder ein Paar aus Liste und strukturiertem Inhalt)."""
+    teile = ergebnis[0] if isinstance(ergebnis, tuple) else ergebnis
+    return "".join(getattr(t, "text", "") for t in teile)
+
+
+class GeliefertesFormat(unittest.IsolatedAsyncioTestCase):
+    """Gemessen wird, was durch FastMCP hinausgeht, nicht ein json.dumps im Test:
+    Am 11.11. lag die Pruefung bei 17,4 KB, geliefert wurden 27,5 KB (eingerueckt)."""
+
+    async def asyncSetUp(self):
+        tag = erzeugter_tag()
+
+        async def transport(method, path, **kwargs):
+            return tag
+        self.mcp = FastMCP("isolated-zeit-format")
+        register_zeit_tools(self.mcp, transport)
+
+    async def test_geliefert_unter_der_grenze(self):
+        for zuege in (False, True):
+            text = _geliefert(await self.mcp.call_tool("zeit_tag", {"person": "p@x.at", "zuege": zuege}))
+            self.assertLess(len(text.encode("utf-8")), ZIEL_BYTES, f"zuege={zuege}")
+
+    async def test_geliefert_ist_kompaktes_json(self):
+        text = _geliefert(await self.mcp.call_tool("zeit_tag", {"person": "p@x.at"}))
+        self.assertNotIn("\n", text)
+        self.assertEqual(json.loads(text)["summen"]["zuege"], 1882)
+
+
 class Werkzeug(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.calls = []

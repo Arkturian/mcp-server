@@ -10921,8 +10921,9 @@ async def cloud_browser_freigabe(stufe: str, grund: str, minuten: int = 15, sitz
         "heap 60 s, sonst ~20 s; danach zeitueberschreitung, kein Nachreichen. "
         "Ohne gueltige Freigabe: freigabe_noetig (dann browser_freigabe). Dateien kommen als "
         "private storage_id (media_view / assets_download). Verlaesst der Tab den Host, lehnt die "
-        "Extension mit host_gewechselt ab; mit automatischer Freigabe legt der Server dann selbst "
-        "eine fuer den neuen Host an und wiederholt einmal (wiederholt_nach). "
+        "Extension mit host_gewechselt ab. Mit automatischer Freigabe wiederholt der Server navigate "
+        "und reine Lese-Methoden einmal fuer den neuen Host (wiederholt_nach); click, type, scroll, "
+        "back, reload, waitFor und DevTools nie -- dann kommt neuer_host zurueck, neu ansetzen. "
         "Nie in Passwort-, Karten- oder Code-Felder tippen. "
         "Hoechstens 60 Aufrufe je Minute, 600 je Freigabe."
     ),

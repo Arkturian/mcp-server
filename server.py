@@ -211,6 +211,13 @@ ISSUE_PATH = "/issue"
 LLMTIME_API_BASE = os.getenv("LLMTIME_API_BASE", "https://llm-time.arkturian.com").rstrip("/")
 LLMTIME_API_KEY = os.getenv("LLMTIME_API_KEY", "").strip()
 LLMTIME_PATH = "/llmtime"
+# event-api (Termine/Anmeldungen je Mandant, Owner: Agent Event). Upstream nur
+# mit Instanzschluessel + gepruefter Identitaet (X-Agent-Name); der Agenten-JWT
+# geht nie an die event-api. Welche Mandanten ein Agent sieht, entscheidet die
+# event-api (agent_grants). Server ist EXPLICIT_ONLY (siehe unten beim Mount).
+EVENT_API_BASE = os.getenv("EVENT_API_BASE", "https://event-api.arkserver.arkturian.com").rstrip("/")
+EVENT_API_KEY = os.getenv("EVENT_API_KEY", "").strip()
+EVENT_PATH = "/event"
 # Shared secret for cross-node IACP role addressing. Must match IACP_TOKEN
 # env on every cloud-api in the federation. Used by send_to_role().
 IACP_TOKEN = os.getenv("IACP_TOKEN", "").strip()
@@ -838,6 +845,71 @@ async def call_llmtime_api(
         params=params,
         json_body=json_body,
     )
+
+
+def _event_headers() -> Dict[str, str]:
+    """Instanzschluessel + gepruefter Agentenname; nie den JWT weiterreichen."""
+    from auth import current_caller_agent_name
+
+    if not EVENT_API_KEY:
+        raise ValueError("event_unavailable: EVENT_API_KEY is not configured on this gateway")
+    headers: Dict[str, str] = {"X-API-Key": EVENT_API_KEY}
+    set_agent_name(headers, current_caller_agent_name() or "")
+    return headers
+
+
+async def call_event_api(
+    method: str,
+    endpoint: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Any = None,
+) -> Any:
+    """Call the event-api (see event_tools)."""
+    return await _fetch_json(
+        method,
+        f"{EVENT_API_BASE}{endpoint}",
+        headers=_event_headers(),
+        params=params,
+        json_body=json_body,
+    )
+
+
+async def event_export_to_storage(
+    tenant: str, fmt: str, params: Dict[str, Any], share_with: Optional[List[str]] = None
+) -> Any:
+    """Export (CSV/XLSX) aus der event-api holen und als private Storage-Datei ablegen.
+
+    Gebunden an den Aufrufer (grant_scope), optional lesend an `share_with`
+    (gepruefte Agentennamen desselben Mandanten).
+    """
+    from urllib.parse import quote as _q
+
+    share_scopes = await _share_with_scopes(share_with)
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        r = await client.get(
+            f"{EVENT_API_BASE}/api/v1/admin/{_q(tenant, safe='')}/registrations.{fmt}",
+            headers=_event_headers(),
+            params=params,
+        )
+        if r.status_code >= 400:
+            try:
+                detail = r.json().get("detail")
+            except Exception:
+                detail = r.text[:200]
+            raise ValueError(f"event_export_failed: HTTP {r.status_code} {detail}")
+        raw = r.content
+    disp = r.headers.get("content-disposition", "")
+    filename = disp.split("filename=", 1)[1].strip('"; ') if "filename=" in disp else f"{tenant}-anmeldungen.{fmt}"
+    obj = await call_storage_upload(
+        raw,
+        filename,
+        form_fields={"ai_mode": "none", "is_public": "false", "private": "true", "context": f"event-api export {tenant}"},
+        share_scopes=share_scopes,
+    )
+    if isinstance(obj, dict):
+        obj["hinweis"] = "Private Datei. Holen mit assets_download(id). Personendaten: nicht in Beitraege, Issues oder IACP kopieren."
+    return obj
 
 
 async def call_business_api(
@@ -12590,6 +12662,25 @@ register_llmtime_tools(llmtime_mcp, call_llmtime_api)
 llmtime_app = llmtime_mcp.streamable_http_app()
 mount_mcp("llmtime", LLMTIME_PATH, llmtime_app)
 
+
+# event-api MCP (Owner: Agent Event) -------------------------------------------
+event_mcp = FastMCP(
+    name="event",
+    streamable_http_path="/",
+    stateless_http=True,
+    auth=None,
+    log_level="INFO",
+)
+
+from event_tools import register_event_tools
+register_event_tools(event_mcp, call_event_api, event_export_to_storage)
+
+event_app = event_mcp.streamable_http_app()
+mount_mcp("event", EVENT_PATH, event_app)
+# Kundendaten: nur ausdruecklich benannte Agenten (mcp:event:*), keine Platzhalterrechte (Cloud 11.11.2026)
+import auth as _event_auth  # noqa: E402
+_event_auth.EXPLICIT_ONLY_SERVERS.add("event")
+
 # Fremde MCP-Server per MCP_PASSTHROUGH (passthrough.py, P3 26.10.2026). Namen
 # eigener Server sind gesperrt; Rechte prueft JWTAuthMiddleware, Platzhalter zaehlen nicht.
 import passthrough as _passthrough  # noqa: E402
@@ -12623,6 +12714,7 @@ _cloud_stack = AsyncExitStack()
 _conversation_stack = AsyncExitStack()
 _issue_stack = AsyncExitStack()
 _llmtime_stack = AsyncExitStack()
+_event_stack = AsyncExitStack()
 
 
 # Track which MCP sessions were started (for shutdown ordering)
@@ -12650,6 +12742,7 @@ def _all_mcps():
         ("conversation", _conversation_stack, conversation_mcp),
         ("issue", _issue_stack, issue_mcp),
         ("llmtime", _llmtime_stack, llmtime_mcp),
+        ("event", _event_stack, event_mcp),
     ]
 
 
@@ -12782,6 +12875,12 @@ async def root() -> Dict[str, Any]:
                 "tools": [tool.name for tool in llmtime_mcp._tool_manager.list_tools()],
                 "upstream": LLMTIME_API_BASE,
                 "description": "LLM-TIME: Arbeitspakete erfassen, Prognosen (wann, wie viel, Aufwand) aus gemessener Erfahrung, Merge-Import",
+            },
+            "event": {
+                "path": EVENT_PATH,
+                "tools": [tool.name for tool in event_mcp._tool_manager.list_tools()],
+                "upstream": EVENT_API_BASE,
+                "description": "event-api: Termine, Anmeldungen, Auswertung und Excel/CSV-Export je Mandant (nur freigegebene Agenten)",
             },
         },
     }

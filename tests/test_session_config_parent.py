@@ -42,3 +42,27 @@ def test_ohne_parent_bleibt_der_rumpf_wie_bisher():
 
 def test_beschreibung_nennt_parent():
     assert 'parent (str: name of the parent agent' in QUELLE.read_text()
+
+
+def _sammel():
+    baum = ast.parse(QUELLE.read_text())
+    fn = next(n for n in baum.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "cloud_session_config_bulk")
+    fn.decorator_list = []
+    rufe = []
+
+    async def call_cloud_api(method, path, json_body=None, **k):
+        rufe.append((method, path, json_body))
+        return {"state": "freigabe_angefragt", "interaction_id": "ix-1"}   # 202 kommt als Rumpf durch
+    from typing import List, Optional
+    ns = {"Dict": Dict, "Any": Any, "List": List, "Optional": Optional, "call_cloud_api": call_cloud_api}
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[fn], type_ignores=[])), str(QUELLE), "exec"), ns)
+    return ns["cloud_session_config_bulk"], rufe
+
+
+def test_sammel_mit_namen_und_mit_filter():
+    f, rufe = _sammel()
+    r = asyncio.run(f(agents=["A", "B"], effort="xhigh"))
+    asyncio.run(f(model_filter="sonnet", model="opus"))
+    assert rufe == [("POST", "/api/konfig-sammel", {"agenten": ["A", "B"], "effort": "xhigh"}),
+                    ("POST", "/api/konfig-sammel", {"filter": {"model": "sonnet"}, "model": "opus"})]
+    assert r["state"] == "freigabe_angefragt"

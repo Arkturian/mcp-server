@@ -11583,9 +11583,14 @@ async def cloud_session_lifecycle(session_name: str) -> Dict[str, Any]:
         "ws_grace_seconds (int, delay after WS disconnect before cleanup), "
         "wipe_on_cleanup (bool, delete history on cleanup), "
         "max_idle_minutes (int, 0=never), auto_restart (bool), "
-        "effort (str: high/low), model (str), "
+        "effort (str: low/medium/high/xhigh/max/auto), model (str), "
         "parent (str: name of the parent agent, one level only; \"\" removes it). "
-        "Changing another agent needs its owner, an admin, or sessions:manage within the same tenant."
+        "Changing another agent needs its owner, an admin, or sessions:manage within the same tenant. "
+        "model/effort only: with sessions:config:model_effort you may change agents of your own "
+        "tenant directly; without it the call answers 202 'freigabe_angefragt' and the owner gets "
+        "an approval card. Do NOT ask again; the outcome arrives as an IACP message. "
+        "Model/effort apply without restart: typed into an idle agent ('angewandt': live), "
+        "otherwise 'wartet' (applied at its next idle moment) or 'naechster_start'."
     ),
 )
 async def cloud_session_config(
@@ -11617,6 +11622,35 @@ async def cloud_session_config(
     if parent is not None:
         body["parent"] = parent   # cloud-api prueft: eine Ebene, keine Zyklen, Eltern existiert
     return await call_cloud_api("PATCH", f"/api/sessions/{session_name}/config", json_body=body)
+
+
+@cloud_mcp.tool(
+    name="session_config_bulk",
+    description=(
+        "Change model and/or effort of SEVERAL agents at once. Pass agents (list of names) "
+        "or model_filter (all agents on that node whose model equals it). "
+        "Humans: applied per agent with their own rights. Agents with "
+        "sessions:config:model_effort: per agent within their own tenant. Agents without it: "
+        "202 'freigabe_angefragt', ONE approval card naming all agents; do NOT ask again, the "
+        "outcome per agent arrives as an IACP message. No restart: applied when each agent is idle."
+    ),
+)
+async def cloud_session_config_bulk(
+    agents: Optional[List[str]] = None,
+    model_filter: Optional[str] = None,
+    model: Optional[str] = None,
+    effort: Optional[str] = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {}
+    if agents:
+        body["agenten"] = list(agents)
+    elif model_filter is not None:
+        body["filter"] = {"model": model_filter}
+    if model is not None:
+        body["model"] = model
+    if effort is not None:
+        body["effort"] = effort
+    return await call_cloud_api("POST", "/api/konfig-sammel", json_body=body)
 
 
 # ── MCP-Zuweisung + Neustart als Werkzeuge (Steward/David, 2026-08-28) ──────

@@ -256,18 +256,10 @@ class Werkzeug(unittest.IsolatedAsyncioTestCase):
         self.assertIn("`person`", tool.description)
 
 
-def _quellen(n_agenten=40, seed=12112026):
-    """`quellen` in der Form von cloud-api (Post #5898), P3 mit vielen Agenten."""
-    r = random.Random(seed)
-    summen = [{"agent": f"P3Agent{i:02d}", "node": "p3-mac", "zuege": r.randint(1, 900),
-               "dauer_s": r.randint(10, 40000),
-               "zeilen": {"dateien": r.randint(0, 50), "hinzu": r.randint(0, 3000), "geaendert": 0, "entfernt": 0},
-               "tokens": {"anfragen": r.randint(1, 900), "input": r.randint(0, 10**6),
-                          "output": r.randint(0, 10**5), "cache_read": r.randint(0, 10**8)}}
-              for i in range(n_agenten)]
-    return [{"foederation": "arkturian", "status": "ok"},
-            {"foederation": "p3", "status": "ok", "umfang": ["eigene", "agenten"], "bloecke": 12,
-             "zuege": 70, "agenten_summen": summen},
+def _quellen():
+    """`quellen` in der Form von cloud-api (Post #5898, Nachtrag Zugriffsregel)."""
+    return [{"foederation": "arkturian", "status": "ok", "umfang": "alles"},
+            {"foederation": "p3", "status": "ok", "umfang": "eigene", "bloecke": 12, "zuege": 70},
             {"foederation": "ele", "status": "verweigert", "grund": "usage_lesen_aus"},
             {"foederation": "x", "status": "keine_antwort", "grund": "keine Antwort in 20 s"}]
 
@@ -294,10 +286,17 @@ class Foederationen(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([(x["foederation"], x["status"]) for x in q],
                          [("arkturian", "ok"), ("p3", "ok"), ("ele", "verweigert"), ("x", "keine_antwort")])
         self.assertEqual(q[2]["grund"], "usage_lesen_aus")
-        self.assertEqual(len(q[1]["agenten_summen"]), 15)
-        self.assertEqual(q[1]["agenten_summen_gesamt"], 40)
-        laengste = max(_quellen()[1]["agenten_summen"], key=lambda a: a["dauer_s"])
-        self.assertEqual(q[1]["agenten_summen"][0]["agent"], laengste["agent"])
+        self.assertEqual(q[1], {"foederation": "p3", "status": "ok", "umfang": "eigene", "bloecke": 12, "zuege": 70})
+
+    async def test_umfang_geht_mit(self):
+        self.antwort = {**erzeugter_tag(), "umfang": "alles"}
+        self.assertEqual(json.loads(_geliefert(await self.mcp.call_tool("zeit_tag", {"person": "p@x.at"})))["umfang"],
+                         "alles")
+
+    async def test_beschreibung_nennt_das_recht(self):
+        tool = {t.name: t for t in await self.mcp.list_tools()}["zeit_tag"]
+        self.assertIn("zeit:lesen", tool.description)
+        self.assertNotIn("benannten Agenten", tool.description)
 
     async def test_mit_quellen_unter_der_grenze(self):
         for zuege in (False, True):

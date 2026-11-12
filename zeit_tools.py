@@ -23,7 +23,6 @@ from zoneinfo import ZoneInfo
 Transport = Callable[..., Awaitable[Any]]
 
 MAX_ZUEGE = 50
-MAX_FREMDE_AGENTEN = 15     # je andere Foederation in `quellen` (Post #5898)
 MAX_AGENTEN = 25            # danach eine Zeile „+N weitere“ mit Summen (Cloud 11.11.2026)
 TOP_ORDNER = 10
 ZIEL_BYTES = 20_000
@@ -93,21 +92,10 @@ def _zug_kurz(z: Dict[str, Any], tz: ZoneInfo) -> Dict[str, Any]:
 
 
 def _quelle_kurz(q: Dict[str, Any]) -> Dict[str, Any]:
-    """Eine Foederation in `quellen`: Status, Grund, Umfang und die laengsten Agenten
-    als Summen (ohne Personen). 38 Agenten auf P3 waeren sonst rund 8 KB."""
-    out = {k: q.get(k) for k in ("foederation", "status", "grund", "umfang", "verweigert", "bloecke", "zuege")
-           if q.get(k) not in (None, [], {})}
-    summen = q.get("agenten_summen")
-    if isinstance(summen, list):
-        kurz = []
-        for a in sorted(summen, key=lambda a: -float(a.get("dauer_s") or 0))[:MAX_FREMDE_AGENTEN]:
-            zl = a.get("zeilen") or {}
-            kurz.append({"agent": a.get("agent"), "zuege": a.get("zuege"), "dauer_s": a.get("dauer_s"),
-                         "zeilen": sum(int(zl.get(k) or 0) for k in ZEILEN_FELDER),
-                         "output": int((a.get("tokens") or {}).get("output") or 0)})
-        out["agenten_summen"] = kurz
-        out["agenten_summen_gesamt"] = len(summen)
-    return out
+    """Eine Foederation in `quellen`: Status, Grund, Umfang (alles/eigene), Zahl der
+    Bloecke und Zuege von dort."""
+    return {k: q.get(k) for k in ("foederation", "status", "grund", "umfang", "bloecke", "zuege")
+            if q.get(k) not in (None, [], {})}
 
 
 def tag_zusammenfassen(d: Dict[str, Any], zuege: bool = False) -> Dict[str, Any]:
@@ -122,6 +110,7 @@ def tag_zusammenfassen(d: Dict[str, Any], zuege: bool = False) -> Dict[str, Any]
         "person": d.get("person"), "datum": d.get("datum"), "zeitzone": d.get("zeitzone"),
         "hinweis": d.get("hinweis"),
         "summen": d.get("summen"),
+        "umfang": d.get("umfang"),
         "mensch": {
             "aktiv_s": ver.get("aktiv_s", 0), "passiv_s": ver.get("passiv_s", 0),
             "bloecke": len(mensch.get("bloecke") or []),
@@ -152,9 +141,9 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
         name="zeit_tag",
         description=(
             "Ein Tag einer Person in Summen (Post #5880, Uebersicht „Zeit heute“). "
-            "Lesen duerfen die Person selbst, Superadmins und die von Alex benannten Agenten "
-            "(alle, die am 11.11.2026 mit „Cloud“ anfingen); sonst 403. Agenten MUESSEN "
-            "`person` (Mail) nennen. `datum` = Kalendertag in Wien, JJJJ-MM-TT, leer = heute. "
+            "Wer das Recht `zeit:lesen` hat (Superadmin immer, Agenten mit dem Recht im Token), "
+            "liest alle Menschen und Agenten; sonst nur die eigene Zeit (`umfang`: alles/eigene). "
+            "Agenten MUESSEN `person` (Mail) nennen. `datum` = Kalendertag in Wien, JJJJ-MM-TT, leer = heute. "
             "Liefert `summen`, die Bahn `mensch` (aktive/passive Bildschirmzeit, Abschnitte "
             "[von, bis, zustand] in Ortszeit), `agenten` je Name (zuege, von_person = von dieser "
             "Person ausgeloest, dauer_s, zeilen, tokens), die 25 laengsten einzeln, der Rest als "
@@ -162,9 +151,10 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
             "Einzelne Zuege nur mit zuege=true, hoechstens 50 (die laengsten), mit Gesamtzahl. "
             "Andere Foederationen (z.B. P3) fragt cloud-api ueber die Bruecke mit ab (Post #5898): "
             "`foederationen` leer = alle freigeschalteten, `keine` = nur diese, sonst Komma-Liste. "
-            "`quellen` nennt je Foederation den Status (ok, keine_antwort, verweigert, fehler, "
-            "nicht_abgefragt) mit Grund; fehlt eine, steht es dort. Zuege von drueben tragen den "
-            "Knoten `<bruecke>-<knoten>`. "
+            "Drueben entscheidet die andere Foederation nach IHREN Rechten fuer den fragenden "
+            "Menschen (bei Agenten der Besitzer). `quellen` nennt je Foederation Status (ok, "
+            "keine_antwort, verweigert, fehler, nicht_abgefragt), Grund und Umfang; fehlt eine, "
+            "steht es dort. Zuege von drueben tragen den Knoten `<bruecke>-<knoten>`. "
             "Anwesenheit ist ein Personendatum: nicht in Beitraege, Issues oder an Dritte kopieren, "
             "nur dem Menschen selbst oder seinem Admin zeigen."
         ),

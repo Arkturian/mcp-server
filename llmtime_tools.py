@@ -1,6 +1,7 @@
 """LLM-TIME-API tools: measured forecasts instead of guessed durations.
 
-Contract: Content-Post #5801 (TIME-LLM), API state 504379d.
+Contract: Content-Post #5801 (TIME-LLM), API state 504379d; forecast_rueckblick
+and turn tokens since llm-time-api 0.3.0 (3f4b036, dd96609).
 
 Registration is isolated from the other MCP domains so the tools can be
 exercised against a fake transport. The transport decides the credential
@@ -222,9 +223,10 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         tokens | zeilen (geänderte Codezeilen). `anzahl` Vorgabe 1.
         P85 wird in 85 % der Läufe NICHT überschritten (Budgetsicht).
         Gib `quellen` mit aus: es zeigt, wie viel eigene und wie viel
-        allgemeine Erfahrung eingeflossen ist. Tokens gibt es nur, wenn Pakete
-        mit `tokens` abgeschlossen wurden, aktiv_stunden nur mit eingespielten
-        Turns, zeilen nur mit `zeilen` am Paket.""",
+        allgemeine Erfahrung eingeflossen ist. tokens und aktiv_stunden kommen
+        aus den Turns der Agenten (zentrale Turn-Ablage der cloud-api), verteilt
+        auf die Pakete, die zur Zeit des Turns liefen; bei `item_finish`
+        gemeldete Tokens haben Vorrang. zeilen nur mit `zeilen` am Paket.""",
     )
     async def forecast_aufwand(
         projekt: Optional[str] = None,
@@ -241,6 +243,40 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
             "groesse": groesse, "anzahl": anzahl, "seed": seed, "stichproben": stichproben,
         })
         return await transport("GET", f"{API}/forecast/aufwand", params=params)
+
+    @mcp.tool(
+        name="forecast_rueckblick",
+        description="""Wie gut hätten die Prognosen der letzten Tage getroffen? (GET /forecast/rueckblick)
+
+        Wann: bevor du eine Prognose als Zusage weitergibst, wenn jemand fragt,
+        wie verlässlich LLM-TIME ist, oder um Einstellungen (`block_tage`) zu
+        vergleichen. Für jeden der letzten `stichtage` Tage (Vorgabe 14) wird
+        mit dem damaligen Wissen `forecast_how_many` über `horizont_tage`
+        (Vorgabe 7) gerechnet und mit dem tatsächlich Fertigen verglichen.
+        `projekt` leer = alle Projekte. `block_tage`: Läufe aufeinanderfolgender
+        Messtage je Ziehung, leer = Vorgabe der Instanz (3).
+        Antwort: `erreicht` je Perzentil = Anteil der Stichtage, an denen das
+        Ist die Prognose erreicht hat; gut kalibriert ist etwa 0,50 / 0,85 /
+        0,95. Deutlich darunter heißt: die Prognose verspricht zu viel.
+        `faktor_p50` = typische Abweichung zwischen P50 und Ist (1,0 = genau).
+        `punkte` je Stichtag mit p50/p85/p95/ist, `ohne_daten` = Stichtage ohne
+        Datengrundlage. Die Stichtage überlappen, die Werte sind Richtwerte.
+        Weitergeben: `erreicht` und `faktor_p50` mit `stichtage` und
+        `horizont_tage`, keine Einzelwerte als Gewissheit.""",
+    )
+    async def forecast_rueckblick(
+        projekt: Optional[str] = None,
+        meilenstein: Optional[str] = None,
+        horizont_tage: Optional[int] = None,
+        stichtage: Optional[int] = None,
+        fenster_tage: Optional[int] = None,
+        block_tage: Optional[int] = None,
+    ) -> Any:
+        params = _drop_none({
+            "projekt": projekt, "meilenstein": meilenstein, "horizont_tage": horizont_tage,
+            "stichtage": stichtage, "fenster_tage": fenster_tage, "block_tage": block_tage,
+        })
+        return await transport("GET", f"{API}/forecast/rueckblick", params=params)
 
     @mcp.tool(
         name="import_merges",

@@ -20,7 +20,7 @@ class LlmtimeToolsTests(unittest.IsolatedAsyncioTestCase):
         names = {t.name for t in await self.mcp.list_tools()}
         self.assertEqual(names, {
             "item_add", "item_start", "item_finish", "item_discard", "items_list",
-            "forecast_when", "forecast_how_many", "forecast_aufwand",
+            "forecast_when", "forecast_how_many", "forecast_aufwand", "forecast_rueckblick",
             "import_merges", "rules_get", "rules_set",
         })
 
@@ -69,6 +69,28 @@ class LlmtimeToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("zufluss", self.calls[-1][2]["params"])
         tools = {t.name: t for t in await self.mcp.list_tools()}
         self.assertIn("nicht konvergent", tools["forecast_when"].description)
+
+    async def test_rueckblick_without_arguments_asks_for_all_projects(self):
+        await self.mcp.call_tool("forecast_rueckblick", {})
+        self.assertEqual(self.calls[-1], ("GET", "/api/v1/forecast/rueckblick", {"params": {}}))
+
+    async def test_rueckblick_passes_its_parameters(self):
+        await self.mcp.call_tool("forecast_rueckblick", {
+            "projekt": "cloud-api", "horizont_tage": 7, "stichtage": 21, "block_tage": 1,
+        })
+        self.assertEqual(self.calls[-1][2]["params"], {
+            "projekt": "cloud-api", "horizont_tage": 7, "stichtage": 21, "block_tage": 1,
+        })
+        tools = {t.name: t for t in await self.mcp.list_tools()}
+        desc = tools["forecast_rueckblick"].description
+        for word in ("erreicht", "faktor_p50", "0,85", "block_tage"):
+            self.assertIn(word, desc)
+
+    async def test_aufwand_says_tokens_come_from_turns(self):
+        tools = {t.name: t for t in await self.mcp.list_tools()}
+        desc = tools["forecast_aufwand"].description
+        self.assertIn("Turns", desc)
+        self.assertNotIn("Tokens gibt es nur, wenn Pakete", desc)
 
     async def test_how_many_requires_bis(self):
         await self.mcp.call_tool("forecast_how_many", {"projekt": "demo", "bis": "2026-11-21"})

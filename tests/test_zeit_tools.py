@@ -256,6 +256,59 @@ class Werkzeug(unittest.IsolatedAsyncioTestCase):
         self.assertIn("`person`", tool.description)
 
 
+def _quellen(n_agenten=40, seed=12112026):
+    """`quellen` in der Form von cloud-api (Post #5898), P3 mit vielen Agenten."""
+    r = random.Random(seed)
+    summen = [{"agent": f"P3Agent{i:02d}", "node": "p3-mac", "zuege": r.randint(1, 900),
+               "dauer_s": r.randint(10, 40000),
+               "zeilen": {"dateien": r.randint(0, 50), "hinzu": r.randint(0, 3000), "geaendert": 0, "entfernt": 0},
+               "tokens": {"anfragen": r.randint(1, 900), "input": r.randint(0, 10**6),
+                          "output": r.randint(0, 10**5), "cache_read": r.randint(0, 10**8)}}
+              for i in range(n_agenten)]
+    return [{"foederation": "arkturian", "status": "ok"},
+            {"foederation": "p3", "status": "ok", "umfang": ["eigene", "agenten"], "bloecke": 12,
+             "zuege": 70, "agenten_summen": summen},
+            {"foederation": "ele", "status": "verweigert", "grund": "usage_lesen_aus"},
+            {"foederation": "x", "status": "keine_antwort", "grund": "keine Antwort in 20 s"}]
+
+
+class Foederationen(unittest.IsolatedAsyncioTestCase):
+    """Andere Foederationen ueber die Bruecke (Post #5898)."""
+
+    async def asyncSetUp(self):
+        self.calls = []
+        self.antwort = {**erzeugter_tag(), "quellen": _quellen()}
+
+        async def transport(method, path, **kwargs):
+            self.calls.append(kwargs)
+            return self.antwort
+        self.mcp = FastMCP("isolated-zeit-foed")
+        register_zeit_tools(self.mcp, transport)
+
+    async def test_foederationen_geht_mit(self):
+        await self.mcp.call_tool("zeit_tag", {"person": "p@x.at", "foederationen": " p3 "})
+        self.assertEqual(self.calls[0]["params"], {"person": "p@x.at", "foederationen": "p3"})
+
+    async def test_quellen_mit_status_und_grund(self):
+        q = json.loads(_geliefert(await self.mcp.call_tool("zeit_tag", {"person": "p@x.at"})))["quellen"]
+        self.assertEqual([(x["foederation"], x["status"]) for x in q],
+                         [("arkturian", "ok"), ("p3", "ok"), ("ele", "verweigert"), ("x", "keine_antwort")])
+        self.assertEqual(q[2]["grund"], "usage_lesen_aus")
+        self.assertEqual(len(q[1]["agenten_summen"]), 15)
+        self.assertEqual(q[1]["agenten_summen_gesamt"], 40)
+        laengste = max(_quellen()[1]["agenten_summen"], key=lambda a: a["dauer_s"])
+        self.assertEqual(q[1]["agenten_summen"][0]["agent"], laengste["agent"])
+
+    async def test_mit_quellen_unter_der_grenze(self):
+        for zuege in (False, True):
+            text = _geliefert(await self.mcp.call_tool("zeit_tag", {"person": "p@x.at", "zuege": zuege}))
+            self.assertLess(len(text.encode("utf-8")), ZIEL_BYTES, f"zuege={zuege}")
+
+    async def test_ohne_quellen_kein_feld(self):
+        self.antwort = erzeugter_tag()
+        self.assertNotIn("quellen", json.loads(_geliefert(await self.mcp.call_tool("zeit_tag", {"person": "p@x.at"}))))
+
+
 class ImServer(unittest.TestCase):
     def test_im_cloud_mcp_registriert(self):
         import os

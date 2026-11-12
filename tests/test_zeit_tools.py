@@ -380,5 +380,5 @@ class Tagesentwurf(unittest.IsolatedAsyncioTestCase):
 
     async def test_beschreibung(self):
         tool = {t.name: t for t in await self.mcp.list_tools()}["zeit_tagesentwurf"]
-        for wort in ("Personendatum", "`person`", "ohne_ordner", "nebenbei"):
+        for wort in ("Personendatum", "`person`", "ohne_ordner", "nebenbei", "keine_freigabe", "Kundeninstanz"):
             self.assertIn(wort, tool.description)

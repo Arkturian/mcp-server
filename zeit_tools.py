@@ -210,7 +210,10 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
             "`sicherheit`), ohne_ordner (Agent liegt in keinem Projektordner, seine Zeit steht "
             "unter seinem Namen), offen (keine Zuordnung, ggf. mit `vorschlag`). `nebenbei` nennt "
             "parallele Projekte ab 20 % Anteil. `summen`: zugeordnet_s (Ordner und Foederationen), "
-            "ohne_ordner_s, offen_s, je_projekt in Minuten. jev=false schaltet Jev ab. "
+            "ohne_ordner_s, offen_s, je_projekt in Minuten. jev=false schaltet Jev ab. Jev bekommt "
+            "Uhrzeiten, Websites und Agentennamen: auf der Betreiber-Instanz fuer alle Menschen "
+            "(Alex 12.11.2026), auf einer Kundeninstanz nur fuer den Tag des Besitzers, sonst "
+            "`jev.aus` = keine_freigabe. "
             "Anwesenheit ist ein Personendatum: nicht in Beitraege, Issues oder an Dritte kopieren, "
             "nur dem Menschen selbst oder seinem Admin zeigen."
         ),

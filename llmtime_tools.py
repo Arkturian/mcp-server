@@ -1,7 +1,8 @@
 """LLM-TIME-API tools: measured forecasts instead of guessed durations.
 
 Contract: Content-Post #5801 (TIME-LLM), API state 504379d; forecast_rueckblick
-and turn tokens since llm-time-api 0.3.0 (3f4b036, dd96609).
+and turn tokens since llm-time-api 0.3.0 (3f4b036, dd96609); kapazitaet and
+stunden_je_tag since 0.4.0 (ea1f2c3).
 
 Registration is isolated from the other MCP domains so the tools can be
 exercised against a fake transport. The transport decides the credential
@@ -21,6 +22,16 @@ FORECAST_RULE = (
     "Erfahrung dieser Instanz. Gib P50/P85/P95 samt Annahmen weiter. Bei "
     "‚nicht konvergent‘ oder ‚keine Datengrundlage‘ nennst du den Grund "
     "(Feld `grund`) und kein Datum."
+)
+
+
+KAPAZITAET = (
+    "`kapazitaet=true`: Durchsatz mit den aktiven Stunden der letzten 7 Tage "
+    "gegen das Fenster skalieren (klingt über den Horizont ab), Vorgabe aus, "
+    "weil es im Rückblick über 14 Tage schlechter war. `stunden_je_tag`: "
+    "geplante aktive Stunden je Tag für das Projekt, rechnet mit dieser "
+    "Kapazität (Was-wäre-wenn: „was schaffen wir mit 8 h am Tag?“). "
+    "Der Faktor steht in `annahmen.kapazitaet`, gib ihn mit aus."
 )
 
 
@@ -50,8 +61,12 @@ def _forecast_params(
     stichtag: Optional[str],
     seed: Optional[int],
     stichproben: Optional[int],
+    kapazitaet: Optional[bool] = None,
+    stunden_je_tag: Optional[float] = None,
 ) -> Dict[str, Any]:
     return _drop_none({
+        "kapazitaet": None if kapazitaet is None else ("true" if kapazitaet else "false"),
+        "stunden_je_tag": stunden_je_tag,
         "projekt": projekt,
         "meilenstein": meilenstein,
         "fenster_tage": fenster_tage,
@@ -165,6 +180,7 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         während neue Arbeit dazukommt). `true` kann „nicht konvergent“ ergeben.
         `fenster_tage` Vorgabe 14. `stichtag` Vorgabe heute.
         {AUSSCHLUSS}
+        {KAPAZITAET}
         Ein Perzentil mit `tage: null` liegt jenseits des Horizonts (3650 Tage).""",
     )
     async def forecast_when(
@@ -177,9 +193,11 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         stichtag: Optional[str] = None,
         seed: Optional[int] = None,
         stichproben: Optional[int] = None,
+        kapazitaet: Optional[bool] = None,
+        stunden_je_tag: Optional[float] = None,
     ) -> Any:
         params = _forecast_params(projekt, meilenstein, fenster_tage, bis_ausschluss,
-                                  stichtag, seed, stichproben)
+                                  stichtag, seed, stichproben, kapazitaet, stunden_je_tag)
         if rest is not None:
             params["rest"] = rest
         if zufluss is not None:
@@ -194,7 +212,8 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         {FORECAST_RULE}
         P85 ist die Anzahl, die in mindestens 85 % der Läufe erreicht wird,
         daher P95 ≤ P85 ≤ P50. `bis` Pflicht, `YYYY-MM-DD`.
-        {AUSSCHLUSS}""",
+        {AUSSCHLUSS}
+        {KAPAZITAET}""",
     )
     async def forecast_how_many(
         projekt: str,
@@ -205,9 +224,11 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         stichtag: Optional[str] = None,
         seed: Optional[int] = None,
         stichproben: Optional[int] = None,
+        kapazitaet: Optional[bool] = None,
+        stunden_je_tag: Optional[float] = None,
     ) -> Any:
         params = _forecast_params(projekt, meilenstein, fenster_tage, bis_ausschluss,
-                                  stichtag, seed, stichproben)
+                                  stichtag, seed, stichproben, kapazitaet, stunden_je_tag)
         params["bis"] = bis
         return await transport("GET", f"{API}/forecast/how_many", params=params)
 
@@ -254,7 +275,8 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         mit dem damaligen Wissen `forecast_how_many` über `horizont_tage`
         (Vorgabe 7) gerechnet und mit dem tatsächlich Fertigen verglichen.
         `projekt` leer = alle Projekte. `block_tage`: Läufe aufeinanderfolgender
-        Messtage je Ziehung, leer = Vorgabe der Instanz (3).
+        Messtage je Ziehung, leer = Vorgabe der Instanz (3). `kapazitaet=true`
+        prüft das Modell mit Kapazitätsfaktor (je Stichtag `kapazitaet_faktor`).
         Antwort: `erreicht` je Perzentil = Anteil der Stichtage, an denen das
         Ist die Prognose erreicht hat; gut kalibriert ist etwa 0,50 / 0,85 /
         0,95. Deutlich darunter heißt: die Prognose verspricht zu viel.
@@ -271,10 +293,12 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         stichtage: Optional[int] = None,
         fenster_tage: Optional[int] = None,
         block_tage: Optional[int] = None,
+        kapazitaet: Optional[bool] = None,
     ) -> Any:
         params = _drop_none({
             "projekt": projekt, "meilenstein": meilenstein, "horizont_tage": horizont_tage,
             "stichtage": stichtage, "fenster_tage": fenster_tage, "block_tage": block_tage,
+            "kapazitaet": None if kapazitaet is None else ("true" if kapazitaet else "false"),
         })
         return await transport("GET", f"{API}/forecast/rueckblick", params=params)
 

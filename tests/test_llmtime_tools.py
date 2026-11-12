@@ -92,6 +92,20 @@ class LlmtimeToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Turns", desc)
         self.assertNotIn("Tokens gibt es nur, wenn Pakete", desc)
 
+    async def test_capacity_parameters_only_when_set(self):
+        await self.mcp.call_tool("forecast_how_many", {"projekt": "demo", "bis": "2026-11-21",
+                                                       "stunden_je_tag": 8})
+        self.assertEqual(self.calls[-1][2]["params"], {"projekt": "demo", "bis": "2026-11-21",
+                                                       "stunden_je_tag": 8})
+        await self.mcp.call_tool("forecast_when", {"projekt": "demo", "rest": 4, "kapazitaet": True})
+        self.assertEqual(self.calls[-1][2]["params"], {"projekt": "demo", "rest": 4, "kapazitaet": "true"})
+        await self.mcp.call_tool("forecast_rueckblick", {"kapazitaet": False})
+        self.assertEqual(self.calls[-1][2]["params"], {"kapazitaet": "false"})
+        tools = {t.name: t for t in await self.mcp.list_tools()}
+        for name in ("forecast_when", "forecast_how_many"):
+            self.assertIn("stunden_je_tag", tools[name].description)
+            self.assertIn("annahmen.kapazitaet", tools[name].description)
+
     async def test_how_many_requires_bis(self):
         await self.mcp.call_tool("forecast_how_many", {"projekt": "demo", "bis": "2026-11-21"})
         self.assertEqual(self.calls[0][2]["params"], {"projekt": "demo", "bis": "2026-11-21"})

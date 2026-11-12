@@ -320,3 +320,65 @@ class ImServer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _entwurf():
+    """Antwort von cloud-api GET /api/usage/tagesentwurf (erfunden, Form echt)."""
+    p = lambda pid, *pfad, art="ordner": {"id": pid, "name": pfad[-1], "pfad": list(pfad), "art": art}  # noqa: E731
+    return {
+        "person": "alex@x.at", "datum": "2026-11-12", "zeitzone": "Europe/Vienna", "umfang": "alles",
+        "quellen": [{"foederation": "arkturian", "status": "ok", "umfang": "alles"}],
+        "eintraege": [
+            {"von": "2026-11-12T08:00:00+00:00", "bis": "2026-11-12T08:30:00+00:00", "von_lokal": "09:00",
+             "bis_lokal": "09:30", "dauer_s": 1800, "projekt": p("a", "AgentOS", "Portal & Apps"),
+             "zuordnung": {"art": "agent", "sicherheit": 0.8, "grund": "x"}, "vorschlag": None,
+             "nebenbei": [p("o", "O'Neal")], "notiz": "Eingaben an CloudV2 (3)", "eingaben": 3,
+             "agenten": [], "websites": [], "zeilen": {}},
+            {"von": "2026-11-12T09:00:00+00:00", "bis": "2026-11-12T09:10:00+00:00", "von_lokal": "10:00",
+             "bis_lokal": "10:10", "dauer_s": 600, "projekt": None,
+             "zuordnung": {"art": "offen", "sicherheit": 0.0, "grund": "keine Regel passt"},
+             "vorschlag": {"projekt": p("o", "O'Neal"), "sicherheit": 0.41, "quelle": "jev"},
+             "nebenbei": [], "notiz": "", "eingaben": 0, "agenten": [], "websites": [], "zeilen": {}},
+        ],
+        "summen": {"aktiv_s": 2400, "zugeordnet_s": 1800, "ohne_ordner_s": 0, "offen_s": 600, "passiv_s": 60,
+                   "je_projekt": [{**p("a", "AgentOS", "Portal & Apps"), "sekunden": 1800}]},
+        "jev": {"agenten": {"gefragt": 0}, "bloecke": {"gefragt": 1, "neu_gefragt": 1, "ok": True}},
+    }
+
+
+class Tagesentwurf(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.calls = []
+        self.antwort = _entwurf()
+
+        async def transport(method, path, **kwargs):
+            self.calls.append((method, path, kwargs))
+            return self.antwort
+        self.mcp = FastMCP("isolated-zeit-entwurf")
+        register_zeit_tools(self.mcp, transport)
+
+    async def test_ruft_die_entwurfsroute(self):
+        await self.mcp.call_tool("zeit_tagesentwurf", {"person": "alex@x.at", "datum": "2026-11-12", "jev": False})
+        self.assertEqual(self.calls, [("GET", "/api/usage/tagesentwurf",
+                                       {"params": {"datum": "2026-11-12", "person": "alex@x.at", "jev": "false"},
+                                        "timeout": 90})])
+
+    async def test_kompakt_je_block_eine_zeile(self):
+        d = json.loads(_geliefert(await self.mcp.call_tool("zeit_tagesentwurf", {"person": "alex@x.at"})))
+        self.assertEqual(d["eintraege"][0], {"von": "09:00", "bis": "09:30", "min": 30,
+                                             "projekt": "AgentOS › Portal & Apps", "art": "agent",
+                                             "sicherheit": 0.8, "notiz": "Eingaben an CloudV2 (3)",
+                                             "nebenbei": ["O'Neal"]})
+        self.assertEqual(d["eintraege"][1]["vorschlag"], {"projekt": "O'Neal", "sicherheit": 0.41})
+        self.assertNotIn("projekt", d["eintraege"][1])
+        self.assertEqual(d["summen"]["je_projekt"], [{"projekt": "AgentOS › Portal & Apps", "art": "ordner", "min": 30}])
+        self.assertEqual(d["summen"]["offen_s"], 600)
+
+    async def test_fremde_antwort_unveraendert(self):
+        self.antwort = {"detail": "nur die eigene Zeit, sonst Recht zeit:lesen"}
+        self.assertIn("zeit:lesen", str(await self.mcp.call_tool("zeit_tagesentwurf", {"person": "a@b.at"})))
+
+    async def test_beschreibung(self):
+        tool = {t.name: t for t in await self.mcp.list_tools()}["zeit_tagesentwurf"]
+        for wort in ("Personendatum", "`person`", "ohne_ordner", "nebenbei"):
+            self.assertIn(wort, tool.description)

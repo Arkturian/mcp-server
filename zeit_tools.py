@@ -134,6 +134,35 @@ def tag_zusammenfassen(d: Dict[str, Any], zuege: bool = False) -> Dict[str, Any]
     return out
 
 
+def entwurf_zusammenfassen(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Der Tagesentwurf von cloud-api kompakt: je Block eine Zeile. Rein, ohne Netz."""
+    def _pfad(p: Optional[Dict[str, Any]]) -> Optional[str]:
+        return " › ".join(p.get("pfad") or [p.get("name") or ""]) if p else None
+
+    eintraege = []
+    for e in d.get("eintraege") or []:
+        z = e.get("zuordnung") or {}
+        zeile = {"von": e.get("von_lokal"), "bis": e.get("bis_lokal"),
+                 "min": int(round((e.get("dauer_s") or 0) / 60)),
+                 "projekt": _pfad(e.get("projekt")), "art": z.get("art"),
+                 "sicherheit": z.get("sicherheit"), "notiz": e.get("notiz") or None}
+        if e.get("nebenbei"):
+            zeile["nebenbei"] = [_pfad(n) for n in e["nebenbei"]]
+        v = e.get("vorschlag")
+        if v:
+            zeile["vorschlag"] = {"projekt": _pfad(v.get("projekt")), "sicherheit": v.get("sicherheit")}
+        eintraege.append({k: w for k, w in zeile.items() if w not in (None, [], "")})
+    s = d.get("summen") or {}
+    return {"person": d.get("person"), "datum": d.get("datum"), "umfang": d.get("umfang"),
+            "summen": {**{k: s.get(k) for k in ("aktiv_s", "zugeordnet_s", "ohne_ordner_s", "offen_s", "passiv_s")},
+                       "je_projekt": [{"projekt": _pfad(p), "art": p.get("art"),
+                                       "min": int(round((p.get("sekunden") or 0) / 60))}
+                                      for p in s.get("je_projekt") or []]},
+            "eintraege": eintraege,
+            "quellen": [_quelle_kurz(q) for q in d.get("quellen") or [] if isinstance(q, dict)],
+            "jev": d.get("jev")}
+
+
 def register_zeit_tools(mcp, transport: Transport) -> None:
     """``transport(method, path, params=?, timeout=?)`` ruft cloud-api mit dem JWT des Aufrufers."""
 
@@ -168,3 +197,31 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
         # Kompakt als Text: Ein dict gibt FastMCP eingerueckt aus, das machte am 11.11.
         # aus 15,7 KB live 27,5 KB (gemessen am Gateway mit zuege=true).
         return json.dumps(tag_zusammenfassen(d, zuege=zuege), ensure_ascii=False, separators=(",", ":"))
+
+    @mcp.tool(
+        name="zeit_tagesentwurf",
+        description=(
+            "Stundenzettel-Entwurf eines Tages (Alex 12.11.2026): die aktive Zeit einer Person in "
+            "Bloecken, je Block ein Projekt aus den Projektordnern des Portals und eine kurze Notiz. "
+            "Gleiches Recht und gleiche Parameter wie zeit_tag (Agenten MUESSEN `person` nennen). "
+            "`art` sagt, woher die Zuordnung kommt: agent (Projektordner des Agenten, den die Person "
+            "offen hatte oder angeschrieben hat), bruecke (andere Foederation, z.B. P3), host "
+            "(Website gehoert zu einem Agenten mit Projekt), jev (Jev hat zugeordnet, mit "
+            "`sicherheit`), ohne_ordner (Agent liegt in keinem Projektordner, seine Zeit steht "
+            "unter seinem Namen), offen (keine Zuordnung, ggf. mit `vorschlag`). `nebenbei` nennt "
+            "parallele Projekte ab 20 % Anteil. `summen`: zugeordnet_s (Ordner und Foederationen), "
+            "ohne_ordner_s, offen_s, je_projekt in Minuten. jev=false schaltet Jev ab. "
+            "Anwesenheit ist ein Personendatum: nicht in Beitraege, Issues oder an Dritte kopieren, "
+            "nur dem Menschen selbst oder seinem Admin zeigen."
+        ),
+    )
+    async def zeit_tagesentwurf(datum: str = "", person: str = "", foederationen: str = "",
+                                jev: bool = True) -> Any:
+        params = {k: v for k, v in (("datum", datum.strip()), ("person", person.strip()),
+                                    ("foederationen", foederationen.strip())) if v}
+        if not jev:
+            params["jev"] = "false"
+        d = await transport("GET", "/api/usage/tagesentwurf", params=params, timeout=90)
+        if not isinstance(d, dict) or "eintraege" not in d:
+            return d
+        return json.dumps(entwurf_zusammenfassen(d), ensure_ascii=False, separators=(",", ":"))

@@ -11091,7 +11091,8 @@ async def cloud_rund_info(id: str) -> Dict[str, Any]:
         "spaeter als Eingabe [Browser-Ergebnis <id>] oder ueber browser_ergebnis(request_id). "
         "Screenshot, html und datei kommen als private storage_id: Bild mit media_view, Datei "
         "mit assets_download. Nur lesend, kein Klicken oder Tippen. Fehler: "
-        "browser_nicht_verbunden (keine Extension offen), abgelehnt, nicht_moeglich. "
+        "browser_nicht_verbunden (keine Extension offen), abgelehnt, nicht_moeglich, "
+        "sitzung_unsicher (503: ein Knoten mit deinen Sitzungen antwortete nicht rechtzeitig, nach erneut_in_s Sekunden wiederholen, nicht als 'nicht verbunden' lesen). "
         "Hoechstens 10 Anfragen je Minute."
     ),
 )
@@ -11109,7 +11110,9 @@ async def cloud_browser_anfrage(art: str, grund: str, selector: str = "", adress
     description=(
         "Stand und Ergebnis einer eigenen Browser-Anfrage (request_id aus browser_anfrage): "
         "status offen | fertig | abgelaufen, bei fertig das ergebnis {ok, art, text?, daten?, "
-        "storage_id? | fehler}. Nur der anfragende Agent darf lesen."
+        "storage_id? | fehler}. Nur der anfragende Agent darf lesen. Auch fuer ein spaetes Ergebnis "
+        "eines browser_aufruf nach zeitueberschreitung (aufruf_id); gepuffert: true heisst, der "
+        "Hub hielt es, weil dein Knoten kurz nicht erreichbar war."
     ),
 )
 async def cloud_browser_ergebnis(request_id: str) -> Dict[str, Any]:
@@ -11123,7 +11126,9 @@ async def cloud_browser_ergebnis(request_id: str) -> Dict[str, Any]:
         "sonst deines Besitzers; die aktive zuerst (Post 5857). Ohne deine Freigabe nur grob: "
         "sitzung_id, geraet, aktiv, zuletzt_aktiv. Mit gueltiger Freigabe dazu freigabe "
         "{freigabe_id, stufe, host, bis} und tab {titel, adresse, host}, solange der aktive Tab "
-        "auf dem freigegebenen Host steht."
+        "auf dem freigegebenen Host steht. knoten_unsicher + erneut_in_s: ein Knoten antwortete "
+        "nicht rechtzeitig, seine Sitzungen fehlen in der Liste, sind aber nicht weg -- nach "
+        "erneut_in_s Sekunden erneut lesen."
     ),
 )
 async def cloud_browser_sitzungen() -> Dict[str, Any]:
@@ -11138,7 +11143,8 @@ async def cloud_browser_sitzungen() -> Dict[str, Any]:
         "1..60 (Vorgabe 15), sitzung: sitzung_id oder 'aktiv'. Gilt nur fuer den Host des "
         "aktiven Tabs in diesem Moment. Banking-, Zahlungs- und Finanzseiten sind gesperrt "
         "(host_gesperrt). Wartet bis ~20 s; status 'offen' heisst: Ergebnis kommt als Eingabe "
-        "[Browser-Freigabe <id>]. Der Mensch kann die Dauer kuerzen und jederzeit widerrufen."
+        "[Browser-Freigabe <id>]. Der Mensch kann die Dauer kuerzen und jederzeit widerrufen. "
+        "sitzung_unsicher (503: ein Knoten mit deinen Sitzungen antwortete nicht rechtzeitig, nach erneut_in_s Sekunden wiederholen, nicht als 'nicht verbunden' lesen)."
     ),
 )
 async def cloud_browser_freigabe(stufe: str, grund: str, minuten: int = 15, sitzung: str = "aktiv") -> Dict[str, Any]:
@@ -11161,7 +11167,9 @@ async def cloud_browser_freigabe(stufe: str, grund: str, minuten: int = 15, sitz
         "(Datei .cpuprofile), coverage{sekunden<=30}, heap (Datei .heapsnapshot bis 25 MB), "
         "evaluate{ausdruck<=5000 Zeichen}. Wartezeit: network/profile/coverage sekunden+15 s, "
         "heap 60 s, sonst ~20 s; danach zeitueberschreitung, kein Nachreichen. "
-        "Ohne gueltige Freigabe: freigabe_noetig (dann browser_freigabe). Dateien kommen als "
+        "Ohne gueltige Freigabe: freigabe_noetig (dann browser_freigabe). "
+        "sitzung_unsicher (503: ein Knoten mit deinen Sitzungen antwortete nicht rechtzeitig, nach erneut_in_s Sekunden wiederholen, nicht als 'nicht verbunden' lesen). "
+        "Dateien kommen als "
         "private storage_id (media_view / assets_download). Verlaesst der Tab den Host, lehnt die "
         "Extension mit host_gewechselt ab. Mit automatischer Freigabe wiederholt der Server navigate "
         "und reine Lese-Methoden einmal fuer den neuen Host (wiederholt_nach); click, type, scroll, "

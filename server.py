@@ -8934,6 +8934,62 @@ async def comm_send_telegram_document(
 
 
 @comm_mcp.tool(
+    name="kanal_antworten",
+    description="""Antworte auf eine eingegangene Kanalnachricht (heute: WhatsApp-
+    Direktnachricht) — der ordentliche Weg statt Text im Fenster
+    (Beitrag 5899).
+
+    Die eingehende Nachricht nennt dir das `handle` (Form `wa-<id>`), z. B.
+    im Hinweis „Antworte mit comm kanal_antworten(handle=…)“. Die Nummer
+    des Menschen siehst du nie, Comm kennt sie über das Handle.
+
+    Wer antworten darf, regelt das Kanäle-Routing im Portal. Comm prüft
+    beim Aufruf gegen die AKTUELLE Regel:
+      - Du musst der Agent sein, dem die Nachricht zugestellt wurde, und
+        laut Regel weiterhin zuständig — sonst 403
+        `kanal_antwort_falscher_agent` / `kanal_antwort_nicht_mehr_zustaendig`.
+      - „Nur mitlesen“ → 403 `kanal_antwort_nicht_erlaubt`.
+      - „Antworten nach Freigabe“ → 409 `freigabe_strecke_fehlt`
+        (noch nicht gebaut, nichts gesendet).
+      - Ohne Regel: bis 24 h nach Eingang, danach 403
+        `kanal_antwort_frist_abgelaufen`.
+
+    Anhänge: nur `storage_id` (private Dateien, die dir gehören oder mit
+    dir geteilt sind — Comm holt sie in deinem Namen). PNG/JPEG gehen als
+    Bild, PDF als Dokument mit Dateinamen, je bis 20 MiB, höchstens 10.
+    URLs werden nicht angenommen.
+
+    Du darfst mehrmals auf dieselbe Nachricht antworten. Wiederholst du
+    nach einem Fehler, nimm denselben `idempotency_key` — dann geht
+    nichts doppelt hinaus.
+
+    Args:
+        handle: Kennung der eingegangenen Nachricht, z. B. "wa-3ac37af8…".
+        text: Antworttext (bis 4000 Zeichen). Comm setzt deinen Namen
+            als erste Zeile davor.
+        anhaenge: Liste von {"storage_id": int, "filename"?: str,
+            "content_type"?: "application/pdf" | "image/png" | "image/jpeg"}.
+        idempotency_key: optional, für sichere Wiederholung.
+
+    Returns: {handle, idempotency_key, regel: {quelle, weise},
+              gesendet: [{art: "text"|"anhang", wa_rest_id, storage_id?}]}
+    """,
+)
+async def comm_kanal_antworten(
+    handle: str,
+    text: Optional[str] = None,
+    anhaenge: Optional[List[Dict[str, Any]]] = None,
+    idempotency_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    json_body: Dict[str, Any] = {"handle": handle, "anhaenge": anhaenge or []}
+    if text is not None:
+        json_body["text"] = text
+    if idempotency_key:
+        json_body["idempotency_key"] = idempotency_key
+    return await call_comm_api("POST", "/api/v1/kanal/antworten", json_body=json_body)
+
+
+@comm_mcp.tool(
     name="send_message",
     description="""Send a message via any channel (unified endpoint).
 

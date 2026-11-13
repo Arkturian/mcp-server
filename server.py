@@ -3245,6 +3245,23 @@ async def content_posts_get(post_id: int) -> Dict[str, Any]:
         Rechte: Schreiben fuer diesen Menschen und Lesen fuer Comm
         (service:comm-api), damit Comm nach der Freigabe den Text holen
         kann. Nur zusammen mit visibility='restricted'.
+      - external_ref: verknuepft den Beitrag mit einer Markdown-Datei in
+        OpenCloud (#2811, Konzept Beitrag 5939). Es reicht der Pfad:
+        {"path": "/docs/notiz.md"}. Gibt es die Datei, wird sie verknuepft
+        und ihr Text uebernommen (der mitgegebene `content` bleibt als
+        aeltere Fassung erhalten). Gibt es sie nicht, legt content-api sie
+        mit `content` an; eine bestehende Datei wird nie ueberschrieben.
+        Optional: "space_id" (sonst der freigeschaltete Standard-Space),
+        "file_id" statt "path", "mode": "datei" (Standard, normaler
+        Beitrag). Danach gleicht content-api alle 15 s in beide Richtungen
+        ab; aendern beide Seiten zugleich, gewinnt die Datei.
+        Regeln: Der Beitrag wird immer `restricted`, darf keine Abschnitte
+        (question, task, product …) enthalten (Anmerkungen gehen), und eine
+        Datei gehoert zu hoechstens einem Beitrag (409 already_linked).
+        Nur Ordner, die FileSync fuer Content freigeschaltet hat (Pilot:
+        Space „AgentOS Docs“, Ordner /docs); sonst 422 folder_missing.
+        Neue .md-Dateien in /docs werden auch ohne Aufruf von selbst zu
+        Beitraegen.
     """,
 )
 async def content_posts_create(
@@ -3263,6 +3280,7 @@ async def content_posts_create(
     collab_enabled: Optional[bool] = None,
     visibility: Optional[str] = None,
     draft_reviewer: Optional[str] = None,
+    external_ref: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     body = _clean_params(
         title=title,
@@ -3279,6 +3297,7 @@ async def content_posts_create(
         metadata_json=metadata_json,
         collab_enabled=collab_enabled,
         visibility=visibility,
+        external_ref=external_ref,
     )
     reviewer = (draft_reviewer or "").strip().lower()
     if reviewer:
@@ -3312,6 +3331,16 @@ async def content_posts_create(
     visibility: 'tenant' oder 'restricted' (nur Autor und ausdruecklich
     Freigegebene, siehe posts_share). 'public' darf nur ein Admin des
     Mandanten setzen.
+
+    external_ref: einen bestehenden Beitrag mit einer Datei in OpenCloud
+    verknuepfen oder auf eine andere Datei umstellen, Form wie bei
+    posts_create (es reicht {"path": "/docs/x.md"}). Gibt es die Datei
+    schon, gewinnt beim ersten Abgleich ihr Text; der bisherige Text des
+    Beitrags bleibt als aeltere Fassung (Revision) erhalten. Gibt es sie
+    nicht, wird sie mit dem Text des Beitrags angelegt.
+    external_ref_loesen=True loest die Verknuepfung. Beitrag und Datei
+    bleiben beide bestehen, und der Ordner-Import legt die Datei danach
+    nicht wieder als Beitrag an.
     """,
 )
 async def content_posts_update(
@@ -3332,6 +3361,8 @@ async def content_posts_update(
     category: Optional[str] = None,
     language: Optional[str] = None,
     metadata_merge: Optional[Dict[str, Any]] = None,
+    external_ref: Optional[Dict[str, Any]] = None,
+    external_ref_loesen: bool = False,
 ) -> Dict[str, Any]:
     # doc_type/subtitle/tags/category/language/metadata_merge nimmt PostUpdate
     # der content-api seit langem an; das Werkzeug reichte sie nicht durch, ein
@@ -3353,7 +3384,14 @@ async def content_posts_update(
         category=category,
         language=language,
         metadata_merge=metadata_merge,
+        external_ref=external_ref,
     )
+    if external_ref_loesen:
+        if external_ref is not None:
+            return {"error": "external_ref_conflict",
+                    "detail": "Entweder external_ref setzen oder external_ref_loesen=True, nicht beides."}
+        # _clean_params wirft None weg; null muss ausdruecklich mit.
+        body["external_ref"] = None
     return await call_content_api("PUT", f"/api/v1/posts/{post_id}", json_body=body)
 
 

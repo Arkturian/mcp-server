@@ -37,6 +37,18 @@ class BrowserSitzungToolTests(unittest.TestCase):
             for m in ("performance", "network", "profile", "coverage", "heap", "evaluate"):
                 self.assertIn(m, beschr)
 
+    def test_beschreibung_nennt_die_methoden_von_0_17_32(self):
+        """#2818: snapshot, ref, key, select, hover, neuerTab, leeren."""
+        tools = asyncio.run(server.cloud_mcp.list_tools())
+        beschr = {t.name: t.description for t in tools}["browser_aufruf"]
+        for wort in ("snapshot", "ref", "key{taste", "select{", "hover{", "neuerTab{adresse", "leeren?",
+                     "anzahl? 1..20", "werte (Liste bis 50)"):
+            self.assertIn(wort, beschr)
+
+    def test_aufruf_reicht_ref_und_leeren_durch(self):
+        a = self._ruf(lambda: server.cloud_browser_aufruf("type", {"ref": 12, "text": "x", "leeren": False}))
+        self.assertEqual(a.kwargs["json_body"]["parameter"], {"ref": 12, "text": "x", "leeren": False})
+
     def test_beenden(self):
         a = self._ruf(lambda: server.cloud_browser_freigabe_beenden())
         self.assertEqual(a.args, ("POST", "/api/browser/freigaben/beenden"))

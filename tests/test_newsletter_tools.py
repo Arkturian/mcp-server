@@ -2,7 +2,7 @@ import unittest
 
 from mcp.server.fastmcp import FastMCP
 
-from newsletter_tools import LIMITS, TEMPLATE_RULES, register_newsletter_tools
+from newsletter_tools import LIMITS, TEMPLATE_RULES, VARIANT_RULES, register_newsletter_tools
 
 
 class NewsletterToolsTests(unittest.IsolatedAsyncioTestCase):
@@ -22,7 +22,10 @@ class NewsletterToolsTests(unittest.IsolatedAsyncioTestCase):
             "tenants_list", "templates_list", "template_get", "templates_upsert",
             "template_preview", "campaigns_list", "campaign_get", "campaign_create",
             "campaign_update", "campaign_duplicate", "campaign_delete", "campaign_hold",
-            "campaign_preview", "campaign_test_send", "mail_usage",
+            "campaign_preview", "campaign_test_send", "mail_usage", "tags_counts",
+            "editions_list", "edition_get", "editions_create", "edition_update",
+            "edition_delete", "edition_hold", "edition_audience", "edition_preview",
+            "edition_test_send",
         })
         self.assertFalse(any("send" in n and "test" not in n for n in names))
 
@@ -49,6 +52,14 @@ class NewsletterToolsTests(unittest.IsolatedAsyncioTestCase):
     async def test_preview_keeps_explicit_null_first_name(self):
         await self.mcp.call_tool("campaign_preview", {"campaign_id": "c1", "first_name": None})
         self.assertEqual(self.calls[-1][2]["json_body"], {"first_name": None})
+
+    async def test_edition_tools_have_no_send_and_carry_rules(self):
+        tools = {t.name: t for t in await self.mcp.list_tools()}
+        self.assertNotIn("edition_send", tools)
+        self.assertIn(VARIANT_RULES, tools["editions_create"].description)
+        await self.mcp.call_tool("edition_test_send", {"edition_id": "e1"})
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/admin/editions/e1/test-send",
+                                          {"json_body": {}}))
 
     async def test_mail_usage_without_range_sends_no_params(self):
         await self.mcp.call_tool("mail_usage", {"tenant": "clarityprocess"})
@@ -82,8 +93,9 @@ def test_server_registers_newsletter_as_explicit_only():
             "'explicit': 'newsletter' in auth.EXPLICIT_ONLY_SERVERS,"
             "'offen': auth._offen('newsletter')}))")
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = {**os.environ, "MCP_SERVERS": "newsletter"}
     r = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True,
-                       text=True, timeout=120)
+                       text=True, timeout=120, env=env)
     assert r.returncode == 0, r.stderr[-2000:]
     assert json.loads(r.stdout.strip().splitlines()[-1]) == {"explicit": True, "offen": False}
 

@@ -609,6 +609,12 @@ async def call_ai_api(
     for prompts >few KB. Overriding via `MCP_AI_HTTP_TIMEOUT` env-var.
     """
     headers = {"X-API-Key": AI_API_KEY} if AI_API_KEY else {}
+    # Wer ruft (AiApi, Auftrag Alex ueber CloudV2: Bilder je Agent): dieselben
+    # Kopfzeilen wie _caller_auth_headers -- Bearer <jwt> und X-Agent-Name aus der
+    # geprueften Gateway-Identitaet, fuer ALLE ai-Werkzeuge. Vorher reichte nur
+    # ai_jev sie durch, genimage kam bei api-ai als "(unbekannt)" an. Ohne
+    # Aufrufer-Kontext bleibt es beim X-API-Key. extra_headers gehen vor.
+    headers.update(_caller_auth_headers())
     if extra_headers:
         headers.update(extra_headers)
     return await _fetch_json(

@@ -6369,9 +6369,12 @@ async def ai_claude_text(
 
 @ai_mcp.tool(
     name="chatgpt_text",
-    description=("Call AI API /ai/chatgpt. Params: prompt, system?, max_tokens?, temperature?, model?, effort?, tools?. "
+    description=("Call AI API /ai/chatgpt. Params: prompt, system?, max_tokens?, temperature?, model?, effort?, tools?, "
+                 "request_id?. "
                  "tools=false: reiner Textaufruf, codex ohne Shell/Code-Modus/Apps/Plugins (eine Modellrunde, schneller). "
-                 "Weggelassen = Vorgabe von /ai/chatgpt (Werkzeuge an)."),
+                 "Weggelassen = Vorgabe von /ai/chatgpt (Werkzeuge an). "
+                 "request_id (8-128 Zeichen A-Za-z0-9_.:-): AiApi haelt den Auftrag darunter fest; derselbe "
+                 "Aufruf mit derselben Kennung liefert das Ergebnis erneut statt neu zu rechnen."),
 )
 async def ai_chatgpt_text(
     prompt: str,
@@ -6381,6 +6384,7 @@ async def ai_chatgpt_text(
     model: Optional[str] = None,
     effort: Optional[str] = None,
     tools: Optional[bool] = None,
+    request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {
         "prompt": prompt,
@@ -6397,6 +6401,10 @@ async def ai_chatgpt_text(
     # (tools=true) fuer alle anderen Aufrufer unveraendert (api-ai 3159a36).
     if tools is not None:
         body["tools"] = bool(tools)
+    # Nur mitschicken, wenn gesetzt (Cloud cd67b9a0): cloud-api gibt beim Vorlesen
+    # seine lauf_id mit; AiApi prueft die Form und haelt Status + Idempotenz.
+    if request_id:
+        body["request_id"] = request_id
 
     # api-ai declares `model` as a FastAPI query parameter, while `effort`
     # belongs to the Prompt body. Sending both in the JSON body silently made

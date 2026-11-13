@@ -85,3 +85,21 @@ def test_ohne_tools_bleibt_der_rumpf_wie_bisher():
     aufruf = _chatgpt_mit_attrappe()
     assert "tools" not in aufruf(prompt="x")["body"]
     assert aufruf(prompt="x", tools=True)["body"]["tools"] is True
+
+
+def test_request_id_geht_nur_wenn_gesetzt_in_den_rumpf():
+    """Cloud cd67b9a0: cloud-api gibt beim Vorlesen seine lauf_id als request_id mit."""
+    aufruf = _chatgpt_mit_attrappe()
+    gesendet = aufruf(prompt="x", effort="low", tools=False, request_id="3f9a1c07")
+    assert gesendet["path"] == "/ai/chatgpt" and gesendet["body"]["request_id"] == "3f9a1c07"
+    assert gesendet["params"] is None                      # kein Abfrageparameter
+
+
+def test_ohne_request_id_bleibt_alles_wie_bisher():
+    aufruf = _chatgpt_mit_attrappe()
+    for kw in ({}, {"request_id": None}, {"request_id": ""}):
+        gesendet = aufruf(prompt="x", system="s", max_tokens=200, temperature=0.2, effort="low", tools=False,
+                          model="gpt-5.6-luna", **kw)
+        assert gesendet == {"path": "/ai/chatgpt", "params": {"model": "gpt-5.6-luna"},
+                            "body": {"prompt": "x", "system": "s", "max_tokens": 200, "temperature": 0.2,
+                                     "effort": "low", "tools": False}}

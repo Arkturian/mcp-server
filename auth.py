@@ -331,6 +331,35 @@ OFFENE_SERVER: set[str] = {
 }
 
 
+# Server mit Rechte-STUFEN statt Rechten je Werkzeug (#2441, person-api): Werkzeug ->
+# Stufe, z. B. {"person": {"persons_list": "read", "person_create": "write"}}. Ein
+# Werkzeug ist dann mit mcp:<server>:<stufe> ODER mcp:<server>:<werkzeug> frei.
+# Die Stufen gelten woertlich, ohne Vererbung -- wie in der person-api selbst.
+# server.py meldet die Zuordnung beim Einhaengen an.
+WERKZEUG_STUFEN: dict[str, dict[str, str]] = {}
+
+
+def _werkzeug_erlaubt(perms: list[str], mcp_server: str, tool_name: str) -> bool:
+    """Darf ein Agent mit `perms` (schon nach _permissions_for_server) das Werkzeug rufen?"""
+    if any(_match_permission(p, f"mcp:{mcp_server}:{tool_name}") for p in perms):
+        return True
+    stufe = WERKZEUG_STUFEN.get(mcp_server, {}).get(tool_name)
+    return stufe is not None and any(_match_permission(p, f"mcp:{mcp_server}:{stufe}") for p in perms)
+
+
+def _jsonrpc_teile(body_json) -> list:
+    """Einzelne JSON-RPC-Nachrichten; ein Stapel (Liste) wird aufgefaechert."""
+    teile = body_json if isinstance(body_json, list) else [body_json]
+    return [t for t in teile if isinstance(t, dict)]
+
+
+def _aufgerufene_werkzeuge(body_json) -> list:
+    """Namen aller tools/call-Aufrufe im Rumpf, auch aus einem Stapel. Ein Aufruf
+    ohne Namen ergibt "" -- der Aufrufer lehnt ihn ab."""
+    return [str((t.get("params") if isinstance(t.get("params"), dict) else {}).get("name") or "")
+            for t in _jsonrpc_teile(body_json) if t.get("method") == "tools/call"]
+
+
 def _offen(mcp_server: str) -> bool:
     return mcp_server in OFFENE_SERVER and mcp_server not in EXPLICIT_ONLY_SERVERS
 
@@ -383,7 +412,13 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                 body_bytes = await request.body()
                 request._body = body_bytes  # cache for downstream
                 body_json = _json.loads(body_bytes)
-                jsonrpc_method = body_json.get("method", "")
+                # Ein Stapel mit einem Werkzeugaufruf zaehlt als Werkzeugaufruf
+                # (fail-closed). Vorher warf `.get` auf der Liste, und der Stapel
+                # lief ohne JWT-Pruefung weiter; mcp 1.21/1.26 lehnt Stapel heute
+                # selbst mit 400 ab, eine kuenftige Fassung soll hier kein Loch finden.
+                methoden = [t.get("method", "") for t in _jsonrpc_teile(body_json)]
+                jsonrpc_method = "tools/call" if "tools/call" in methoden else (
+                    methoden[0] if len(methoden) == 1 else "")
             except Exception:
                 pass
 
@@ -413,7 +448,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             try:
                 _tool = ""
                 if body_bytes:
-                    _tool = (_json.loads(body_bytes).get("params") or {}).get("name") or ""
+                    _tool = ",".join(_aufgerufene_werkzeuge(_json.loads(body_bytes)))
                 _peer = request.headers.get("x-forwarded-for") or (
                     request.client.host if request.client else "?")
                 logger.warning(
@@ -499,10 +534,13 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                 if not any(_match_permission(p, f"mcp:{mcp_server}:*") for p in perms) and body_bytes:
                     try:
                         body_json = _json.loads(body_bytes)
-                        tool_name = body_json.get("params", {}).get("name", "")
-                        if tool_name:
+                        # Jeder Aufruf eines Stapels einzeln.
+                        for tool_name in _aufgerufene_werkzeuge(body_json):
                             required_perm = f"mcp:{mcp_server}:{tool_name}"
-                            if not any(_match_permission(p, required_perm) for p in perms):
+                            stufe = WERKZEUG_STUFEN.get(mcp_server, {}).get(tool_name)
+                            if stufe:
+                                required_perm += f" | mcp:{mcp_server}:{stufe}"
+                            if not tool_name or not _werkzeug_erlaubt(perms, mcp_server, tool_name):
                                 logger.warning(
                                     "RBAC denied (tool): agent=%s role=%s perm=%s",
                                     agent.name, agent.role, required_perm,
@@ -510,7 +548,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                                 return JSONResponse(
                                     {
                                         "jsonrpc": "2.0",
-                                        "id": body_json.get("id"),
+                                        "id": body_json.get("id") if isinstance(body_json, dict) else None,
                                         "error": {
                                             "code": -32600,
                                             "message": f"Permission denied: agent '{agent.name}' "
@@ -520,7 +558,24 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                                     status_code=403,
                                 )
                     except Exception:
-                        pass
+                        # Fail-closed: wirft die Pruefung unerwartet, wird der Aufruf
+                        # abgewiesen statt ungeprueft durchgelassen (vorher `pass`).
+                        logger.exception(
+                            "RBAC tool check failed, denied: agent=%s role=%s mcp:%s",
+                            agent.name, agent.role, mcp_server,
+                        )
+                        return JSONResponse(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": None,
+                                "error": {
+                                    "code": -32600,
+                                    "message": f"Permission check failed for agent '{agent.name}' "
+                                               f"on mcp:{mcp_server}; call denied",
+                                },
+                            },
+                            status_code=403,
+                        )
 
         except jwt.ExpiredSignatureError:
             return JSONResponse({"error": "Token expired"}, status_code=401)

@@ -318,9 +318,12 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
             "aufgabe_id), `turn_ids` (Schritte aus aufgaben_tag) oder `agent` + `datum` (alle "
             "Schritte dieses Agenten an dem Tag). Ganze Aufgaben + projekt_id: die Aufgaben wandern "
             "samt allen Schritten, ohne Modell; das ist der Weg fuer „das war alles Projekt X“. "
-            "Schritte + aufgabe_id/neu_titel: verschoben, Quelle mensch. Schritte + nur projekt_id: "
-            "Luna waehlt je Schritt die Aufgabe in dem Projekt (hoechstens 40, dauert Sekunden je "
-            "Schritt). Pruefe vorher mit aufgaben_tag und sag dem Menschen danach, was du geaendert hast."
+            "Schritte + aufgabe_id/neu_titel: verschoben, Quelle mensch. Schritte + nur projekt_id "
+            "(z.B. agent + datum, wie der Knopf in der Tagesansicht des Portals): eine Aufgabe, deren "
+            "Schritte alle ausgewaehlt sind, wandert ganz; eine Aufgabe mit Schritten auch anderswo "
+            "gibt die ausgewaehlten an eine gleichnamige Aufgabe im Projekt ab; nur Schritte ohne "
+            "Aufgabe ordnet Luna in dem Projekt ein (hoechstens 40). Pruefe vorher mit aufgaben_tag "
+            "und sag dem Menschen danach, was du geaendert hast."
         ),
     )
     async def aufgaben_umordnen(person: str, projekt_id: str = "", aufgabe_id: int = 0, neu_titel: str = "",

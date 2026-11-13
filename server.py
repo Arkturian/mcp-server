@@ -10987,6 +10987,25 @@ async def cloud_turn_initiator(session_name: str) -> Dict[str, Any]:
 
 
 @cloud_mcp.tool(
+    name="rund_info",
+    description=(
+        "Wer eine Rundnachricht bekam (#2797, Alex 13.11.2026). Eine Rundnachricht traegt im "
+        "Text nur ihre Kennung: '[Rundnachricht <id>]' -- keine Namen. Mit dieser id liefert "
+        "rund_info {id, absender, zeit, n, empfaenger:[{name, status}]}; status = zugestellt | "
+        "wartet | abgewiesen (Stand beim Senden). Lesen duerfen nur Empfaenger, der Absender und "
+        "der Mensch dahinter (Portal-Absender bzw. Auftragsmensch); fuer alle anderen gibt es "
+        "die Kennung nicht (404). '[Rundnachricht (zitiert) …]' ist ein Zitat, keine Rundnachricht."
+    ),
+)
+async def cloud_rund_info(id: str) -> Dict[str, Any]:
+    from urllib.parse import quote as _q
+    rid = (id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", rid):
+        raise ValueError("rund_info: ungueltige Kennung (erwartet die id aus '[Rundnachricht <id>]')")
+    return await call_cloud_api("GET", f"/api/rund/{_q(rid, safe='')}")
+
+
+@cloud_mcp.tool(
     name="browser_anfrage",
     description=(
         "Den aktiven Tab im Chrome eines Menschen anfragen, ueber seine AgentOS-Extension "

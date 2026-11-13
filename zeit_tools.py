@@ -1,4 +1,6 @@
-"""Zeit-Werkzeuge: der Tag einer Person in Summen (cloud-api GET /api/usage/tag).
+"""Zeit-Werkzeuge: der Tag einer Person in Summen (cloud-api GET /api/usage/tag), dazu die
+Aufgaben des Mini-Hirns lesen und umordnen (GET /api/aufgaben/tag, POST /api/aufgaben/umordnen,
+Alex ueber CloudV2-time 13.11.2026).
 
 Vertrag: Post #5880 (Uebersicht „Zeit heute“), cloud-api ad399af (Lesen durch
 benannte Agenten, Alex 11.11.2026). Wer lesen darf, entscheidet cloud-api: die
@@ -26,6 +28,7 @@ MAX_ZUEGE = 50
 MAX_AGENTEN = 25            # danach eine Zeile „+N weitere“ mit Summen (Cloud 11.11.2026)
 TOP_ORDNER = 10
 ZIEL_BYTES = 20_000
+MAX_SCHRITTE = 150          # aufgaben_tag: so viele Schritte einzeln, der Rest nur in den Summen
 TOKEN_FELDER = ("anfragen", "input", "output", "cache_read", "cache_write", "reasoning")
 ZEILEN_FELDER = ("hinzu", "geaendert", "entfernt")
 
@@ -163,6 +166,54 @@ def entwurf_zusammenfassen(d: Dict[str, Any]) -> Dict[str, Any]:
             "jev": d.get("jev")}
 
 
+def _pfad_text(p: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not p:
+        return None
+    return " › ".join(p.get("pfad") or [p.get("name") or p.get("id") or ""])
+
+
+def aufgaben_zusammenfassen(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Die Schritte eines Tages (GET /api/aufgaben/tag) kompakt, mit Summen je Aufgabe und
+    Projekt und dem Projektkatalog. Rein, ohne Netz."""
+    tz = ZoneInfo("Europe/Vienna")
+    schritte = d.get("schritte") or []
+    je_aufgabe: Dict[Any, Dict[str, Any]] = {}
+    je_projekt: Dict[Any, Dict[str, Any]] = {}
+    zeilen = []
+    for s in schritte:
+        sek = float(s.get("zeit_s") or s.get("dauer_s") or 0)
+        projekt = _pfad_text(s.get("projekt"))
+        zeilen.append({k: v for k, v in {
+            "turn_id": s.get("turn_id"), "uhr": _uhr(s.get("beginn"), tz), "agent": s.get("agent"),
+            "min": round(sek / 60, 1), "aufgabe_id": s.get("aufgabe_id"), "titel": s.get("titel"),
+            "projekt": projekt, "quelle": s.get("quelle"), "projekt_quelle": s.get("projekt_quelle"),
+            "geerbt": s.get("geerbt") or None}.items() if v not in (None, "")})
+        a = je_aufgabe.setdefault(s.get("aufgabe_id"), {"aufgabe_id": s.get("aufgabe_id"), "titel": s.get("titel"),
+                                                        "projekt": projekt, "schritte": 0, "s": 0.0,
+                                                        "agenten": set()})
+        a["schritte"] += 1
+        a["s"] += sek
+        a["agenten"].add(s.get("agent") or "?")
+        pr = je_projekt.setdefault(projekt, {"projekt": projekt, "s": 0.0, "schritte": 0})
+        pr["s"] += sek
+        pr["schritte"] += 1
+    aufgaben = [{"aufgabe_id": a["aufgabe_id"], "titel": a["titel"], "projekt": a["projekt"],
+                 "schritte": a["schritte"], "min": round(a["s"] / 60), "agenten": sorted(a["agenten"])}
+                for a in sorted(je_aufgabe.values(), key=lambda a: -a["s"])]
+    out: Dict[str, Any] = {
+        "person": d.get("person"), "datum": d.get("datum"), "noch_offen": d.get("noch_offen"),
+        "aufgaben": aufgaben,
+        "projekte": [{"projekt": p["projekt"], "schritte": p["schritte"], "min": round(p["s"] / 60)}
+                     for p in sorted(je_projekt.values(), key=lambda p: -p["s"])],
+        "schritte": zeilen[:MAX_SCHRITTE],
+    }
+    if len(zeilen) > MAX_SCHRITTE:
+        out["schritte_hinweis"] = f"{MAX_SCHRITTE} von {len(zeilen)} Schritten einzeln, Summen ueber alle"
+    if d.get("katalog") is not None:
+        out["katalog"] = [{"id": k.get("id"), "pfad": " › ".join(k.get("pfad") or [])} for k in d["katalog"]]
+    return out
+
+
 def register_zeit_tools(mcp, transport: Transport) -> None:
     """``transport(method, path, params=?, timeout=?)`` ruft cloud-api mit dem JWT des Aufrufers."""
 
@@ -228,3 +279,64 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
         if not isinstance(d, dict) or "eintraege" not in d:
             return d
         return json.dumps(entwurf_zusammenfassen(d), ensure_ascii=False, separators=(",", ":"))
+
+    @mcp.tool(
+        name="aufgaben_tag",
+        description=(
+            "Mini-Hirn (Alex 13.11.2026): Welcher Aufgabe und welchem Projekt sind die Eingaben einer "
+            "Person an einem Tag zugeordnet? Je Schritt (Eingabe des Menschen samt der Zuege, die "
+            "davon erben) Uhrzeit, Agent, Minuten, aufgabe_id, Titel, Projektpfad, `quelle` und "
+            "`projekt_quelle` (mensch = vom Menschen festgelegt; luna, folge, regel = automatisch; "
+            "ohne = keine Aufgabe). Dazu Summen je Aufgabe und je Projekt und mit katalog=true alle "
+            "Projektordner (id und Pfad), damit du einen Namen wie „INSECTA“ in eine projekt_id "
+            "aufloest. Ohne Eingabetexte. `datum` = Kalendertag in Wien (JJJJ-MM-TT, leer = heute), "
+            "`agent` = nur dieser Agent. Lesen darf, wer `zeit:lesen` hat, oder ein Agent, dessen "
+            "laufenden Zug genau diese Person selbst begonnen hat. Personendaten: nur dem Menschen "
+            "selbst zeigen."
+        ),
+    )
+    async def aufgaben_tag(person: str, datum: str = "", agent: str = "", katalog: bool = True) -> Any:
+        params = {k: v for k, v in (("person", person.strip()), ("datum", datum.strip()),
+                                    ("agent", agent.strip())) if v}
+        if katalog:
+            params["katalog"] = "true"
+        d = await transport("GET", "/api/aufgaben/tag", params=params, timeout=60)
+        if not isinstance(d, dict) or "schritte" not in d:
+            return d
+        return json.dumps(aufgaben_zusammenfassen(d), ensure_ascii=False, separators=(",", ":"))
+
+    @mcp.tool(
+        name="aufgaben_umordnen",
+        description=(
+            "Mini-Hirn: Aufgaben oder Schritte einer Person umordnen, wenn sie es dir im Gespraech "
+            "sagt („alles von heute war Projekt X“, „das gehoert zu Aufgabe 53“). Erlaubt NUR, wenn "
+            "genau diese Person deinen laufenden Zug selbst begonnen hat (kein anderer Mensch im "
+            "Zug, keine Kette ueber Agenten); sonst 403 mit `grund`. Nie aus eigenem Antrieb und "
+            "nie fuer jemand anderen. Gespeichert wird „mensch:<mail> über <dein Name>“. "
+            "Ziel genau eines: `projekt_id` (aus aufgaben_tag katalog), `aufgabe_id` oder `neu_titel` "
+            "(neue Aufgabe, optional mit projekt_id). Auswahl genau eines: `aufgaben` (Liste von "
+            "aufgabe_id), `turn_ids` (Schritte aus aufgaben_tag) oder `agent` + `datum` (alle "
+            "Schritte dieses Agenten an dem Tag). Ganze Aufgaben + projekt_id: die Aufgaben wandern "
+            "samt allen Schritten, ohne Modell; das ist der Weg fuer „das war alles Projekt X“. "
+            "Schritte + aufgabe_id/neu_titel: verschoben, Quelle mensch. Schritte + nur projekt_id: "
+            "Luna waehlt je Schritt die Aufgabe in dem Projekt (hoechstens 40, dauert Sekunden je "
+            "Schritt). Pruefe vorher mit aufgaben_tag und sag dem Menschen danach, was du geaendert hast."
+        ),
+    )
+    async def aufgaben_umordnen(person: str, projekt_id: str = "", aufgabe_id: int = 0, neu_titel: str = "",
+                                aufgaben: Optional[List[int]] = None, turn_ids: Optional[List[str]] = None,
+                                agent: str = "", datum: str = "") -> Any:
+        if neu_titel.strip():
+            ziel: Dict[str, Any] = {"neu": {"titel": neu_titel.strip(), "projekt_id": projekt_id.strip() or None}}
+        elif aufgabe_id:
+            ziel = {"aufgabe_id": int(aufgabe_id)}
+        else:
+            ziel = {"projekt_id": projekt_id.strip()}
+        if aufgaben:
+            auswahl: Dict[str, Any] = {"aufgaben": [int(i) for i in aufgaben]}
+        elif turn_ids:
+            auswahl = {"turn_ids": [str(t) for t in turn_ids]}
+        else:
+            auswahl = {"agent": agent.strip(), "datum": datum.strip()}
+        return await transport("POST", "/api/aufgaben/umordnen", timeout=300,
+                               json_body={"person": person.strip(), "ziel": ziel, "auswahl": auswahl})

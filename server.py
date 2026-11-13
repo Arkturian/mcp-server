@@ -10725,6 +10725,45 @@ async def cloud_send_draft_for_review(
     return await call_cloud_api("POST", "/api/user-messages", json_body=body)
 
 
+@cloud_mcp.tool(
+    name="queue_antworten",
+    description=(
+        "Answer a QUEUE message ('[Queue Message #N from …]: …') explicitly (#2740). This is "
+        "the only way your answer reaches the caller (portal, widget, app): text in your "
+        "terminal window is NOT passed on when the message's [OUTPUT …] hint names this tool. "
+        "msg_id = the N from the marker; content = your answer (Markdown; for callers that "
+        "expect one JSON object, exactly that object as text). attachments (optional, max 10): "
+        "[{storage_id, filename, content_type, sha256?}] — files you uploaded or that were shared "
+        "with you (upload first with assets_upload_file). Only the agent the message went to "
+        "may answer; your name comes from your login. Same answer twice is fine (idempotent); "
+        "errors: 409 bereits_beantwortet (already answered differently), nachricht_beendet "
+        "(expired, e.g. keine_antwort), noch_nicht_zugestellt, antwort_extern (channel message: "
+        "answer with the comm tool and handle named in its hint, e.g. kanal_antworten); "
+        "422 anhang_nicht_lesbar (file not readable for you). Not for agents (send_message) "
+        "or humans outside a queue message (send_to_human)."
+    ),
+)
+async def cloud_queue_antworten(
+    msg_id: int,
+    content: str = "",
+    attachments: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    from urllib.parse import quote as _q
+    from auth import current_caller_verified_agent
+
+    # Die Session ist der gepruefte Agent selbst, nie ein Argument: nur der
+    # Empfaenger darf seine Queue-Nachricht beantworten (cloud-api prueft erneut).
+    agent = current_caller_verified_agent()
+    if not agent:
+        raise ValueError("queue_antworten_requires_agent: only an agent identity can answer its queue messages")
+    body: Dict[str, Any] = {"content": content or ""}
+    if attachments:
+        body["attachments"] = attachments
+    return await call_cloud_api(
+        "POST", f"/api/queue/{_q(agent, safe='')}/messages/{int(msg_id)}/antwort", json_body=body,
+    )
+
+
 def _cloud_message_body(
     *,
     from_session: str,

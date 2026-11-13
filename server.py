@@ -211,6 +211,13 @@ ISSUE_PATH = "/issue"
 LLMTIME_API_BASE = os.getenv("LLMTIME_API_BASE", "https://llm-time.arkturian.com").rstrip("/")
 LLMTIME_API_KEY = os.getenv("LLMTIME_API_KEY", "").strip()
 LLMTIME_PATH = "/llmtime"
+
+# newsletter-api (Owner: Agent Newsletter). The caller's agent JWT is forwarded;
+# newsletter-api admits only agents released per tenant (agent_tenant_access).
+NEWSLETTER_API_BASE = os.getenv(
+    "NEWSLETTER_API_BASE", "https://newsletter-api.arkserver.arkturian.com"
+).rstrip("/")
+NEWSLETTER_PATH = "/newsletter"
 # event-api (Termine/Anmeldungen je Mandant, Owner: Agent Event). Upstream nur
 # mit Instanzschluessel + gepruefter Identitaet (X-Agent-Name); der Agenten-JWT
 # geht nie an die event-api. Welche Mandanten ein Agent sieht, entscheidet die
@@ -948,6 +955,23 @@ async def event_export_to_storage(
     if isinstance(obj, dict):
         obj["hinweis"] = "Private Datei. Holen mit assets_download(id). Personendaten: nicht in Beitraege, Issues oder IACP kopieren."
     return obj
+
+
+async def call_newsletter_api(
+    method: str,
+    endpoint: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Any = None,
+) -> Any:
+    """Call newsletter-api with the caller's JWT (see newsletter_tools)."""
+    return await _fetch_json(
+        method,
+        f"{NEWSLETTER_API_BASE}{endpoint}",
+        headers=_caller_auth_headers(),
+        params=params,
+        json_body=json_body,
+    )
 
 
 async def call_business_api(
@@ -12737,6 +12761,22 @@ llmtime_app = llmtime_mcp.streamable_http_app()
 mount_mcp("llmtime", LLMTIME_PATH, llmtime_app)
 
 
+# newsletter-api MCP (Owner: Agent Newsletter) ---------------------------------
+newsletter_mcp = FastMCP(
+    name="newsletter",
+    streamable_http_path="/",
+    stateless_http=True,
+    auth=None,
+    log_level="INFO",
+)
+
+from newsletter_tools import register_newsletter_tools
+register_newsletter_tools(newsletter_mcp, call_newsletter_api)
+
+newsletter_app = newsletter_mcp.streamable_http_app()
+mount_mcp("newsletter", NEWSLETTER_PATH, newsletter_app)
+
+
 # event-api MCP (Owner: Agent Event) -------------------------------------------
 event_mcp = FastMCP(
     name="event",
@@ -12808,6 +12848,7 @@ _cloud_stack = AsyncExitStack()
 _conversation_stack = AsyncExitStack()
 _issue_stack = AsyncExitStack()
 _llmtime_stack = AsyncExitStack()
+_newsletter_stack = AsyncExitStack()
 _event_stack = AsyncExitStack()
 _person_stack = AsyncExitStack()
 
@@ -12837,6 +12878,7 @@ def _all_mcps():
         ("conversation", _conversation_stack, conversation_mcp),
         ("issue", _issue_stack, issue_mcp),
         ("llmtime", _llmtime_stack, llmtime_mcp),
+        ("newsletter", _newsletter_stack, newsletter_mcp),
         ("event", _event_stack, event_mcp),
         ("person", _person_stack, person_mcp),
     ]
@@ -12971,6 +13013,12 @@ async def root() -> Dict[str, Any]:
                 "tools": [tool.name for tool in llmtime_mcp._tool_manager.list_tools()],
                 "upstream": LLMTIME_API_BASE,
                 "description": "LLM-TIME: Arbeitspakete erfassen, Prognosen (wann, wie viel, Aufwand) aus gemessener Erfahrung, Merge-Import",
+            },
+            "newsletter": {
+                "path": NEWSLETTER_PATH,
+                "tools": [tool.name for tool in newsletter_mcp._tool_manager.list_tools()],
+                "upstream": NEWSLETTER_API_BASE,
+                "description": "Newsletter: Vorlagen und Kampagnen-Entwürfe je freigegebenem Mandant, Vorschau, Testversand (kein echter Versand)",
             },
             "event": {
                 "path": EVENT_PATH,

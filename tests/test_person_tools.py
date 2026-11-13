@@ -216,3 +216,16 @@ def test_ohne_werkzeugaufruf_bleibt_offen(rechte, monkeypatch):
     monkeypatch.setattr(auth, "AUTH_REQUIRE_JWT", True)
     assert _post({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, token=None) == 200
     assert _post([{"jsonrpc": "2.0", "method": "notifications/initialized"}], token=None) == 200
+
+
+def test_pruefung_wirft_ergibt_403(rechte, monkeypatch, caplog):
+    """Cloud 2267d294: Wirft die Werkzeugpruefung unerwartet, wird abgewiesen und
+    protokolliert -- vorher liess `except Exception: pass` den Aufruf ungeprueft durch."""
+    rechte(["mcp:person:read"])
+
+    def kaputt(*a, **k):
+        raise RuntimeError("pruefung kaputt")
+    monkeypatch.setattr(auth, "_werkzeug_erlaubt", kaputt)
+    with caplog.at_level("ERROR", logger=auth.logger.name):
+        assert _call("persons_list") == 403
+    assert any("RBAC tool check failed" in r.getMessage() for r in caplog.records)

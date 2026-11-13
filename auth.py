@@ -558,7 +558,24 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                                     status_code=403,
                                 )
                     except Exception:
-                        pass
+                        # Fail-closed: wirft die Pruefung unerwartet, wird der Aufruf
+                        # abgewiesen statt ungeprueft durchgelassen (vorher `pass`).
+                        logger.exception(
+                            "RBAC tool check failed, denied: agent=%s role=%s mcp:%s",
+                            agent.name, agent.role, mcp_server,
+                        )
+                        return JSONResponse(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": None,
+                                "error": {
+                                    "code": -32600,
+                                    "message": f"Permission check failed for agent '{agent.name}' "
+                                               f"on mcp:{mcp_server}; call denied",
+                                },
+                            },
+                            status_code=403,
+                        )
 
         except jwt.ExpiredSignatureError:
             return JSONResponse({"error": "Token expired"}, status_code=401)

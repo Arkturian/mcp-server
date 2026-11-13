@@ -10624,11 +10624,13 @@ cloud_mcp = FastMCP(
 
 @cloud_mcp.tool(
     name="send_message",
-    description="Send a message to another Claude Code agent on any server (Mac or arkserver). Auto-routes to the correct server. Default is fire-and-forget: message is delivered to the agent's tmux, you get back {id, status: 'sent'} immediately. For replies to Arcturian actions, pass the received message handle as in_reply_to and one of ack, progress, question, result, error as event_type; question also requires options. from_session is your own fixed agent name (ChatGPT: always 'ChatGPT'). The server verifies your identity from your login; from_session is only used for routing and channel memory. The other agent's response will appear in YOUR tmux pane later as an [IACP:...] marker — you'll see it next time you're active. You do NOT need to wait. Only set wait=true for rare cases where you need the response inline (short queries, <30s expected).",
+    description="Send a message to another Claude Code agent on any server (Mac or arkserver). Auto-routes to the correct server. Default is fire-and-forget: message is delivered to the agent's tmux, you get back {id, status: 'sent'} immediately. For replies to Arcturian actions, pass the received message handle as in_reply_to and one of ack, progress, question, result, error as event_type; question also requires options. from_session is your own fixed agent name (ChatGPT: always 'ChatGPT'). The server verifies your identity from your login; from_session is only used for routing and channel memory. The other agent's response will appear in YOUR tmux pane later as an [IACP:...] marker — you'll see it next time you're active. You do NOT need to wait. Only set wait=true for rare cases where you need the response inline (short queries, <30s expected). "
+                "Rundnachricht (#2765): to_session may be a LIST of up to 20 agent names — every recipient is checked on its own and gets its own msg_id; the result lists {to, msg_id} or {to, error} per recipient, and each recipient sees '[Rundnachricht an N: …]' so it knows the others got the same task. "
+                "antwort='keine' tells the recipients that no reply to you is needed (their result in their own window is enough; wait is ignored); default 'erwartet'.",
 )
 async def cloud_send_message(
     from_session: str,
-    to_session: str,
+    to_session: str | List[str],
     message: str,
     timeout: int = 30,
     wait: bool = False,
@@ -10638,6 +10640,7 @@ async def cloud_send_message(
     options: Optional[List[Any]] = None,
     retryable: Optional[bool] = None,
     expires_at: Optional[float] = None,
+    antwort: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = _cloud_message_body(
         from_session=from_session,
@@ -10651,6 +10654,7 @@ async def cloud_send_message(
         options=options,
         retryable=retryable,
         expires_at=expires_at,
+        antwort=antwort,
     )
     return await call_cloud_api(
         "POST", "/api/agents/route",
@@ -10728,7 +10732,7 @@ async def cloud_send_draft_for_review(
 def _cloud_message_body(
     *,
     from_session: str,
-    to_session: str,
+    to_session: Any,
     message: str,
     timeout: int,
     wait: bool,
@@ -10738,8 +10742,14 @@ def _cloud_message_body(
     options: Optional[List[Any]] = None,
     retryable: Optional[bool] = None,
     expires_at: Optional[float] = None,
+    antwort: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Build the additive send_message wire without changing legacy calls."""
+    """Build the additive send_message wire without changing legacy calls.
+
+    `to_session` may be a list (Rundnachricht, #2765): the server checks every
+    recipient on its own. `antwort` ("erwartet" | "keine") only when set."""
+    if isinstance(to_session, (list, tuple)):
+        to_session = [str(t).strip() for t in to_session if str(t).strip()]
     body: Dict[str, Any] = {
         "from": from_session,
         "to": to_session,
@@ -10755,6 +10765,7 @@ def _cloud_message_body(
             options=options,
             retryable=retryable,
             expires_at=expires_at,
+            antwort=antwort,
         )
     )
     return body

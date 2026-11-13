@@ -54,3 +54,80 @@ class NewsletterToolsTests(unittest.IsolatedAsyncioTestCase):
         await self.mcp.call_tool("mail_usage", {"tenant": "clarityprocess"})
         self.assertEqual(self.calls[-1], ("GET", "/api/v1/admin/tenants/clarityprocess/mail-usage",
                                           {"params": None}))
+
+
+# --- Gateway: only an explicit mcp:newsletter right opens the server ----------
+
+import asyncio  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+
+import httpx  # noqa: E402
+import pytest  # noqa: E402
+from starlette.applications import Starlette  # noqa: E402
+from starlette.responses import JSONResponse  # noqa: E402
+from starlette.routing import Route  # noqa: E402
+
+import auth  # noqa: E402
+
+CALL = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                   "params": {"name": "templates_list", "arguments": {"tenant": "x"}}})
+
+
+def test_server_registers_newsletter_as_explicit_only():
+    """Own process: other tests reload `auth`, which drops what server.py registered."""
+    code = ("import json, auth, server; print(json.dumps({"
+            "'explicit': 'newsletter' in auth.EXPLICIT_ONLY_SERVERS,"
+            "'offen': auth._offen('newsletter')}))")
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    r = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True,
+                       text=True, timeout=120)
+    assert r.returncode == 0, r.stderr[-2000:]
+    assert json.loads(r.stdout.strip().splitlines()[-1]) == {"explicit": True, "offen": False}
+
+
+def _gateway():
+    async def ok(request):
+        return JSONResponse({"ok": 1})
+    app = Starlette(routes=[Route("/{srv}/", ok, methods=["POST"])])
+    app.add_middleware(auth.JWTAuthMiddleware)
+    return app
+
+
+@pytest.fixture
+def perms(monkeypatch):
+    monkeypatch.setattr(auth, "EXPLICIT_ONLY_SERVERS", {"newsletter"})
+    monkeypatch.setattr(auth, "OFFENE_SERVER", {"newsletter"})
+
+    async def key():
+        return "k"
+    monkeypatch.setattr(auth, "_get_public_key", key)
+
+    def set_perms(values):
+        monkeypatch.setattr(auth, "_decode_jwt", lambda token, key: {
+            "type": "agent", "agent_name": "X", "role": "r", "permissions": values})
+    return set_perms
+
+
+def _post():
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_gateway()),
+                                     base_url="http://gw") as c:
+            return await c.post("/newsletter/", content=CALL, headers={
+                "Authorization": "Bearer t", "Content-Type": "application/json"})
+    return asyncio.run(go()).status_code
+
+
+@pytest.mark.parametrize("values", [["*"], ["mcp:*"], ["mcp:*:*"], ["mcp:*:templates_list"],
+                                    ["mcp:storage:*"], []])
+def test_wildcards_do_not_open_newsletter(perms, values):
+    perms(values)
+    assert _post() == 403
+
+
+@pytest.mark.parametrize("values", [["mcp:newsletter:*"], ["mcp:*", "mcp:newsletter:templates_list"]])
+def test_explicit_right_opens_newsletter(perms, values):
+    perms(values)
+    assert _post() == 200

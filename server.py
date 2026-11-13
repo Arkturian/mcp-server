@@ -12775,6 +12775,9 @@ register_newsletter_tools(newsletter_mcp, call_newsletter_api)
 
 newsletter_app = newsletter_mcp.streamable_http_app()
 mount_mcp("newsletter", NEWSLETTER_PATH, newsletter_app)
+# Only an explicit mcp:newsletter:* (or :<tool>) opens it; "*" and "mcp:*" do not.
+import auth as _newsletter_auth  # noqa: E402
+_newsletter_auth.EXPLICIT_ONLY_SERVERS.add("newsletter")
 
 
 # event-api MCP (Owner: Agent Event) -------------------------------------------

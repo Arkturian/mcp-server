@@ -218,6 +218,12 @@ LLMTIME_PATH = "/llmtime"
 EVENT_API_BASE = os.getenv("EVENT_API_BASE", "https://event-api.arkserver.arkturian.com").rstrip("/")
 EVENT_API_KEY = os.getenv("EVENT_API_KEY", "").strip()
 EVENT_PATH = "/event"
+# person-api (Personen, Kennungen, Zusammenfuehrungen je Mandant, #2441, Owner:
+# Business). Routen unter /api/v1. Upstream NUR mit dem JWT des aufrufenden
+# Agenten: kein Dienstschluessel, kein gemeinsames Token -- die person-api prueft
+# Rechte und Besitzer-Regel je Aufrufer. Server ist EXPLICIT_ONLY (unten).
+PERSON_API_URL = os.getenv("PERSON_API_URL", "https://person-api.arkserver.arkturian.com").rstrip("/")
+PERSON_PATH = "/person"
 # Shared secret for cross-node IACP role addressing. Must match IACP_TOKEN
 # env on every cloud-api in the federation. Used by send_to_role().
 IACP_TOKEN = os.getenv("IACP_TOKEN", "").strip()
@@ -842,6 +848,32 @@ async def call_llmtime_api(
         method,
         f"{LLMTIME_API_BASE}{endpoint}",
         headers=_llmtime_headers(),
+        params=params,
+        json_body=json_body,
+    )
+
+
+def _person_headers() -> Dict[str, str]:
+    """Bearer des aufrufenden Agenten (+ X-Agent-Name), sonst kein Aufruf (#2441)."""
+    headers = _caller_auth_headers()
+    if "Authorization" not in headers:
+        raise ValueError("person_requires_caller: person-api braucht den Ausweis des aufrufenden "
+                         "Agenten; ohne Aufrufer-Kontext gibt es keinen Aufruf (kein Dienstschluessel)")
+    return headers
+
+
+async def call_person_api(
+    method: str,
+    endpoint: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Any = None,
+) -> Any:
+    """Call the person-api (see person_tools)."""
+    return await _fetch_json(
+        method,
+        f"{PERSON_API_URL}{endpoint}",
+        headers=_person_headers(),
         params=params,
         json_body=json_body,
     )
@@ -12725,6 +12757,26 @@ mount_mcp("event", EVENT_PATH, event_app)
 import auth as _event_auth  # noqa: E402
 _event_auth.EXPLICIT_ONLY_SERVERS.add("event")
 
+
+# person-api MCP (#2441, Owner: Business) ------------------------------------
+person_mcp = FastMCP(
+    name="person",
+    streamable_http_path="/",
+    stateless_http=True,
+    auth=None,
+    log_level="INFO",
+)
+
+from person_tools import WERKZEUG_STUFEN as _PERSON_STUFEN, register_person_tools  # noqa: E402
+register_person_tools(person_mcp, call_person_api)
+
+person_app = person_mcp.streamable_http_app()
+mount_mcp("person", PERSON_PATH, person_app)
+# Personendaten: kein offener Server, Platzhalter (*, mcp:*) zaehlen nicht; frei
+# nur mit mcp:person:<stufe> (read/write/admin, je Werkzeug) oder mcp:person:*.
+_event_auth.EXPLICIT_ONLY_SERVERS.add("person")
+_event_auth.WERKZEUG_STUFEN["person"] = dict(_PERSON_STUFEN)
+
 # Fremde MCP-Server per MCP_PASSTHROUGH (passthrough.py, P3 26.10.2026). Namen
 # eigener Server sind gesperrt; Rechte prueft JWTAuthMiddleware, Platzhalter zaehlen nicht.
 import passthrough as _passthrough  # noqa: E402
@@ -12759,6 +12811,7 @@ _conversation_stack = AsyncExitStack()
 _issue_stack = AsyncExitStack()
 _llmtime_stack = AsyncExitStack()
 _event_stack = AsyncExitStack()
+_person_stack = AsyncExitStack()
 
 
 # Track which MCP sessions were started (for shutdown ordering)
@@ -12787,6 +12840,7 @@ def _all_mcps():
         ("issue", _issue_stack, issue_mcp),
         ("llmtime", _llmtime_stack, llmtime_mcp),
         ("event", _event_stack, event_mcp),
+        ("person", _person_stack, person_mcp),
     ]
 
 
@@ -12925,6 +12979,12 @@ async def root() -> Dict[str, Any]:
                 "tools": [tool.name for tool in event_mcp._tool_manager.list_tools()],
                 "upstream": EVENT_API_BASE,
                 "description": "event-api: Termine, Anmeldungen, Auswertung und Excel/CSV-Export je Mandant (nur freigegebene Agenten)",
+            },
+            "person": {
+                "path": PERSON_PATH,
+                "tools": [tool.name for tool in person_mcp._tool_manager.list_tools()],
+                "upstream": PERSON_API_URL,
+                "description": "person-api: Personen, Kennungen, Zusammenfuehrungen je Mandant (nur mit mcp:person:read/write/admin)",
             },
         },
     }

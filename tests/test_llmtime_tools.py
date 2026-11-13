@@ -21,7 +21,7 @@ class LlmtimeToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(names, {
             "item_add", "item_start", "item_finish", "item_discard", "items_list",
             "forecast_when", "forecast_how_many", "forecast_aufwand", "forecast_rueckblick",
-            "import_merges", "rules_get", "rules_set",
+            "vergleich_plattform", "import_merges", "rules_get", "rules_set",
         })
 
     async def test_forecast_tools_carry_the_rule(self):
@@ -105,6 +105,21 @@ class LlmtimeToolsTests(unittest.IsolatedAsyncioTestCase):
         for name in ("forecast_when", "forecast_how_many"):
             self.assertIn("stunden_je_tag", tools[name].description)
             self.assertIn("annahmen.kapazitaet", tools[name].description)
+
+    async def test_platform_filter_and_comparison(self):
+        await self.mcp.call_tool("forecast_aufwand", {"typ": "fix", "plattform": "codex", "groesse": "aktiv_stunden"})
+        self.assertEqual(self.calls[-1], ("GET", "/api/v1/forecast/aufwand", {"params": {
+            "typ": "fix", "plattform": "codex", "groesse": "aktiv_stunden"}}))
+        await self.mcp.call_tool("vergleich_plattform", {})
+        self.assertEqual(self.calls[-1], ("GET", "/api/v1/vergleich/plattform", {"params": {}}))
+        await self.mcp.call_tool("vergleich_plattform", {"von": "2026-10-01", "projekt": "cloud-api",
+                                                         "mindest_pakete": 10})
+        self.assertEqual(self.calls[-1][2]["params"], {"von": "2026-10-01", "projekt": "cloud-api",
+                                                       "mindest_pakete": 10})
+        tools = {t.name: t for t in await self.mcp.list_tools()}
+        self.assertIn("plattform", tools["forecast_aufwand"].description)
+        for word in ("Mengen, kein Wert", "je_typ", "unbekannt"):
+            self.assertIn(word, tools["vergleich_plattform"].description)
 
     async def test_how_many_requires_bis(self):
         await self.mcp.call_tool("forecast_how_many", {"projekt": "demo", "bis": "2026-11-21"})

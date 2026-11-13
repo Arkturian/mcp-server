@@ -2,7 +2,8 @@
 
 Contract: Content-Post #5801 (TIME-LLM), API state 504379d; forecast_rueckblick
 and turn tokens since llm-time-api 0.3.0 (3f4b036, dd96609); kapazitaet and
-stunden_je_tag since 0.4.0 (ea1f2c3).
+stunden_je_tag since 0.4.0 (ea1f2c3); plattform and vergleich_plattform since
+0.5.0 (91d3c74).
 
 Registration is isolated from the other MCP domains so the tools can be
 exercised against a fake transport. The transport decides the credential
@@ -238,7 +239,10 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
 
         Wann: bevor du eine Aufgabe übernimmst oder ein Budget nennst.
         {FORECAST_RULE}
-        `projekt`, `agent`, `typ`, `bereich` bilden die Referenzklasse.
+        `projekt`, `agent`, `typ`, `bereich`, `plattform` bilden die Referenzklasse.
+        `plattform` (claude, codex …): nur Pakete, deren Turns überwiegend auf
+        dieser Plattform liefen. Mit wenig eigenen Werten wiegen die anderen
+        Plattformen mehr, siehe `quellen`.
         `groesse`: stunden (Vorgabe, Durchlaufzeit inkl. Warten) |
         aktiv_stunden (reine Agentenzeit aus den Turns, ohne Warten) |
         tokens | zeilen (geänderte Codezeilen). `anzahl` Vorgabe 1.
@@ -258,12 +262,46 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         anzahl: Optional[int] = None,
         seed: Optional[int] = None,
         stichproben: Optional[int] = None,
+        plattform: Optional[str] = None,
     ) -> Any:
         params = _drop_none({
-            "projekt": projekt, "agent": agent, "typ": typ, "bereich": bereich,
+            "projekt": projekt, "agent": agent, "typ": typ, "bereich": bereich, "plattform": plattform,
             "groesse": groesse, "anzahl": anzahl, "seed": seed, "stichproben": stichproben,
         })
         return await transport("GET", f"{API}/forecast/aufwand", params=params)
+
+    @mcp.tool(
+        name="vergleich_plattform",
+        description="""Was kostet Arbeit auf Claude, was auf Codex? (GET /vergleich/plattform)
+
+        Wann: wenn es darum geht, welche Art Aufgabe auf welche Plattform
+        gehört, oder wie viel Arbeit gerade auf welcher Plattform läuft.
+        Zeitraum [`von`, `bis`) als JJJJ-MM-TT, leer = die letzten 28 Tage.
+        Filter: `projekt`, `agent`, `typ`. `mindest_pakete` (Vorgabe 5) für `je_typ`.
+        Antwort:
+        - `pakete` je Plattform und `je_typ` je Plattform und Typ: fertige
+          Pakete mit aktiven Stunden, Output-Tokens und Zeilen (n, p50, p85).
+          Die Plattform eines Pakets ist die seiner Turns.
+        - `turns` je Plattform: alle Turns des Zeitraums, auch von Agenten,
+          deren Commits noch keinem Paket zugeordnet sind (heute: Codex).
+          Aktive Stunden, Zeilen je Stunde, Output-Tokens je geänderte Zeile.
+        Weitergeben mit `hinweis`: Zeilen und Tokens sind Mengen, kein Wert.
+        Die Plattformen bekommen verschiedene Aufgaben, vergleichbar sind nur
+        Zeilen mit genug Paketen auf beiden Seiten. `unbekannt` = ohne Angabe.""",
+    )
+    async def vergleich_plattform(
+        von: Optional[str] = None,
+        bis: Optional[str] = None,
+        projekt: Optional[str] = None,
+        agent: Optional[str] = None,
+        typ: Optional[str] = None,
+        mindest_pakete: Optional[int] = None,
+    ) -> Any:
+        params = _drop_none({
+            "von": von, "bis": bis, "projekt": projekt, "agent": agent, "typ": typ,
+            "mindest_pakete": mindest_pakete,
+        })
+        return await transport("GET", f"{API}/vergleich/plattform", params=params)
 
     @mcp.tool(
         name="forecast_rueckblick",

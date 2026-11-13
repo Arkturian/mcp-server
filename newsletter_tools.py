@@ -8,7 +8,7 @@ agent send for real, approve imports, fill the test list or read contacts.
 Those steps stay with a logged-in human on newsletter.arkturian.com.
 """
 
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 from urllib.parse import quote
 
 Transport = Callable[..., Awaitable[Any]]
@@ -27,6 +27,15 @@ TEMPLATE_RULES = (
     "Text- und HTML-Fassung müssen `{{ unsubscribe_url }}` enthalten. Verfügbar "
     "sind der Kampagnen-Kontext, `subscriber.email|first_name|language`, "
     "`unsubscribe_url` und `website_url`."
+)
+
+
+VARIANT_RULES = (
+    "Jede Adresse bekommt genau eine Variante: die eingeschaltete mit dem "
+    "kleinsten `rank`, deren `tags_any` einen Tag der Adresse trifft; eine "
+    "Variante ohne `tags_any` fängt alle übrigen. `key` klein mit Bindestrichen, "
+    "key und rank eindeutig (sonst 422). Der Kontext je Variante ist "
+    "Ausgabe-Kontext + Varianten-Kontext + `audience` = key."
 )
 
 
@@ -234,6 +243,130 @@ def register_newsletter_tools(mcp, transport: Transport) -> None:
     async def campaign_test_send(campaign_id: str) -> Any:
         return await transport(
             "POST", f"{API}/campaigns/{_seg(campaign_id)}/test-send", json_body={}
+        )
+
+    @mcp.tool(
+        name="tags_counts",
+        description="Bestätigte Kontakte je Tag einer Liste (nur Zahlen), dazu ohne Tag.",
+    )
+    async def tags_counts(tenant: str, list_slug: str = "updates") -> Any:
+        return await transport(
+            "GET", f"{API}/tenants/{_seg(tenant)}/lists/{_seg(list_slug)}/tags"
+        )
+
+    @mcp.tool(name="editions_list", description="Ausgaben eines Mandanten mit Status.")
+    async def editions_list(tenant: str) -> Any:
+        return await transport("GET", f"{API}/tenants/{_seg(tenant)}/editions")
+
+    @mcp.tool(
+        name="edition_get",
+        description="Eine Ausgabe mit Kontext, Varianten (key, rank, tags_any, context, "
+        "enabled, campaign_id) und Zustellungen.",
+    )
+    async def edition_get(edition_id: str) -> Any:
+        return await transport("GET", f"{API}/editions/{_seg(edition_id)}")
+
+    @mcp.tool(
+        name="editions_create",
+        description=f"""Ausgabe mit Varianten als Entwurf anlegen. Es wird nichts versendet.
+
+        {VARIANT_RULES}
+        `variants`: Liste von {{key, rank, tags_any?, context?, enabled?}}.
+        `slug` je Liste eindeutig (sonst 409).""",
+    )
+    async def editions_create(
+        tenant: str,
+        list_slug: str,
+        template_slug: str,
+        slug: str,
+        name: str,
+        context: Dict[str, Any],
+        variants: List[Dict[str, Any]],
+    ) -> Any:
+        return await transport(
+            "POST",
+            f"{API}/tenants/{_seg(tenant)}/editions",
+            json_body={
+                "list_slug": list_slug,
+                "template_slug": template_slug,
+                "slug": slug,
+                "name": name,
+                "context": context,
+                "variants": variants,
+            },
+        )
+
+    @mcp.tool(
+        name="edition_update",
+        description=f"""Entwurf einer Ausgabe ändern. Nur draft/on_hold, sonst 409.
+
+        `context` ersetzt den Ausgabe-Kontext ganz. `variants` ersetzt die ganze
+        Variantenliste: Fehlende Varianten werden gelöscht, neue angelegt.
+        {VARIANT_RULES}""",
+    )
+    async def edition_update(
+        edition_id: str,
+        name: Optional[str] = None,
+        template_slug: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+        variants: Optional[List[Dict[str, Any]]] = None,
+    ) -> Any:
+        return await transport(
+            "PATCH",
+            f"{API}/editions/{_seg(edition_id)}",
+            json_body=_drop_none({
+                "name": name, "template_slug": template_slug,
+                "context": context, "variants": variants,
+            }),
+        )
+
+    @mcp.tool(name="edition_delete", description="Entwurf einer Ausgabe samt Varianten löschen.")
+    async def edition_delete(edition_id: str) -> Any:
+        return await transport("DELETE", f"{API}/editions/{_seg(edition_id)}")
+
+    @mcp.tool(
+        name="edition_hold",
+        description="Ausgabe gegen Versand sperren. Aufheben kann nur ein angemeldeter Mensch.",
+    )
+    async def edition_hold(edition_id: str) -> Any:
+        return await transport("POST", f"{API}/editions/{_seg(edition_id)}/hold")
+
+    @mcp.tool(
+        name="edition_audience",
+        description="Wie viele bestätigte Kontakte welche Variante bekämen (nur Zahlen), "
+        "dazu `without_variant` (keine Variante passt).",
+    )
+    async def edition_audience(edition_id: str) -> Any:
+        return await transport("GET", f"{API}/editions/{_seg(edition_id)}/audience")
+
+    @mcp.tool(
+        name="edition_preview",
+        description="""Eine Variante so rendern, wie sie beim Versand rausginge.
+
+        `first_name` "" oder null = neutrale Anrede. Liefert {subject, text, html}.""",
+    )
+    async def edition_preview(
+        edition_id: str, variant: str, first_name: Optional[str] = ""
+    ) -> Any:
+        return await transport(
+            "POST",
+            f"{API}/editions/{_seg(edition_id)}/preview",
+            json_body={"variant": variant, "first_name": first_name},
+        )
+
+    @mcp.tool(
+        name="edition_test_send",
+        description="""Testmails an die Testliste, je Variante eine („[Test]“ im Betreff).
+
+        Ohne `variants` alle eingeschalteten. Echte Kontakte bekommen nichts.""",
+    )
+    async def edition_test_send(
+        edition_id: str, variants: Optional[List[str]] = None
+    ) -> Any:
+        return await transport(
+            "POST",
+            f"{API}/editions/{_seg(edition_id)}/test-send",
+            json_body=_drop_none({"variants": variants}),
         )
 
     @mcp.tool(

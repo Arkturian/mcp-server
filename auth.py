@@ -372,6 +372,36 @@ def _permissions_for_server(permissions: list[str], mcp_server: str) -> list[str
     return permissions
 
 
+def gegriffenes_recht(permissions: list[str], mcp_server: str, tool_name: str) -> str:
+    """Das GENAUESTE Recht, das diesen Aufruf erlaubt (#2806): mcp:<s>:<tool> bzw.
+    die Stufe vor mcp:<s>:* vor mcp:*:* / mcp:* vor *. Steht hier ein Platzhalter,
+    war er fuer den Aufruf noetig. "offen" fuer offene Server; dieselbe Pruefung
+    wie im Tor (_permissions_for_server, _match_permission, WERKZEUG_STUFEN)."""
+    import aufruf_protokoll as _ap
+    if mcp_server and _offen(mcp_server):
+        return "offen"
+    perms = _permissions_for_server(permissions, mcp_server)
+    ziele = [f"mcp:{mcp_server}:{tool_name}"]
+    stufe = WERKZEUG_STUFEN.get(mcp_server, {}).get(tool_name)
+    if stufe:
+        ziele.append(f"mcp:{mcp_server}:{stufe}")
+    treffer = [p for p in perms if any(_match_permission(p, z) for z in ziele)]
+    return max(treffer, key=_ap.genauigkeit) if treffer else "?"
+
+
+def _aufrufe_vermerken(agent: "AgentContext", mcp_server: str, body_bytes) -> None:
+    """Erlaubte Aufrufe zaehlen (aufruf_protokoll). Nie Argumente; ein Fehler
+    hier haelt keinen Aufruf auf."""
+    try:
+        import aufruf_protokoll as _ap
+        werkzeuge = _aufgerufene_werkzeuge(_json.loads(body_bytes)) if body_bytes else []
+        for werkzeug in werkzeuge or [""]:
+            _ap.protokoll().vermerken(agent.name, agent.role, mcp_server, werkzeug,
+                                      gegriffenes_recht(agent.permissions, mcp_server, werkzeug))
+    except Exception:
+        logger.debug("aufruf-protokoll: vermerken gescheitert", exc_info=True)
+
+
 def _extract_mcp_server_from_path(path: str) -> str:
     """Extract MCP server name from request path.
 
@@ -576,6 +606,9 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                             },
                             status_code=403,
                         )
+
+            # Erlaubt: Aufrufer, Server, Werkzeug und gegriffenes Recht zaehlen (#2806).
+            _aufrufe_vermerken(agent, mcp_server, body_bytes)
 
         except jwt.ExpiredSignatureError:
             return JSONResponse({"error": "Token expired"}, status_code=401)

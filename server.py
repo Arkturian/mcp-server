@@ -12921,6 +12921,13 @@ async def startup() -> None:
         _asyncio.get_event_loop().create_task(_auth.revoked_poll_loop())
     except Exception as _e:
         logger.warning("revoked_jtis: Poller nicht gestartet: %s", _e)
+    # Erlaubte Werkzeugaufrufe je Agent und Recht in die Datei (#2806).
+    try:
+        import asyncio as _asyncio
+        import aufruf_protokoll as _ap
+        _asyncio.get_event_loop().create_task(_ap.protokoll().schreib_schleife())
+    except Exception as _e:
+        logger.warning("aufruf-protokoll: Schreiber nicht gestartet: %s", _e)
     for name, stack, mcp in _all_mcps():
         if ENABLED_MCPS is not None and name not in ENABLED_MCPS:
             continue
@@ -12932,6 +12939,11 @@ async def startup() -> None:
 @app.on_event("shutdown")
 async def shutdown() -> None:
     """Shut down session managers in reverse order."""
+    try:
+        import aufruf_protokoll as _ap
+        _ap.protokoll().schreiben()          # offene Zaehler nicht verlieren (#2806)
+    except Exception as e:
+        logger.warning("aufruf-protokoll: beim Beenden nicht geschrieben: %s", e)
     for name, stack in reversed(_started_mcps):
         try:
             await stack.aclose()

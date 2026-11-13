@@ -382,3 +382,76 @@ class Tagesentwurf(unittest.IsolatedAsyncioTestCase):
         tool = {t.name: t for t in await self.mcp.list_tools()}["zeit_tagesentwurf"]
         for wort in ("Personendatum", "`person`", "ohne_ordner", "nebenbei", "keine_freigabe", "Kundeninstanz"):
             self.assertIn(wort, tool.description)
+
+
+def _aufgaben_tag():
+    """Form von GET /api/aufgaben/tag (cloud-api, 13.11.2026), erfundene Werte."""
+    pf = {"id": "kern", "name": "Kern-Dienste", "pfad": ["AgentOS", "Kern-Dienste"], "art": "ordner"}
+    return {"person": "p@x.at", "datum": "2026-11-13", "noch_offen": 1,
+            "schritte": [
+                {"turn_id": "t1", "agent": "Cloud", "beginn": "2026-11-13T08:22:00+00:00", "dauer_s": 60,
+                 "zeit_s": 600, "aufgabe_id": 64, "titel": "Eigenes Drive", "projekt_id": "kern", "projekt": pf,
+                 "quelle": "luna", "projekt_quelle": "luna", "geerbt": 3, "eingabe_kurz": None, "satz": None},
+                {"turn_id": "t2", "agent": "Cloud", "beginn": "2026-11-13T09:00:00+00:00", "dauer_s": 30,
+                 "zeit_s": 300, "aufgabe_id": 64, "titel": "Eigenes Drive", "projekt_id": "kern", "projekt": pf,
+                 "quelle": "folge", "projekt_quelle": "folge", "geerbt": 0},
+                {"turn_id": "t3", "agent": "Comm", "beginn": "2026-11-13T10:00:00+00:00", "dauer_s": 120,
+                 "zeit_s": 120, "aufgabe_id": None, "titel": None, "projekt_id": None, "projekt": None,
+                 "quelle": "ohne", "projekt_quelle": "ohne", "geerbt": 0}],
+            "katalog": [{"id": "kern", "pfad": ["AgentOS", "Kern-Dienste"]},
+                        {"id": "d3f3", "pfad": ["EDERA", "INSECTA"]}]}
+
+
+class Aufgaben(unittest.IsolatedAsyncioTestCase):
+    """aufgaben_tag / aufgaben_umordnen (Alex ueber CloudV2-time, 13.11.2026)."""
+
+    async def asyncSetUp(self):
+        self.calls = []
+        self.antwort = _aufgaben_tag()
+
+        async def transport(method, path, **kwargs):
+            self.calls.append((method, path, kwargs))
+            return self.antwort
+        self.mcp = FastMCP("isolated-aufgaben")
+        register_zeit_tools(self.mcp, transport)
+
+    async def test_tag_summen_katalog_und_aufruf(self):
+        d = json.loads(_geliefert(await self.mcp.call_tool("aufgaben_tag", {"person": " p@x.at ", "agent": "Cloud"})))
+        self.assertEqual(self.calls, [("GET", "/api/aufgaben/tag", {
+            "params": {"person": "p@x.at", "agent": "Cloud", "katalog": "true"}, "timeout": 60})])
+        self.assertEqual(d["aufgaben"][0], {"aufgabe_id": 64, "titel": "Eigenes Drive",
+                                            "projekt": "AgentOS › Kern-Dienste", "schritte": 2, "min": 15,
+                                            "agenten": ["Cloud"]})
+        self.assertEqual(d["projekte"][1], {"projekt": None, "schritte": 1, "min": 2})
+        self.assertEqual(d["schritte"][0], {"turn_id": "t1", "uhr": "09:22", "agent": "Cloud", "min": 10.0,
+                                            "aufgabe_id": 64, "titel": "Eigenes Drive",
+                                            "projekt": "AgentOS › Kern-Dienste", "quelle": "luna",
+                                            "projekt_quelle": "luna", "geerbt": 3})
+        self.assertEqual(d["katalog"][1], {"id": "d3f3", "pfad": "EDERA › INSECTA"})
+        self.assertEqual(d["noch_offen"], 1)
+
+    async def test_umordnen_baut_ziel_und_auswahl(self):
+        self.antwort = {"geaendert": 1}
+        await self.mcp.call_tool("aufgaben_umordnen", {"person": "p@x.at", "projekt_id": "d3f3", "aufgaben": [64]})
+        await self.mcp.call_tool("aufgaben_umordnen", {"person": "p@x.at", "aufgabe_id": 53, "turn_ids": ["t1"]})
+        await self.mcp.call_tool("aufgaben_umordnen", {"person": "p@x.at", "neu_titel": " FileSync ",
+                                                      "projekt_id": "d3f3", "agent": "Cloud", "datum": "2026-11-13"})
+        bodies = [(m, p, k["json_body"]) for m, p, k in self.calls]
+        self.assertEqual(bodies, [
+            ("POST", "/api/aufgaben/umordnen", {"person": "p@x.at", "ziel": {"projekt_id": "d3f3"},
+                                                "auswahl": {"aufgaben": [64]}}),
+            ("POST", "/api/aufgaben/umordnen", {"person": "p@x.at", "ziel": {"aufgabe_id": 53},
+                                                "auswahl": {"turn_ids": ["t1"]}}),
+            ("POST", "/api/aufgaben/umordnen", {"person": "p@x.at",
+                                                "ziel": {"neu": {"titel": "FileSync", "projekt_id": "d3f3"}},
+                                                "auswahl": {"agent": "Cloud", "datum": "2026-11-13"}})])
+
+    async def test_beschreibung_nennt_das_tor(self):
+        tools = {t.name: t for t in await self.mcp.list_tools()}
+        self.assertIn("genau diese Person deinen laufenden Zug selbst begonnen hat", tools["aufgaben_umordnen"].description)
+        self.assertIn("Nie aus eigenem Antrieb", tools["aufgaben_umordnen"].description)
+        self.assertIn("zeit:lesen", tools["aufgaben_tag"].description)
+
+    async def test_fremde_antwort_unveraendert(self):
+        self.antwort = {"detail": {"grund": "kette"}}
+        self.assertIn("kette", str(await self.mcp.call_tool("aufgaben_tag", {"person": "p@x.at"})))

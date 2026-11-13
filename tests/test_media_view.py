@@ -128,3 +128,38 @@ def test_mcp_liefert_image_content(monkeypatch, als_agent):
     arten = [c.type for c in inhalte]
     assert arten == ["image", "text"]
     assert inhalte[0].mimeType == "image/jpeg"
+
+
+# --- #2815: Kundeninstanzen mit interner Storage-Adresse (ELE 13.11.) ------------------
+
+@pytest.mark.parametrize("basis,url,ok", [
+    # Kundeninstanz: storage-api nur intern ueber http
+    ("http://127.0.0.1:8002", "http://127.0.0.1:8002/storage/media/185?v=1&sig=s", True),
+    ("http://127.0.0.1:8002", "http://127.0.0.1:8003/storage/media/185", False),       # anderer Port
+    ("http://127.0.0.1:8002", "http://127.0.0.1/storage/media/185", False),            # Standardport 80
+    ("http://127.0.0.1:8002", "http://10.0.0.5:8002/storage/media/185", False),        # anderer Host
+    ("http://127.0.0.1:8002", "https://127.0.0.1:8002/storage/media/185", False),      # anderes Schema
+    ("http://127.0.0.1:8002", "http://127.0.0.1:8002/storage/media/186", False),       # anderes Objekt
+    # Foederation: https, unveraendert
+    ("https://api-storage.arkturian.com", "https://api-storage.arkturian.com/storage/media/185", True),
+    ("https://api-storage.arkturian.com", "https://api-storage.arkturian.com:443/storage/media/185", True),
+    ("https://api-storage.arkturian.com", "http://api-storage.arkturian.com/storage/media/185", False),
+    ("https://api-storage.arkturian.com", "https://api-storage.arkturian.com:8443/storage/media/185", False),
+    ("https://api-storage.arkturian.com", "https://evil.example/storage/media/185", False),
+    ("ftp://storage.example", "ftp://storage.example/storage/media/185", False),               # nur http(s)
+    ("https://api-storage.arkturian.com", "nicht einmal eine url", False),
+])
+def test_url_passt_zur_storage_basis(monkeypatch, basis, url, ok):
+    import server
+    monkeypatch.setattr(server, "STORAGE_API_BASE", basis)
+    assert server._media_view_url_ok(url, 185) is ok
+
+
+def test_kundeninstanz_holt_das_bild_ueber_die_interne_adresse(monkeypatch, als_agent):
+    from mcp.server.fastmcp import Image
+    import server as _s
+    monkeypatch.setattr(_s, "STORAGE_API_BASE", "http://127.0.0.1:8002")
+    server, _, geholt = _setup(monkeypatch, meta={"mime_type": "image/png", "width": 10, "height": 10},
+                               item={"id": 7, "url": "http://127.0.0.1:8002/storage/media/7?v=1&sig=s"})
+    r = asyncio.run(server.storage_media_view(id=7))
+    assert isinstance(r[0], Image) and str(geholt[0].url).startswith("http://127.0.0.1:8002/storage/media/7")

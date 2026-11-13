@@ -1240,14 +1240,23 @@ def _media_view_params(meta: Dict[str, Any], max_px: int) -> Dict[str, Any]:
     return params
 
 
+_STANDARD_PORT = {"https": 443, "http": 80}
+
+
 def _media_view_url_ok(url: str, object_id: int) -> bool:
-    """Nur https auf den Storage-Host und genau dieses Objekt holen."""
+    """Nur den konfigurierten Storage und genau dieses Objekt holen: Schema, Host und
+    Port wie STORAGE_API_BASE. Bei uns https, auf Kundeninstanzen laeuft storage-api
+    nur intern ueber http://127.0.0.1:8002 (#2815, ELE 13.11.: die feste https-Pflicht
+    schloss dort jedes Bild aus). Ein http-Link zu einer https-Basis bleibt abgelehnt."""
     try:
         u, base = httpx.URL(url), httpx.URL(STORAGE_API_BASE)
     except Exception:  # noqa: BLE001
         return False
-    return (u.scheme == "https" and u.host == base.host
-            and u.path.rstrip("/").endswith(f"/storage/media/{object_id}"))
+    if base.scheme not in _STANDARD_PORT or u.scheme != base.scheme or u.host != base.host:
+        return False
+    if (u.port or _STANDARD_PORT[u.scheme]) != (base.port or _STANDARD_PORT[base.scheme]):
+        return False
+    return u.path.rstrip("/").endswith(f"/storage/media/{object_id}")
 
 
 @storage_mcp.tool(

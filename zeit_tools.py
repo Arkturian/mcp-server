@@ -295,9 +295,10 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
             "aufloest. `datum` = Kalendertag in Wien (JJJJ-MM-TT, leer = heute), `agent` = nur dieser "
             "Agent. `texte=true`: je Schritt auch `eingabe` (Anfang der Eingabe) und `satz` (Schluss "
             "des Agenten), um eine Zuordnung zu beurteilen. Die Texte liefert die cloud-api nur, wenn "
-            "die Person dein Besitzer ist oder deinen laufenden Zug selbst begonnen hat; sonst fehlen "
-            "sie. Lesen darf, wer `zeit:lesen` hat, oder ein Agent, dessen laufenden Zug genau diese "
-            "Person selbst begonnen hat. Personendaten: nur dem Menschen selbst zeigen."
+            "die Person dein Besitzer ist, oder wenn du ohne Leserecht in ihrem eigenen Zug liest; "
+            "ein Leserecht allein (`zeit:lesen`, `zeit:lesen:<mail>`) gibt keine Texte. Lesen darf, "
+            "wer `zeit:lesen` hat, oder ein Agent, dessen laufenden Zug genau diese Person selbst "
+            "begonnen hat. Personendaten: nur dem Menschen selbst zeigen."
         ),
     )
     async def aufgaben_tag(person: str, datum: str = "", agent: str = "", katalog: bool = True,

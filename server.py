@@ -11419,18 +11419,23 @@ async def cloud_rund_info(id: str) -> Dict[str, Any]:
         "Besitzer, nie ein anderer. Wartet bis ~20 s; status 'offen' heisst: Ergebnis kommt "
         "spaeter als Eingabe [Browser-Ergebnis <id>] oder ueber browser_ergebnis(request_id). "
         "Screenshot, html und datei kommen als private storage_id: Bild mit media_view, Datei "
-        "mit assets_download. Nur lesend, kein Klicken oder Tippen. Fehler: "
-        "browser_nicht_verbunden (keine Extension offen), abgelehnt, nicht_moeglich, "
+        "mit assets_download. Nur lesend, kein Klicken oder Tippen. "
+        "sitzung: 'aktiv' (Vorgabe) ist der Browser, an dem der Mensch sitzt, nie ein Agenten-Chrome; 'agenten' ist sein Agenten-Chrome (Chrome nur fuer Agenten, agenten_chrome in browser_sitzungen); sonst eine sitzung_id. Fehler: "
+        "browser_nicht_verbunden (keine Extension offen; agenten_chrome_verfuegbar: true heisst, "
+        "verbunden ist nur ein Agenten-Chrome, dann sitzung='agenten'), abgelehnt, nicht_moeglich, "
         "sitzung_unsicher (503: ein Knoten mit deinen Sitzungen antwortete nicht rechtzeitig, nach erneut_in_s Sekunden wiederholen, nicht als 'nicht verbunden' lesen). "
         "Hoechstens 10 Anfragen je Minute."
     ),
 )
-async def cloud_browser_anfrage(art: str, grund: str, selector: str = "", adresse: str = "") -> Dict[str, Any]:
+async def cloud_browser_anfrage(art: str, grund: str, selector: str = "", adresse: str = "",
+                                sitzung: str = "aktiv") -> Dict[str, Any]:
     body: Dict[str, Any] = {"art": art, "grund": grund}
     if selector:
         body["selector"] = selector
     if adresse:
         body["adresse"] = adresse
+    if sitzung and sitzung != "aktiv":
+        body["sitzung"] = sitzung          # #2868: aeltere cloud-api ignoriert das Feld
     return await call_cloud_api("POST", "/api/browser/requests", json_body=body, timeout=60.0)
 
 
@@ -11453,7 +11458,9 @@ async def cloud_browser_ergebnis(request_id: str) -> Dict[str, Any]:
     description=(
         "Browser-Sitzungen (offene AgentOS-Seitenleisten) des Menschen hinter deinem Zug, "
         "sonst deines Besitzers; die aktive zuerst (Post 5857). Ohne deine Freigabe nur grob: "
-        "sitzung_id, geraet, aktiv, zuletzt_aktiv. Mit gueltiger Freigabe dazu freigabe "
+        "sitzung_id, geraet, aktiv, zuletzt_aktiv, agenten_chrome (true: Chrome nur fuer Agenten, "
+        "nie 'aktiv', erreichbar mit sitzung='agenten', dort nur im eigenen Tab nach neuerTab). "
+        "Mit gueltiger Freigabe dazu freigabe "
         "{freigabe_id, stufe, host, bis} und tab {titel, adresse, host}, solange der aktive Tab "
         "auf dem freigegebenen Host steht. knoten_unsicher + erneut_in_s: ein Knoten antwortete "
         "nicht rechtzeitig, seine Sitzungen fehlen in der Liste, sind aber nicht weg -- nach "
@@ -11469,8 +11476,9 @@ async def cloud_browser_sitzungen() -> Dict[str, Any]:
     description=(
         "Freigabe auf Zeit fuer eine Browser-Sitzung anfragen (Post 5857). stufe 'lesen' oder "
         "'steuern' (steuern schliesst lesen ein), grund: eine Zeile fuer den Menschen, minuten "
-        "1..60 (Vorgabe 15), sitzung: sitzung_id oder 'aktiv'. Gilt nur fuer den Host des "
-        "aktiven Tabs in diesem Moment. Banking-, Zahlungs- und Finanzseiten sind gesperrt "
+        "1..60 (Vorgabe 15), sitzung: sitzung_id, 'aktiv' (nie ein Agenten-Chrome) oder 'agenten' "
+        "(Agenten-Chrome; dort ist automatisch erlauben immer an, eine Karte ist nicht noetig). Gilt nur "
+        "fuer den Host des aktiven Tabs in diesem Moment. Banking-, Zahlungs- und Finanzseiten sind gesperrt "
         "(host_gesperrt). Wartet bis ~20 s; status 'offen' heisst: Ergebnis kommt als Eingabe "
         "[Browser-Freigabe <id>]. Der Mensch kann die Dauer kuerzen und jederzeit widerrufen. "
         "sitzung_unsicher (503: ein Knoten mit deinen Sitzungen antwortete nicht rechtzeitig, nach erneut_in_s Sekunden wiederholen, nicht als 'nicht verbunden' lesen)."
@@ -11506,6 +11514,10 @@ async def cloud_browser_freigabe(stufe: str, grund: str, minuten: int = 15, sitz
         "evaluate{ausdruck<=5000 Zeichen}. Wartezeit: network/profile/coverage sekunden+15 s, "
         "heap 60 s, sonst ~20 s; danach zeitueberschreitung, kein Nachreichen. "
         "Ohne gueltige Freigabe: freigabe_noetig (dann browser_freigabe). "
+        "sitzung: 'aktiv' (Vorgabe) ist der Browser, an dem der Mensch sitzt, nie ein Agenten-Chrome; 'agenten' ist sein Agenten-Chrome (Chrome nur fuer Agenten, agenten_chrome in browser_sitzungen); sonst eine sitzung_id. Im Agenten-Chrome arbeitest du nur in deinem eigenen Tab: "
+        "zuerst neuerTab{adresse} mit sitzung='agenten', sonst eigener_tab_noetig; danach gehen auch "
+        "Aufrufe mit 'aktiv' dorthin, solange die Freigabe laeuft. browser_nicht_verbunden mit "
+        "agenten_chrome_verfuegbar: verbunden ist nur ein Agenten-Chrome. "
         "sitzung_unsicher (503: ein Knoten mit deinen Sitzungen antwortete nicht rechtzeitig, nach erneut_in_s Sekunden wiederholen, nicht als 'nicht verbunden' lesen). "
         "Dateien kommen als "
         "private storage_id (media_view / assets_download). Verlaesst der Tab den Host, lehnt die "
@@ -11527,7 +11539,8 @@ async def cloud_browser_aufruf(methode: str, parameter: Optional[Dict[str, Any]]
 
 @cloud_mcp.tool(
     name="browser_freigabe_beenden",
-    description="Deine eigene Browser-Freigabe fuer eine Sitzung (sitzung_id oder 'aktiv') sofort beenden.",
+    description=("Deine eigene Browser-Freigabe fuer eine Sitzung (sitzung_id, 'aktiv' oder 'agenten') "
+                 "sofort beenden. Im Agenten-Chrome schliesst die Extension dabei deine Tabs."),
 )
 async def cloud_browser_freigabe_beenden(sitzung: str = "aktiv") -> Dict[str, Any]:
     return await call_cloud_api("POST", "/api/browser/freigaben/beenden", json_body={"sitzung": sitzung})

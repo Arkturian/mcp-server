@@ -17,6 +17,7 @@ class AiKopfzeilenTests(unittest.TestCase):
     def _genimage(self, jwt, agent):
         with patch.object(auth, "current_caller_jwt", return_value=jwt), \
              patch.object(auth, "current_caller_agent_name", return_value=agent), \
+             patch.object(auth, "current_caller_verified_agent", return_value=agent), \
              patch.object(server, "AI_API_KEY", "ai-schluessel"), \
              patch.object(server, "_with_grant_scope", side_effect=lambda b: b), \
              patch.object(server, "_fetch_json", new=AsyncMock(return_value={"image_url": "u"})) as f:
@@ -37,6 +38,7 @@ class AiKopfzeilenTests(unittest.TestCase):
     def test_mitgegebene_kopfzeilen_gehen_vor(self):
         with patch.object(auth, "current_caller_jwt", return_value="jwt-123"), \
              patch.object(auth, "current_caller_agent_name", return_value="Bauleiter"), \
+             patch.object(auth, "current_caller_verified_agent", return_value="Bauleiter"), \
              patch.object(server, "AI_API_KEY", ""), \
              patch.object(server, "_fetch_json", new=AsyncMock(return_value={})) as f:
             asyncio.run(server.call_ai_api("POST", "/ai/x", extra_headers={"X-Agent-Name": "Anders"}))

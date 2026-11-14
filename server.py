@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import urllib.parse
 import logging
 import os
 import time
@@ -272,6 +273,32 @@ def mount_mcp(name: str, path: str, mcp_app) -> bool:
 # --------------------------------------------------------------------------- #
 
 
+def _seg(wert: Any) -> str:
+    """Ein Wert als EIN Pfadsegment (#2892): prozentkodiert, `/`, `?`, `#` und
+    `..` brechen nicht mehr aus dem Pfad aus. Leer, `.`, `..` und Steuer-
+    zeichen weist er ab, statt sie still zu kodieren."""
+    s = "" if wert is None else str(wert)
+    if s in ("", ".", "..") or any(ord(c) < 32 for c in s):
+        raise ValueError(f"ungueltiger Pfadteil: {s!r}")
+    return urllib.parse.quote(s, safe="")
+
+
+def _pfad_sicher(url: str) -> None:
+    """Kein Punkt-Segment im Pfad (#2892). httpx normalisiert `..` VOR dem
+    Versand, ein Werkzeugargument wie role="../../x" landete so auf einer
+    beliebigen Route -- mit den Kopfzeilen (Token, Hauptschluessel) des
+    Werkzeugs. Auch prozentkodiert (%2e%2e) und doppelt kodiert."""
+    for teil in urllib.parse.urlsplit(url).path.split("/"):
+        roh = teil
+        for _ in range(3):
+            neu = urllib.parse.unquote(roh)
+            if neu == roh:
+                break
+            roh = neu
+        if roh in (".", ".."):
+            raise ValueError("unsicherer Pfad in der Anfrage (Punkt-Segment)")
+
+
 async def _fetch_json(
     method: str,
     url: str,
@@ -283,6 +310,7 @@ async def _fetch_json(
     form: Optional[Dict[str, str]] = None,
     timeout: Optional[float] = None,
 ) -> Any:
+    _pfad_sicher(url)
     async with httpx.AsyncClient(timeout=timeout or HTTP_TIMEOUT) as client:
         try:
             # NOTE: pass `params` through as-is (don't coerce None → {}).
@@ -366,7 +394,7 @@ def _caller_auth_headers(api_key_fallback: str = "") -> Dict[str, str]:
          the MCP is called anonymously and we still want some auth.
       3. Empty (anonymous) → upstream applies its anon-policy.
     """
-    from auth import current_caller_agent_name, current_caller_jwt
+    from auth import current_caller_jwt, current_caller_verified_agent
 
     headers: Dict[str, str] = {}
     jwt_str = current_caller_jwt()
@@ -375,7 +403,10 @@ def _caller_auth_headers(api_key_fallback: str = "") -> Dict[str, str]:
         # This identity is derived from the already RS256-validated JWT by
         # JWTAuthMiddleware.  Never derive it from a tool/body argument such
         # as from_session: that value is only an untrusted routing claim.
-        agent_name = current_caller_agent_name()
+        # NUR ein Agenten-Token (type=agent) nennt einen Agenten (#2890): bei
+        # einem Benutzer-Token stand hier dessen `sub`, und cloud-api nahm ihn
+        # mit dem Gateway-Nachweis unten als Agenten dieses Namens.
+        agent_name = current_caller_verified_agent()
         if agent_name:
             # Nicht-ASCII-Namen prozentkodiert + markiert (#2402): httpx wirft
             # sonst vor dem Versand, der Agent hat kein einziges Werkzeug.
@@ -387,8 +418,9 @@ def _caller_auth_headers(api_key_fallback: str = "") -> Dict[str, str]:
 
 def _cloud_request_headers() -> Dict[str, str]:
     """Forward a verified agent plus proof that it came through this gateway."""
+    from auth import current_caller_verified_agent
     headers = _caller_auth_headers()
-    if headers.get("X-Agent-Name"):
+    if headers.get("X-Agent-Name") and current_caller_verified_agent():
         headers["X-Agent-Gateway"] = "mcp"
         if IACP_TOKEN:
             headers["X-IACP-Token"] = IACP_TOKEN
@@ -1612,6 +1644,39 @@ async def storage_assets_upload(
     return await call_storage_upload(file_bytes, filename, form_fields=form_fields, share_scopes=share_scopes)
 
 
+def _upload_wurzeln() -> List["Path"]:
+    """Verzeichnisse, aus denen assets_upload_file lesen darf (#2891).
+
+    Das Gateway laeuft als root neben auth-api und allen .env-Dateien; der Pfad
+    war frei -- jede Datei des Hosts ging in den Storage. MCP_UPLOAD_WURZELN
+    (durch os.pathsep getrennt) nennt die erlaubten Wurzeln, Vorgabe
+    /tmp/mcp-upload. Leer gesetzt: das Werkzeug ist aus."""
+    from pathlib import Path as _P
+    roh = os.getenv("MCP_UPLOAD_WURZELN")
+    teile = ["/tmp/mcp-upload"] if roh is None else [t for t in roh.split(os.pathsep) if t.strip()]
+    return [_P(t.strip()) for t in teile]
+
+
+def _upload_pfad_erlaubt(p: "Path") -> "Path":
+    wurzeln = _upload_wurzeln()
+    if not wurzeln:
+        raise ValueError("assets_upload_file ist auf diesem Gateway aus; nimm assets_upload_ticket oder assets_fetch(url=...)")
+    try:
+        echt = p.resolve(strict=True)
+    except (OSError, RuntimeError):
+        echt = None
+    for w in wurzeln:
+        try:
+            if echt is not None and echt.is_relative_to(w.resolve(strict=True)) and not p.is_symlink():
+                return echt
+        except (OSError, RuntimeError):
+            continue
+    raise ValueError(
+        "path not allowed: assets_upload_file reads only files under "
+        + ", ".join(str(w) for w in wurzeln)
+        + " on the MCP host (MCP_UPLOAD_WURZELN). Copy the file there, or use assets_upload_ticket / assets_fetch(url=...).")
+
+
 @storage_mcp.tool(
     name="assets_upload_file",
     description="""Upload a file that already exists on THIS MCP server's disk — no base64.
@@ -1631,7 +1696,9 @@ async def storage_assets_upload(
     - you only hold the bytes in-process    -> assets_upload(file_base64=...)
 
     Parameters:
-    - path: absolute path on the MCP server's host (required)
+    - path: absolute path on the MCP server's host (required). Only files under
+      the allowed roots (MCP_UPLOAD_WURZELN, default /tmp/mcp-upload) are read;
+      symlinks out of them are refused.
     - filename: override the stored name (defaults to the file's own name)
     - context / collection_id / link_id: metadata as in assets_upload
     - is_public: make publicly readable (default false)
@@ -1668,6 +1735,7 @@ async def storage_assets_upload_file(
     p = _P(path)
     if not p.is_absolute():
         raise ValueError("path must be absolute")
+    p = _upload_pfad_erlaubt(p)
     if not p.is_file():
         # The file is read HERE, on the MCP server's own filesystem — not on
         # whatever host runs storage-api. Those are different machines, so
@@ -1685,8 +1753,10 @@ async def storage_assets_upload_file(
         )
     share_scopes = await _share_with_scopes(share_with)
     try:
-        file_bytes = p.read_bytes()
-    except PermissionError as exc:
+        fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "rb") as fh:
+            file_bytes = fh.read()
+    except OSError as exc:
         raise ValueError(f"cannot read {path}: {exc}") from exc
 
     form_fields: Dict[str, str] = {
@@ -10233,8 +10303,7 @@ async def comm_gmail_get_attachment(
         "`attachment_not_in_message`. No API-key fallback on customer instances.\n"
         "deliver='storage' (default): bytes go server-side into Storage API; "
         "you get {storage: {id, file_url, media_url}} plus filename/mime_type/size. "
-        "deliver='file': written to `save_to` (absolute path on the MCP host; a "
-        "directory gets the original filename). deliver='base64': legacy inline "
+        "deliver='base64': legacy inline "
         "`data` — only for small files you really need in context."
     ),
 )
@@ -10252,10 +10321,12 @@ async def comm_outlook_get_attachment(
     # den Agentenkontext. Hier: Zugehoerigkeit pruefen, Bytes serverseitig
     # holen, Ausgabe als Storage-Objekt oder Datei; Base64 nur auf Wunsch.
     deliver = (deliver or "storage").strip().lower()
-    if deliver not in ("storage", "file", "base64"):
-        return {"error": "deliver_invalid", "allowed": ["storage", "file", "base64"]}
-    if deliver == "file" and not (save_to and os.path.isabs(save_to)):
-        return {"error": "save_to_required", "hint": "deliver='file' braucht einen absoluten Pfad auf dem MCP-Host"}
+    if deliver == "file":
+        # #2891: schrieb die Rohbytes an jeden Pfad des Gateway-Hosts (als root).
+        return {"error": "deliver_file_entfernt",
+                "hint": "deliver='storage' legt den Anhang in die Storage-API; den Link dort holen."}
+    if deliver not in ("storage", "base64"):
+        return {"error": "deliver_invalid", "allowed": ["storage", "base64"]}
 
     msg = await call_comm_api("GET", f"/api/v1/outlook/{source}/messages/{message_id}")
     _m = msg or {}
@@ -10331,16 +10402,6 @@ async def comm_outlook_get_attachment(
     if deliver == "base64":
         out["data"] = data_b64
         return out
-    if deliver == "file":
-        from pathlib import Path as _P
-        target = _P(save_to)
-        if target.is_dir():
-            target = target / filename
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(raw)
-        out["path"] = str(target)
-        return out
-
     form_fields: Dict[str, str] = {
         "ai_mode": "none",
         "is_public": str(bool(is_public)).lower(),
@@ -11935,15 +11996,31 @@ async def cloud_send_to_role(
     text: str,
     user_id: str = "iacp",
 ) -> Dict[str, Any]:
+    # #2892: Vorher ohne Aufrufer, mit pauschalem X-IACP-Token und `role`
+    # unkodiert im Pfad -- role="../../<route>" erreichte jede POST-Route der
+    # cloud-api mit dem Foederationsschluessel. Jetzt: nur gepruefte Agenten,
+    # Rolle nach Muster, als ein Segment; Absender ist der Agent aus dem
+    # Token (from_session -> can_contact), `user_id` aus dem Argument zaehlt nicht.
+    from auth import current_caller_verified_agent
     if not IACP_TOKEN:
         return {"error": "IACP_TOKEN env not configured on this MCP server"}
+    absender = current_caller_verified_agent()
+    if not absender:
+        return {"error": "send_to_role_nur_fuer_agenten",
+                "hint": "send_to_role braucht ein Agenten-Token; Menschen erreichen Agenten ueber send_message."}
+    rolle = (role or "").strip()
+    if not _ROLLE_RE.fullmatch(rolle):
+        return {"error": "role_invalid", "hint": "Rolle: Buchstaben, Ziffern, '-' und '_', hoechstens 64 Zeichen"}
     return await _fetch_json(
         "POST",
-        f"{CLOUD_API_BASE}/api/iacp/send/{role}",
-        headers={"X-IACP-Token": IACP_TOKEN},
-        json_body={"text": text, "user_id": user_id},
+        f"{CLOUD_API_BASE}/api/iacp/send/{_seg(rolle)}",
+        headers=_cloud_request_headers(),
+        json_body={"text": text, "user_id": absender, "from_session": absender},
         timeout=30.0,
     )
+
+
+_ROLLE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
 
 # ---------------------------------------------------------------------------

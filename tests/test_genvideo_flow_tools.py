@@ -15,6 +15,7 @@ class GenvideoFlowTests(unittest.TestCase):
     def _lauf(self, coro_fn, *a, **k):
         with patch.object(auth, "current_caller_jwt", return_value="jwt-1"), \
              patch.object(auth, "current_caller_agent_name", return_value="Bauleiter"), \
+             patch.object(auth, "current_caller_verified_agent", return_value="Bauleiter"), \
              patch.object(server, "_fetch_json", new=AsyncMock(return_value={"ok": 1})) as f:
             asyncio.run(coro_fn(*a, **k))
         return f.call_args

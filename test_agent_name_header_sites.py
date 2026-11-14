@@ -15,6 +15,7 @@ from agent_identity_header import get_agent_name
 def test_caller_auth_headers_mit_umlaut_gehen_durch_httpx(monkeypatch):
     monkeypatch.setattr(auth, "current_caller_jwt", lambda: "signed.jwt")
     monkeypatch.setattr(auth, "current_caller_agent_name", lambda: "Kunde-Handbücher")
+    monkeypatch.setattr(auth, "current_caller_verified_agent", lambda: "Kunde-Handbücher")
     h = server._caller_auth_headers()
     req = httpx.Request("GET", "http://x.test/", headers=h)        # warf vorher UnicodeEncodeError
     assert get_agent_name(req.headers) == "Kunde-Handbücher"
@@ -24,6 +25,7 @@ def test_caller_auth_headers_mit_umlaut_gehen_durch_httpx(monkeypatch):
 def test_caller_auth_headers_ascii_unveraendert(monkeypatch):
     monkeypatch.setattr(auth, "current_caller_jwt", lambda: "signed.jwt")
     monkeypatch.setattr(auth, "current_caller_agent_name", lambda: "AppDev")
+    monkeypatch.setattr(auth, "current_caller_verified_agent", lambda: "AppDev")
     assert server._caller_auth_headers() == {"Authorization": "Bearer signed.jwt", "X-Agent-Name": "AppDev"}
 
 

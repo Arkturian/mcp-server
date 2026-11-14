@@ -56,6 +56,7 @@ class CloudReplyBridgeTests(unittest.TestCase):
     def test_verified_jwt_context_is_the_only_agent_header_source(self):
         jwt_token = auth._current_jwt.set("signed.jwt")
         name_token = auth._current_agent_name.set("AppDev")
+        agent_token = auth._current_is_agent.set(True)   # gepruefter Agenten-Token (#2890)
         previous_iacp_token = server.IACP_TOKEN
         server.IACP_TOKEN = "shared-secret"
         try:
@@ -74,6 +75,7 @@ class CloudReplyBridgeTests(unittest.TestCase):
             )
         finally:
             server.IACP_TOKEN = previous_iacp_token
+            auth._current_is_agent.reset(agent_token)
             auth._current_agent_name.reset(name_token)
             auth._current_jwt.reset(jwt_token)
 

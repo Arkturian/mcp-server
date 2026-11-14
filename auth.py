@@ -105,7 +105,9 @@ class AgentContext:
     role: str = ""
     department: str = ""
     tenant: str = ""
-    permissions: list[str] = field(default_factory=lambda: ["*"])
+    # Fail-closed (#2890): ohne Recht kein Recht. Vorher ["*"] -- ein Kontext,
+    # dem niemand Rechte zugewiesen hatte, durfte alles.
+    permissions: list[str] = field(default_factory=list)
     authenticated: bool = False
 
     def has_permission(self, required: str) -> bool:
@@ -169,6 +171,48 @@ async def _get_public_key():
     except Exception as exc:
         logger.error("Failed to fetch JWKS from %s: %s", AUTH_API_JWKS_URL, exc)
         return _public_key  # return cached key if available
+
+
+# Zielgruppen (aud), die am Gateway nichts zu suchen haben (#2890): Tokens, die
+# auth-api fuer ANDERE Anwendungen ausstellt (OpenCloud-Web u. a.). Muster mit
+# fnmatch, kommagetrennt in MCP_ABGELEHNTE_AUD.
+_ABGELEHNTE_AUD = [m.strip() for m in os.getenv("MCP_ABGELEHNTE_AUD", "opencloud*").split(",") if m.strip()]
+# Ein Superadmin mit OAuth-Token OHNE mcp:-Scope (Client fragte keinen an)
+# bekommt "*". Abschalten: MCP_SUPERADMIN_OHNE_SCOPE=aus.
+_SUPERADMIN_OHNE_SCOPE = os.getenv("MCP_SUPERADMIN_OHNE_SCOPE", "an").strip().lower() not in ("aus", "0", "false", "no")
+
+
+def _aud_abgelehnt(claims: dict) -> bool:
+    import fnmatch
+    aud = claims.get("aud")
+    werte = aud if isinstance(aud, list) else ([aud] if aud else [])
+    return any(fnmatch.fnmatchcase(str(a).lower(), m.lower()) for a in werte for m in _ABGELEHNTE_AUD)
+
+
+def _rechte_aus_claims(claims: dict) -> list:
+    """Die Rechte eines gepruften Tokens -- nie aus dem FEHLEN eines Claims (#2890).
+
+    Vorher `claims.get("permissions", ["*"])`: auth-api stellt Benutzer-, OIDC-
+    und OAuth-Tokens ohne `permissions` aus, jedes gueltige Benutzer-Token hatte
+    damit am Gateway alle Rechte.
+      - Agent und Dienst (type agent/service): genau ihr `permissions`-Claim.
+      - Mensch mit OAuth-Token: je Scope `mcp:<server>` das Recht mcp:<server>:*.
+      - Superadmin (Betreiber) mit eigenem Login-Token (ohne aud): "*"; mit
+        OAuth-Token ohne mcp:-Scope ebenso, solange MCP_SUPERADMIN_OHNE_SCOPE an ist.
+      - sonst: keine Rechte.
+    """
+    typ = claims.get("type")
+    if typ in ("agent", "service"):
+        p = claims.get("permissions")
+        return [str(x) for x in p] if isinstance(p, list) else []
+    scopes = str(claims.get("scope") or "").split()
+    aus_scopes = sorted({f"mcp:{sc[4:]}:*" for sc in scopes
+                         if sc.startswith("mcp:") and sc.count(":") == 1 and len(sc) > 4})
+    if aus_scopes:
+        return aus_scopes
+    if claims.get("is_superadmin") is True and (claims.get("aud") is None or _SUPERADMIN_OHNE_SCOPE):
+        return ["*"]
+    return []
 
 
 def _decode_jwt(token: str, public_key) -> dict:
@@ -318,6 +362,13 @@ def _reject_if_revoked(claims: dict) -> None:
 # ausdruecklich traegt. server.py meldet hier die Durchreichen an (Entscheid
 # Alex 26.10.2026: p3-buchhaltung nur mit ausdruecklichem Recht).
 EXPLICIT_ONLY_SERVERS: set[str] = set()
+# Server, deren Upstream-Helfer einen BETREIBER-Hauptschluessel statt des
+# Aufrufer-JWT schicken (#2890: business, oneal-storage, codepilot, artrack,
+# story). Ein Platzhalterrecht reicht dort nicht -- sonst ruft jeder mit "*"
+# die Hauptschluessel-Dienste ueber Mandantengrenzen hinweg auf. Je Gateway
+# per MCP_EXPLIZIT_SERVER aenderbar (leer = keiner).
+_HAUPTSCHLUESSEL_SERVER = os.getenv("MCP_EXPLIZIT_SERVER", "business,oneal-storage,codepilot,artrack,story")
+EXPLICIT_ONLY_SERVERS.update(s.strip().lower() for s in _HAUPTSCHLUESSEL_SERVER.split(",") if s.strip())
 
 
 # Server, die JEDER angemeldete Agent dieser Instanz nutzen darf, ohne eigenes
@@ -503,6 +554,10 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                 return await call_next(request)
 
             claims = _decode_jwt(token, public_key)
+            if _aud_abgelehnt(claims):
+                logger.warning("JWT abgewiesen: aud %r ist am Gateway nicht zugelassen (sub=%s)",
+                               claims.get("aud"), claims.get("sub"))
+                return JSONResponse({"error": "Invalid token: audience not accepted"}, status_code=401)
 
             agent = AgentContext(
                 name=claims.get("agent_name", claims.get("sub", "")),
@@ -510,7 +565,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                 role=claims.get("role", ""),
                 department=claims.get("department", ""),
                 tenant=claims.get("tenant", ""),
-                permissions=claims.get("permissions", ["*"]),
+                permissions=_rechte_aus_claims(claims),
                 authenticated=True,
             )
             request.state.agent = agent

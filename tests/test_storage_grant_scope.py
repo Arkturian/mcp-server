@@ -298,6 +298,15 @@ def test_share_with_landet_im_grant_scope(monkeypatch):
     assert calls[3][1]["params"]["grant_scope"] == "cloud-session:DRONE-CHALLENGE"
 
 
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _upload_wurzel(monkeypatch, tmp_path):
+    """assets_upload_file liest nur unter MCP_UPLOAD_WURZELN (#2891)."""
+    monkeypatch.setenv("MCP_UPLOAD_WURZELN", str(tmp_path))
+
+
 def test_share_with_im_multipart_upload(monkeypatch, tmp_path):
     import server
     gesendet = {}

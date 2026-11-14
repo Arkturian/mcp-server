@@ -117,6 +117,7 @@ def test_server_meldet_person_am_gateway_an():
 def test_bearer_wird_durchgereicht():
     with patch.object(auth, "current_caller_jwt", return_value="jwt-business"), \
          patch.object(auth, "current_caller_agent_name", return_value="Business"), \
+         patch.object(auth, "current_caller_verified_agent", return_value="Business"), \
          patch.object(server, "_fetch_json", new=AsyncMock(return_value={"persons": []})) as f:
         asyncio.run(server.call_person_api("GET", "/api/v1/persons", params={"tenant_id": "t1"}))
     args, kw = f.call_args
@@ -129,6 +130,7 @@ def test_bearer_wird_durchgereicht():
 def test_ohne_aufrufer_kein_aufruf():
     with patch.object(auth, "current_caller_jwt", return_value=None), \
          patch.object(auth, "current_caller_agent_name", return_value=None), \
+         patch.object(auth, "current_caller_verified_agent", return_value=None), \
          patch.object(server, "_fetch_json", new=AsyncMock()) as f:
         with pytest.raises(ValueError, match="person_requires_caller"):
             asyncio.run(server.call_person_api("GET", "/api/v1/tenants"))

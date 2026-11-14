@@ -95,10 +95,11 @@ def test_new_comm_api_stores_server_side(monkeypatch):
     assert seen[-1][1] == {"mode": "storage"}
 
 
-def test_file_delivery_writes_into_directory(tmp_path, monkeypatch):
+def test_file_delivery_ist_entfernt(tmp_path, monkeypatch):
+    """#2891: deliver='file' schrieb die Rohbytes als root an jeden Pfad des Gateways."""
     import server
-    monkeypatch.setattr(server, "call_comm_api", _fake_comm([]))
+    gerufen = []
+    monkeypatch.setattr(server, "call_comm_api", _fake_comm(gerufen))
     r = asyncio.run(server.comm_outlook_get_attachment("steiner", "M1", "A1", deliver="file", save_to=str(tmp_path)))
-    assert Path(r["path"]).read_bytes() == b"abc" and r["path"].endswith("rechnung.pdf")
-    bad = asyncio.run(server.comm_outlook_get_attachment("steiner", "M1", "A1", deliver="file", save_to="relative"))
-    assert bad["error"] == "save_to_required"
+    assert r["error"] == "deliver_file_entfernt"
+    assert list(tmp_path.iterdir()) == [] and gerufen == []

@@ -419,6 +419,36 @@ def _aufgerufene_werkzeuge(body_json) -> list:
             for t in _jsonrpc_teile(body_json) if t.get("method") == "tools/call"]
 
 
+# Werkzeug-Parameter, die entfernt sind und die FastMCP sonst STILL verwerfen
+# wuerde (#2894; FastMCP ignoriert unbekannte Argumente). business_*(api_key=...)
+# liefe danach mit dem Schluessel des Gateways -- also womoeglich im falschen
+# Mandanten, denn business-api bindet den Mandanten an den Schluessel. Lieber eine
+# klare Ablehnung als ein Aufruf in einem anderen Mandanten.
+ENTFERNTE_ARGUMENTE = {
+    "business": {
+        "api_key": ("api_key ist kein Werkzeug-Parameter mehr (#2894): die business-Werkzeuge "
+                    "laufen mit dem Mandanten dieses Gateways. Fuer einen anderen Mandanten "
+                    "bitte Cloud fragen, den Schluessel nicht im Aufruf mitgeben."),
+    },
+}
+
+
+def _entfernte_argumente(mcp_server: str, body_json) -> str:
+    """Grund, wenn ein tools/call ein entferntes Argument mitschickt, sonst ""."""
+    regeln = ENTFERNTE_ARGUMENTE.get(mcp_server) or {}
+    if not regeln:
+        return ""
+    for t in _jsonrpc_teile(body_json):
+        if t.get("method") != "tools/call":
+            continue
+        params = t.get("params") if isinstance(t.get("params"), dict) else {}
+        args = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
+        for name, grund in regeln.items():
+            if name in args:
+                return grund
+    return ""
+
+
 def _offen(mcp_server: str) -> bool:
     return mcp_server in OFFENE_SERVER and mcp_server not in EXPLICIT_ONLY_SERVERS
 
@@ -512,6 +542,16 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                 methoden = []
 
         is_tool_call = jsonrpc_method == "tools/call"
+        if is_tool_call and body_bytes:
+            try:
+                _koerper = _json.loads(body_bytes)
+                _grund = _entfernte_argumente(_extract_mcp_server_from_path(request.url.path), _koerper)
+            except Exception:
+                _koerper, _grund = None, ""
+            if _grund:
+                return JSONResponse({"jsonrpc": "2.0",
+                                     "id": _koerper.get("id") if isinstance(_koerper, dict) else None,
+                                     "error": {"code": -32602, "message": _grund}}, status_code=400)
         if request.method == "POST" and methoden and all(m in OHNE_ANMELDUNG for m in methoden):
             request.state.agent = AgentContext()
             return await call_next(request)

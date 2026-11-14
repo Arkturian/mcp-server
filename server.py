@@ -85,7 +85,9 @@ STORAGE_API_BASE = os.getenv("ARKTURIAN_API_BASE", "https://api-storage.arkturia
 STORAGE_API_KEY = os.getenv("ARKTURIAN_API_KEY", "")
 
 ONEAL_API_BASE = os.getenv("ONEAL_API_BASE", "http://127.0.0.1:8014")
-ONEAL_API_KEY = os.getenv("ONEAL_API_KEY", "oneal_demo_token")
+# #2894: kein eingebauter Ersatzschluessel mehr -- ohne ONEAL_API_KEY scheitert
+# ein Aufruf mit klarer Meldung (call_oneal_api).
+ONEAL_API_KEY = os.getenv("ONEAL_API_KEY", "").strip()
 
 # O'Neal Storage API (same base URL as Arkturian, different API key for tenant isolation)
 ONEAL_STORAGE_API_KEY = os.getenv("ONEAL_STORAGE_API_KEY", "")
@@ -176,7 +178,9 @@ COMM_API_KEY = os.getenv("COMM_API_KEY", "")
 
 # Story API
 STORY_API_BASE = os.getenv("STORY_API_BASE", "http://localhost:8070")
-STORY_API_KEY = os.getenv("STORY_API_KEY", "story_ark_secret_2025")
+# #2894: kein eingebauter Ersatzschluessel mehr -- ohne STORY_API_KEY scheitert
+# ein Aufruf mit klarer Meldung (call_story_api).
+STORY_API_KEY = os.getenv("STORY_API_KEY", "").strip()
 
 # Knowledge API
 KNOWLEDGE_API_BASE = os.getenv("KNOWLEDGE_API_BASE", "https://knowledge-api.arkturian.com")
@@ -598,6 +602,8 @@ async def call_oneal_api(
     *,
     params: Optional[Dict[str, Any]] = None,
 ) -> Any:
+    if not ONEAL_API_KEY:
+        raise RuntimeError("oneal: ONEAL_API_KEY ist auf diesem Gateway nicht gesetzt")
     return await _fetch_json(
         method,
         f"{ONEAL_API_BASE}{endpoint}",
@@ -1016,10 +1022,13 @@ async def call_business_api(
     *,
     params: Optional[Dict[str, Any]] = None,
     json_body: Optional[Dict[str, Any]] = None,
-    api_key: Optional[str] = None,
 ) -> Any:
-    """Call Business API for invoicing, clients, transactions, and documents."""
-    effective_key = api_key or BUSINESS_API_KEY
+    """Call Business API for invoicing, clients, transactions, and documents.
+
+    #2894: Immer mit dem Schluessel des Gateways. Der fruehere Werkzeug-Parameter
+    api_key liess jeden Aufrufer einen fremden Mandanten-Schluessel einsetzen
+    (business-api bindet den Mandanten an den Schluessel)."""
+    effective_key = BUSINESS_API_KEY
     return await _fetch_json(
         method,
         f"{BUSINESS_API_BASE}{endpoint}",
@@ -1067,6 +1076,8 @@ async def call_story_api(
     json_body: Optional[Dict[str, Any]] = None,
 ) -> Any:
     """Call Story Architect API for cinematic storyboard management."""
+    if not STORY_API_KEY:
+        raise RuntimeError("story: STORY_API_KEY ist auf diesem Gateway nicht gesetzt")
     return await _fetch_json(
         method,
         f"{STORY_API_BASE}{endpoint}",
@@ -3777,9 +3788,9 @@ async def content_posts_export_pdf(
 ) -> Dict[str, Any]:
     # Render via internal address (fast, no SSL handshake)
     internal_url = f"{CONTENT_API_BASE}/api/v1/posts/{post_id}/export.pdf"
-    headers: Dict[str, str] = {}
-    if CONTENT_API_KEY:
-        headers["X-API-KEY"] = CONTENT_API_KEY
+    # #2894: Ausweis des Aufrufers (content-api prueft seine Rechte am Beitrag);
+    # der Dienstschluessel nur, wenn kein Aufrufer-JWT vorliegt.
+    headers: Dict[str, str] = _caller_auth_headers(api_key_fallback=CONTENT_API_KEY)
     params = {"include_media": "true" if include_media else "false"}
 
     async with httpx.AsyncClient(timeout=120.0) as client:
@@ -3852,9 +3863,9 @@ async def content_posts_export_themed_pdf(
     include_base64: bool = False,
 ) -> Dict[str, Any]:
     internal_url = f"{CONTENT_API_BASE}/api/v1/posts/{post_id}/export-themed.pdf"
-    headers: Dict[str, str] = {}
-    if CONTENT_API_KEY:
-        headers["X-API-KEY"] = CONTENT_API_KEY
+    # #2894: Ausweis des Aufrufers (content-api prueft seine Rechte am Beitrag);
+    # der Dienstschluessel nur, wenn kein Aufrufer-JWT vorliegt.
+    headers: Dict[str, str] = _caller_auth_headers(api_key_fallback=CONTENT_API_KEY)
     params: Dict[str, str] = {"theme": theme}
     if logo_url:
         params["logo_url"] = logo_url
@@ -6501,13 +6512,24 @@ app = FastAPI(title="arkturian-mcp", version="3.0.0", description="Arkturian MCP
               docs_url="/docs" if _DOCS_AN else None, redoc_url="/redoc" if _DOCS_AN else None,
               openapi_url="/openapi.json" if _DOCS_AN else None)
 
+# CORS (#2894): vorher allow_origins=["*"] mit allow_credentials=True. Kein
+# Browser-Client ruft das Gateway direkt (Portal, Extension und content-app
+# gehen ueber ihre APIs; claude.ai und ChatGPT rufen serverseitig). Erlaubt
+# sind nur die Herkuenfte aus MCP_CORS_ORIGINS (Komma-Liste, genaue Origins),
+# ohne Anmeldedaten: das Gateway nimmt Bearer-Token, keine Cookies.
+_CORS_ORIGINS = [o.strip().rstrip("/") for o in (os.getenv("MCP_CORS_ORIGINS") or "").split(",")
+                 if o.strip() and o.strip() != "*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Mcp-Session-Id",
+                   "Mcp-Protocol-Version", "Last-Event-ID"],
 )
+if not (os.getenv("MCP_ALLOWED_HOSTS") or "").strip():
+    logger.warning("MCP_ALLOWED_HOSTS ist nicht gesetzt -- kein Schutz gegen DNS-Rebinding "
+                   "fuer die oeffentlichen Namen (#2894)")
 
 # JWT Authentication Middleware — validates agent tokens from Auth-API
 from auth import JWTAuthMiddleware
@@ -8132,17 +8154,17 @@ Use clients_list() to get current list with IDs.
     name="dashboard_summary",
     description="Get dashboard summary: income/expense YTD and MTD, profit, open documents.",
 )
-async def business_dashboard_summary(api_key: Optional[str] = None) -> Dict[str, Any]:
-    return await call_business_api("GET", "/api/v1/dashboard/summary", api_key=api_key)
+async def business_dashboard_summary() -> Dict[str, Any]:
+    return await call_business_api("GET", "/api/v1/dashboard/summary")
 
 
 @business_mcp.tool(
     name="dashboard_cashflow",
     description="Get monthly cashflow data (income, expense, profit per month) for a given year.",
 )
-async def business_dashboard_cashflow(year: Optional[int] = None, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
+async def business_dashboard_cashflow(year: Optional[int] = None) -> List[Dict[str, Any]]:
     params = _clean_params(year=year)
-    return await call_business_api("GET", "/api/v1/dashboard/cashflow", params=params, api_key=api_key)
+    return await call_business_api("GET", "/api/v1/dashboard/cashflow", params=params)
 
 
 # --- Clients ---
@@ -8155,18 +8177,17 @@ async def business_dashboard_cashflow(year: Optional[int] = None, api_key: Optio
 async def business_clients_list(
     search: Optional[str] = None,
     limit: int = 50,
-    api_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     params = _clean_params(search=search, limit=limit)
-    return await call_business_api("GET", "/api/v1/clients/", params=params, api_key=api_key)
+    return await call_business_api("GET", "/api/v1/clients/", params=params)
 
 
 @business_mcp.tool(
     name="clients_get",
     description="Get a single client by ID with all details.",
 )
-async def business_clients_get(client_id: int, api_key: Optional[str] = None) -> Dict[str, Any]:
-    return await call_business_api("GET", f"/api/v1/clients/{client_id}", api_key=api_key)
+async def business_clients_get(client_id: int) -> Dict[str, Any]:
+    return await call_business_api("GET", f"/api/v1/clients/{client_id}")
 
 
 @business_mcp.tool(
@@ -8184,14 +8205,13 @@ async def business_clients_create(
     country: str = "AT",
     uid_number: Optional[str] = None,
     notes: Optional[str] = None,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {"name": name, "country": country}
     for k, v in {"company": company, "email": email, "phone": phone, "address": address,
                   "zip": zip, "city": city, "uid_number": uid_number, "notes": notes}.items():
         if v is not None:
             body[k] = v
-    return await call_business_api("POST", "/api/v1/clients/", json_body=body, api_key=api_key)
+    return await call_business_api("POST", "/api/v1/clients/", json_body=body)
 
 
 @business_mcp.tool(
@@ -8213,7 +8233,6 @@ async def business_clients_update(
     lead_status: Optional[str] = None,
     source: Optional[str] = None,
     next_followup_at: Optional[str] = None,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {}
     for k, v in {"name": name, "company": company, "email": email, "phone": phone,
@@ -8222,7 +8241,7 @@ async def business_clients_update(
                   "source": source, "next_followup_at": next_followup_at}.items():
         if v is not None:
             body[k] = v
-    return await call_business_api("PATCH", f"/api/v1/clients/{client_id}", json_body=body, api_key=api_key)
+    return await call_business_api("PATCH", f"/api/v1/clients/{client_id}", json_body=body)
 
 
 # --- CRM ---
@@ -8235,11 +8254,10 @@ async def business_clients_update(
 async def business_clients_update_status(
     client_id: int,
     lead_status: str,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     return await call_business_api(
         "PATCH", f"/api/v1/clients/{client_id}",
-        json_body={"lead_status": lead_status}, api_key=api_key,
+        json_body={"lead_status": lead_status},
     )
 
 
@@ -8252,13 +8270,12 @@ async def business_clients_log_interaction(
     interaction_type: str,
     subject: str,
     description: Optional[str] = None,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {"interaction_type": interaction_type, "subject": subject}
     if description:
         body["description"] = description
     return await call_business_api(
-        "POST", f"/api/v1/clients/{client_id}/interactions", json_body=body, api_key=api_key,
+        "POST", f"/api/v1/clients/{client_id}/interactions", json_body=body,
     )
 
 
@@ -8269,11 +8286,10 @@ async def business_clients_log_interaction(
 async def business_clients_interactions(
     client_id: int,
     limit: int = 20,
-    api_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     params = _clean_params(limit=limit)
     return await call_business_api(
-        "GET", f"/api/v1/clients/{client_id}/interactions", params=params, api_key=api_key,
+        "GET", f"/api/v1/clients/{client_id}/interactions", params=params,
     )
 
 
@@ -8281,16 +8297,16 @@ async def business_clients_interactions(
     name="clients_pipeline",
     description="CRM pipeline overview: clients grouped by lead status (lead, prospect, active, inactive, lost) with counts.",
 )
-async def business_clients_pipeline(api_key: Optional[str] = None) -> Dict[str, Any]:
-    return await call_business_api("GET", "/api/v1/crm/pipeline", api_key=api_key)
+async def business_clients_pipeline() -> Dict[str, Any]:
+    return await call_business_api("GET", "/api/v1/crm/pipeline")
 
 
 @business_mcp.tool(
     name="clients_followups",
     description="List clients with overdue or upcoming followups (next 7 days). Returns overdue and upcoming lists.",
 )
-async def business_clients_followups(api_key: Optional[str] = None) -> Dict[str, Any]:
-    return await call_business_api("GET", "/api/v1/crm/followups", api_key=api_key)
+async def business_clients_followups() -> Dict[str, Any]:
+    return await call_business_api("GET", "/api/v1/crm/followups")
 
 
 @business_mcp.tool(
@@ -8300,11 +8316,10 @@ async def business_clients_followups(api_key: Optional[str] = None) -> Dict[str,
 async def business_clients_set_followup(
     client_id: int,
     next_followup_at: str,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     return await call_business_api(
         "PATCH", f"/api/v1/clients/{client_id}",
-        json_body={"next_followup_at": next_followup_at}, api_key=api_key,
+        json_body={"next_followup_at": next_followup_at},
     )
 
 
@@ -8321,18 +8336,17 @@ async def business_documents_list(
     client_id: Optional[int] = None,
     year: Optional[int] = None,
     limit: int = 50,
-    api_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     params = _clean_params(doc_type=doc_type, status=status, client_id=client_id, year=year, limit=limit)
-    return await call_business_api("GET", "/api/v1/documents/", params=params, api_key=api_key)
+    return await call_business_api("GET", "/api/v1/documents/", params=params)
 
 
 @business_mcp.tool(
     name="documents_get",
     description="Get a single document with all line items and client details.",
 )
-async def business_documents_get(doc_id: int, api_key: Optional[str] = None) -> Dict[str, Any]:
-    return await call_business_api("GET", f"/api/v1/documents/{doc_id}", api_key=api_key)
+async def business_documents_get(doc_id: int) -> Dict[str, Any]:
+    return await call_business_api("GET", f"/api/v1/documents/{doc_id}")
 
 
 @business_mcp.tool(
@@ -8348,7 +8362,6 @@ async def business_create_honorarnote(
     issued_date: Optional[str] = None,
     due_days: int = 14,
     notes: Optional[str] = None,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {
         "client_id": client_id,
@@ -8362,7 +8375,7 @@ async def business_create_honorarnote(
         body["issued_date"] = issued_date
     if notes:
         body["notes"] = notes
-    return await call_business_api("POST", "/api/v1/documents/honorarnote", json_body=body, api_key=api_key)
+    return await call_business_api("POST", "/api/v1/documents/honorarnote", json_body=body)
 
 
 @business_mcp.tool(
@@ -8376,7 +8389,6 @@ async def business_create_invoice(
     issued_date: Optional[str] = None,
     due_days: int = 14,
     notes: Optional[str] = None,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {
         "client_id": client_id,
@@ -8388,7 +8400,7 @@ async def business_create_invoice(
         body["issued_date"] = issued_date
     if notes:
         body["notes"] = notes
-    return await call_business_api("POST", "/api/v1/documents/invoice", json_body=body, api_key=api_key)
+    return await call_business_api("POST", "/api/v1/documents/invoice", json_body=body)
 
 
 @business_mcp.tool(
@@ -8398,20 +8410,19 @@ async def business_create_invoice(
 async def business_documents_mark_paid(
     doc_id: int,
     paid_date: Optional[str] = None,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {}
     if paid_date:
         body["paid_date"] = paid_date
-    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/mark-paid", json_body=body, api_key=api_key)
+    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/mark-paid", json_body=body)
 
 
 @business_mcp.tool(
     name="documents_regenerate_pdf",
     description="Regenerate the PDF for an existing document (e.g. after template changes).",
 )
-async def business_documents_regenerate_pdf(doc_id: int, api_key: Optional[str] = None) -> Dict[str, Any]:
-    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/regenerate-pdf", api_key=api_key)
+async def business_documents_regenerate_pdf(doc_id: int) -> Dict[str, Any]:
+    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/regenerate-pdf")
 
 
 @business_mcp.tool(
@@ -8421,20 +8432,19 @@ async def business_documents_regenerate_pdf(doc_id: int, api_key: Optional[str] 
 async def business_documents_send(
     doc_id: int,
     recipient_email: Optional[str] = None,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {}
     if recipient_email:
         body["recipient_email"] = recipient_email
-    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/send", json_body=body, api_key=api_key)
+    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/send", json_body=body)
 
 
 @business_mcp.tool(
     name="documents_cancel",
     description="Cancel a document (status → cancelled).",
 )
-async def business_documents_cancel(doc_id: int, api_key: Optional[str] = None) -> Dict[str, Any]:
-    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/cancel", api_key=api_key)
+async def business_documents_cancel(doc_id: int) -> Dict[str, Any]:
+    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/cancel")
 
 
 # --- Transactions ---
@@ -8449,10 +8459,9 @@ async def business_transactions_list(
     year: Optional[int] = None,
     category: Optional[str] = None,
     limit: int = 100,
-    api_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     params = _clean_params(tx_type=tx_type, year=year, category=category, limit=limit)
-    return await call_business_api("GET", "/api/v1/transactions", params=params, api_key=api_key)
+    return await call_business_api("GET", "/api/v1/transactions", params=params)
 
 
 @business_mcp.tool(
@@ -8468,21 +8477,20 @@ async def business_transactions_create(
     vat_rate: float = 0.0,
     client_id: Optional[int] = None,
     receipt_url: Optional[str] = None,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {"tx_type": tx_type, "amount": amount, "vat_rate": vat_rate}
     for k, v in {"category": category, "description": description, "tx_date": tx_date, "client_id": client_id, "receipt_url": receipt_url}.items():
         if v is not None:
             body[k] = v
-    return await call_business_api("POST", "/api/v1/transactions", json_body=body, api_key=api_key)
+    return await call_business_api("POST", "/api/v1/transactions", json_body=body)
 
 
 @business_mcp.tool(
     name="transactions_delete",
     description="Delete a transaction by ID. Only works for transactions not linked to documents.",
 )
-async def business_transactions_delete(tx_id: int, api_key: Optional[str] = None) -> Dict[str, str]:
-    await call_business_api("DELETE", f"/api/v1/transactions/{tx_id}", api_key=api_key)
+async def business_transactions_delete(tx_id: int) -> Dict[str, str]:
+    await call_business_api("DELETE", f"/api/v1/transactions/{tx_id}")
     return {"status": "deleted", "id": str(tx_id)}
 
 
@@ -8493,9 +8501,9 @@ async def business_transactions_delete(tx_id: int, api_key: Optional[str] = None
     name="categories_list",
     description="List transaction categories. Optional filter by cat_type (income/expense).",
 )
-async def business_categories_list(cat_type: Optional[str] = None, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
+async def business_categories_list(cat_type: Optional[str] = None) -> List[Dict[str, Any]]:
     params = _clean_params(cat_type=cat_type)
-    return await call_business_api("GET", "/api/v1/categories", params=params, api_key=api_key)
+    return await call_business_api("GET", "/api/v1/categories", params=params)
 
 
 # --- Bank Statement Import ---
@@ -8527,7 +8535,6 @@ async def business_transactions_import(
     preview_limit: int = 50,
     cross_dedup_days: int = 3,
     since_date: Optional[str] = None,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {
         "csv_text": csv_text,
@@ -8542,7 +8549,7 @@ async def business_transactions_import(
     if since_date is not None:
         body["since_date"] = since_date
     return await call_business_api(
-        "POST", "/api/v1/transactions/import", json_body=body, api_key=api_key
+        "POST", "/api/v1/transactions/import", json_body=body
     )
 
 
@@ -8552,11 +8559,10 @@ async def business_transactions_import(
 )
 async def business_transactions_import_batches(
     limit: int = 20,
-    api_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     params = _clean_params(limit=limit)
     return await call_business_api(
-        "GET", "/api/v1/transactions/import/batches", params=params, api_key=api_key
+        "GET", "/api/v1/transactions/import/batches", params=params
     )
 
 
@@ -8569,10 +8575,9 @@ async def business_transactions_import_batches(
 )
 async def business_transactions_import_delete_batch(
     batch_id: str,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     return await call_business_api(
-        "DELETE", f"/api/v1/transactions/import/batches/{_seg(batch_id)}", api_key=api_key   # #2892
+        "DELETE", f"/api/v1/transactions/import/batches/{_seg(batch_id)}"   # #2892
     )
 
 
@@ -8586,8 +8591,8 @@ async def business_transactions_import_delete_batch(
         "Webhook registered? Returns {mode, configured, token_ok, webhook_id, registered_webhooks}."
     ),
 )
-async def business_paypal_status(api_key: Optional[str] = None) -> Dict[str, Any]:
-    return await call_business_api("GET", "/api/v1/paypal/status", api_key=api_key)
+async def business_paypal_status() -> Dict[str, Any]:
+    return await call_business_api("GET", "/api/v1/paypal/status")
 
 
 @business_mcp.tool(
@@ -8602,7 +8607,6 @@ async def business_paypal_events_list(
     process_status: Optional[str] = None,
     event_type: Optional[str] = None,
     limit: int = 50,
-    api_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     params = _clean_params(
         process_status=process_status,
@@ -8610,7 +8614,7 @@ async def business_paypal_events_list(
         limit=limit,
     )
     return await call_business_api(
-        "GET", "/api/v1/paypal/events", params=params, api_key=api_key
+        "GET", "/api/v1/paypal/events", params=params
     )
 
 
@@ -8624,11 +8628,10 @@ async def business_paypal_events_list(
 )
 async def business_paypal_sync(
     limit: int = 50,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     params = _clean_params(limit=limit)
     return await call_business_api(
-        "POST", "/api/v1/paypal/sync", params=params, api_key=api_key
+        "POST", "/api/v1/paypal/sync", params=params
     )
 
 
@@ -8653,7 +8656,6 @@ async def business_paypal_transactions(
     transaction_status: Optional[str] = None,
     transaction_id: Optional[str] = None,
     limit: int = 100,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     params = _clean_params(
         days=days,
@@ -8665,7 +8667,7 @@ async def business_paypal_transactions(
         limit=limit,
     )
     return await call_business_api(
-        "GET", "/api/v1/paypal/transactions", params=params, api_key=api_key
+        "GET", "/api/v1/paypal/transactions", params=params
     )
 
 
@@ -8677,8 +8679,8 @@ async def business_paypal_transactions(
         "available, total, primary}]}."
     ),
 )
-async def business_paypal_balance(api_key: Optional[str] = None) -> Dict[str, Any]:
-    return await call_business_api("GET", "/api/v1/paypal/balance", api_key=api_key)
+async def business_paypal_balance() -> Dict[str, Any]:
+    return await call_business_api("GET", "/api/v1/paypal/balance")
 
 
 # --- Reminders ---
@@ -8712,7 +8714,6 @@ async def business_reminders_create(
     linked_client_id: Optional[int] = None,
     linked_document_id: Optional[int] = None,
     linked_transaction_id: Optional[int] = None,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {
         "title": title,
@@ -8733,7 +8734,7 @@ async def business_reminders_create(
     }.items():
         if v is not None:
             body[k] = v
-    return await call_business_api("POST", "/api/v1/reminders", json_body=body, api_key=api_key)
+    return await call_business_api("POST", "/api/v1/reminders", json_body=body)
 
 
 @business_mcp.tool(
@@ -8749,7 +8750,6 @@ async def business_reminders_list(
     due_before: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
-    api_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     params = _clean_params(
         status=status,
@@ -8758,7 +8758,7 @@ async def business_reminders_list(
         limit=limit,
         offset=offset,
     )
-    return await call_business_api("GET", "/api/v1/reminders", params=params, api_key=api_key)
+    return await call_business_api("GET", "/api/v1/reminders", params=params)
 
 
 @business_mcp.tool(
@@ -8767,18 +8767,17 @@ async def business_reminders_list(
 )
 async def business_reminders_upcoming(
     limit: int = 10,
-    api_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     params = _clean_params(limit=limit)
-    return await call_business_api("GET", "/api/v1/reminders/upcoming", params=params, api_key=api_key)
+    return await call_business_api("GET", "/api/v1/reminders/upcoming", params=params)
 
 
 @business_mcp.tool(
     name="reminders_get",
     description="Get a reminder by ID.",
 )
-async def business_reminders_get(rem_id: int, api_key: Optional[str] = None) -> Dict[str, Any]:
-    return await call_business_api("GET", f"/api/v1/reminders/{rem_id}", api_key=api_key)
+async def business_reminders_get(rem_id: int) -> Dict[str, Any]:
+    return await call_business_api("GET", f"/api/v1/reminders/{rem_id}")
 
 
 @business_mcp.tool(
@@ -8802,7 +8801,6 @@ async def business_reminders_update(
     channel: Optional[str] = None,
     recipient: Optional[str] = None,
     status: Optional[str] = None,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {}
     for k, v in {
@@ -8820,39 +8818,39 @@ async def business_reminders_update(
     }.items():
         if v is not None:
             body[k] = v
-    return await call_business_api("PATCH", f"/api/v1/reminders/{rem_id}", json_body=body, api_key=api_key)
+    return await call_business_api("PATCH", f"/api/v1/reminders/{rem_id}", json_body=body)
 
 
 @business_mcp.tool(
     name="reminders_complete",
     description="Mark a reminder as completed (recurring reminders stop firing).",
 )
-async def business_reminders_complete(rem_id: int, api_key: Optional[str] = None) -> Dict[str, Any]:
-    return await call_business_api("POST", f"/api/v1/reminders/{rem_id}/complete", api_key=api_key)
+async def business_reminders_complete(rem_id: int) -> Dict[str, Any]:
+    return await call_business_api("POST", f"/api/v1/reminders/{rem_id}/complete")
 
 
 @business_mcp.tool(
     name="reminders_cancel",
     description="Cancel a reminder (status → cancelled, stops firing but keeps history).",
 )
-async def business_reminders_cancel(rem_id: int, api_key: Optional[str] = None) -> Dict[str, Any]:
-    return await call_business_api("POST", f"/api/v1/reminders/{rem_id}/cancel", api_key=api_key)
+async def business_reminders_cancel(rem_id: int) -> Dict[str, Any]:
+    return await call_business_api("POST", f"/api/v1/reminders/{rem_id}/cancel")
 
 
 @business_mcp.tool(
     name="reminders_fire",
     description="Fire a reminder NOW (manual/testing). Recurrence still advances normally.",
 )
-async def business_reminders_fire(rem_id: int, api_key: Optional[str] = None) -> Dict[str, Any]:
-    return await call_business_api("POST", f"/api/v1/reminders/{rem_id}/fire", api_key=api_key)
+async def business_reminders_fire(rem_id: int) -> Dict[str, Any]:
+    return await call_business_api("POST", f"/api/v1/reminders/{rem_id}/fire")
 
 
 @business_mcp.tool(
     name="reminders_delete",
     description="Permanently delete a reminder.",
 )
-async def business_reminders_delete(rem_id: int, api_key: Optional[str] = None) -> Dict[str, str]:
-    await call_business_api("DELETE", f"/api/v1/reminders/{rem_id}", api_key=api_key)
+async def business_reminders_delete(rem_id: int) -> Dict[str, str]:
+    await call_business_api("DELETE", f"/api/v1/reminders/{rem_id}")
     return {"status": "deleted", "id": str(rem_id)}
 
 
@@ -10321,7 +10319,6 @@ async def comm_outlook_get_attachment(
     message_id: str,
     attachment_id: str,
     deliver: str = "storage",
-    save_to: str = "",
     is_public: bool = False,
     private: bool = False,
 ) -> Dict[str, Any]:

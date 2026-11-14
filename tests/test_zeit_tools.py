@@ -430,6 +430,15 @@ class Aufgaben(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(d["katalog"][1], {"id": "d3f3", "pfad": "EDERA › INSECTA"})
         self.assertEqual(d["noch_offen"], 1)
 
+    async def test_tag_texte_nur_auf_wunsch(self):
+        """Alex 14.11.2026: Seine Agenten lesen seine Eingaben, um die Zuordnung zu beurteilen."""
+        self.antwort["schritte"][1].update(eingabe_kurz="Bau das Drive", satz="Drive gebaut.")
+        ohne = json.loads(_geliefert(await self.mcp.call_tool("aufgaben_tag", {"person": "p@x.at"})))
+        self.assertNotIn("eingabe", ohne["schritte"][1])
+        mit = json.loads(_geliefert(await self.mcp.call_tool("aufgaben_tag", {"person": "p@x.at", "texte": True})))
+        self.assertEqual((mit["schritte"][1]["eingabe"], mit["schritte"][1]["satz"]), ("Bau das Drive", "Drive gebaut."))
+        self.assertNotIn("eingabe", mit["schritte"][0])          # nicht geliefert: kein Feld
+
     async def test_umordnen_baut_ziel_und_auswahl(self):
         self.antwort = {"geaendert": 1}
         await self.mcp.call_tool("aufgaben_umordnen", {"person": "p@x.at", "projekt_id": "d3f3", "aufgaben": [64]})

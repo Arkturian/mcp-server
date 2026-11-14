@@ -172,9 +172,10 @@ def _pfad_text(p: Optional[Dict[str, Any]]) -> Optional[str]:
     return " › ".join(p.get("pfad") or [p.get("name") or p.get("id") or ""])
 
 
-def aufgaben_zusammenfassen(d: Dict[str, Any]) -> Dict[str, Any]:
+def aufgaben_zusammenfassen(d: Dict[str, Any], texte: bool = False) -> Dict[str, Any]:
     """Die Schritte eines Tages (GET /api/aufgaben/tag) kompakt, mit Summen je Aufgabe und
-    Projekt und dem Projektkatalog. Rein, ohne Netz."""
+    Projekt und dem Projektkatalog. `texte`: je Schritt auch Eingabe und Schlusssatz, soweit
+    die cloud-api sie liefert (nur der Person selbst und den Agenten ihres Besitzers). Rein."""
     tz = ZoneInfo("Europe/Vienna")
     schritte = d.get("schritte") or []
     je_aufgabe: Dict[Any, Dict[str, Any]] = {}
@@ -187,7 +188,9 @@ def aufgaben_zusammenfassen(d: Dict[str, Any]) -> Dict[str, Any]:
             "turn_id": s.get("turn_id"), "uhr": _uhr(s.get("beginn"), tz), "agent": s.get("agent"),
             "min": round(sek / 60, 1), "aufgabe_id": s.get("aufgabe_id"), "titel": s.get("titel"),
             "projekt": projekt, "quelle": s.get("quelle"), "projekt_quelle": s.get("projekt_quelle"),
-            "geerbt": s.get("geerbt") or None}.items() if v not in (None, "")})
+            "geerbt": s.get("geerbt") or None,
+            "eingabe": s.get("eingabe_kurz") if texte else None,
+            "satz": s.get("satz") if texte else None}.items() if v not in (None, "")})
         a = je_aufgabe.setdefault(s.get("aufgabe_id"), {"aufgabe_id": s.get("aufgabe_id"), "titel": s.get("titel"),
                                                         "projekt": projekt, "schritte": 0, "s": 0.0,
                                                         "agenten": set()})
@@ -289,13 +292,16 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
             "`projekt_quelle` (mensch = vom Menschen festgelegt; luna, folge, regel = automatisch; "
             "ohne = keine Aufgabe). Dazu Summen je Aufgabe und je Projekt und mit katalog=true alle "
             "Projektordner (id und Pfad), damit du einen Namen wie „INSECTA“ in eine projekt_id "
-            "aufloest. Ohne Eingabetexte. `datum` = Kalendertag in Wien (JJJJ-MM-TT, leer = heute), "
-            "`agent` = nur dieser Agent. Lesen darf, wer `zeit:lesen` hat, oder ein Agent, dessen "
-            "laufenden Zug genau diese Person selbst begonnen hat. Personendaten: nur dem Menschen "
-            "selbst zeigen."
+            "aufloest. `datum` = Kalendertag in Wien (JJJJ-MM-TT, leer = heute), `agent` = nur dieser "
+            "Agent. `texte=true`: je Schritt auch `eingabe` (Anfang der Eingabe) und `satz` (Schluss "
+            "des Agenten), um eine Zuordnung zu beurteilen. Die Texte liefert die cloud-api nur, wenn "
+            "die Person dein Besitzer ist oder deinen laufenden Zug selbst begonnen hat; sonst fehlen "
+            "sie. Lesen darf, wer `zeit:lesen` hat, oder ein Agent, dessen laufenden Zug genau diese "
+            "Person selbst begonnen hat. Personendaten: nur dem Menschen selbst zeigen."
         ),
     )
-    async def aufgaben_tag(person: str, datum: str = "", agent: str = "", katalog: bool = True) -> Any:
+    async def aufgaben_tag(person: str, datum: str = "", agent: str = "", katalog: bool = True,
+                           texte: bool = False) -> Any:
         params = {k: v for k, v in (("person", person.strip()), ("datum", datum.strip()),
                                     ("agent", agent.strip())) if v}
         if katalog:
@@ -303,7 +309,7 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
         d = await transport("GET", "/api/aufgaben/tag", params=params, timeout=60)
         if not isinstance(d, dict) or "schritte" not in d:
             return d
-        return json.dumps(aufgaben_zusammenfassen(d), ensure_ascii=False, separators=(",", ":"))
+        return json.dumps(aufgaben_zusammenfassen(d, texte=texte), ensure_ascii=False, separators=(",", ":"))
 
     @mcp.tool(
         name="aufgaben_umordnen",

@@ -8734,10 +8734,16 @@ Used by Business API for document delivery, and directly for notifications.
 - contacts_get(contact_id) — Get contact details
 - incoming_messages(sender, chat_id, limit) — List incoming Telegram messages
 
-### Google Calendar
-- calendar_list_events(source, time_min, time_max, max_results) — List upcoming events
-- calendar_create_event(summary, start, end, source, description, location, attendees, timezone) — Create event
-- calendar_delete_event(event_id, source) — Delete event
+### Calendar (Google, Outlook, CalDAV/iCloud — same tools for all)
+- calendar_list_sources() — calendar sources of your human, with provider, actions, state
+- calendar_list_calendars(source) — calendars of an account ('primary' = main calendar)
+- calendar_list_events(source, time_min, time_max, max_results, calendar_id, query) — events, recurrences expanded
+- calendar_get_event(event_id, source, calendar_id) — one event incl. etag
+- calendar_create_event(summary, start, end, source, calendar_id, description, location, attendees, time_zone, online_meeting, send_updates)
+- calendar_update_event(event_id, source, calendar_id, summary?, start?, end?, …, send_updates, etag) — change/move
+- calendar_delete_event(event_id, source, calendar_id, send_updates)
+- calendar_respond(event_id, response, source, calendar_id, comment, send_updates) — accept/decline/tentative
+- calendar_freebusy(time_min, time_max, sources, emails, via_source, min_free_minutes) — busy times + common free slots
 
 ### Gmail
 - gmail_list_messages(source, query, max_results) — List emails
@@ -10415,71 +10421,224 @@ async def comm_gmail_mark_unread(source: str, message_id: str) -> Dict[str, Any]
     return await call_comm_api("POST", f"/api/v1/gmail/{source}/mark-unread/{message_id}")
 
 
+# ---------------------------------------------------------------------------
+# Kalender (#2839): ein Werkzeugsatz für Google, Outlook und CalDAV.
+# Die Quelle bestimmt den Anbieter; Termine haben überall dieselbe Form
+# (Post #5956). Welche Quellen es gibt: calendar_list_sources().
+# ---------------------------------------------------------------------------
+
+_CAL_EVENT_DOC = (
+    "Termin-Form: id, source, calendar_id, summary, description, location, "
+    "start, end (ISO mit Offset; ganztägig als Datum, end exklusiv), all_day, "
+    "time_zone, status, organizer, attendees[{email,name,response,self}], "
+    "my_response (needs_action|accepted|declined|tentative, null bei eigenen), "
+    "recurring_event_id, conference_url, html_link, can_edit, etag."
+)
+
+
+def _cal_path(source: str, *parts: str) -> str:
+    from urllib.parse import quote as _q
+    segs = [_q(source, safe="")] + [_q(p, safe="~=") for p in parts]
+    return "/api/v1/calendar/" + "/".join(segs)
+
+
+@comm_mcp.tool(
+    name="calendar_list_sources",
+    description=(
+        "Kalender-Quellen deines Menschen (nur solche, deren Besitzer er ist), "
+        "je mit provider (google|microsoft|caldav), account_email, writable, "
+        "actions (was die Quelle gerade kann) und state (ok|reauth|error)."
+    ),
+)
+async def comm_calendar_list_sources() -> Dict[str, Any]:
+    return await call_comm_api("GET", "/api/v1/calendar/sources")
+
+
+@comm_mcp.tool(
+    name="calendar_list_calendars",
+    description=(
+        "Kalender eines Kontos (Haupt-, geteilte und Unterkalender). Die id "
+        "geht als calendar_id in die anderen Werkzeuge; der Hauptkalender heißt "
+        "immer 'primary'. access: owner|writer|reader|freebusy."
+    ),
+)
+async def comm_calendar_list_calendars(source: str = "apopovic") -> Dict[str, Any]:
+    return await call_comm_api("GET", _cal_path(source, "calendars"))
+
+
 @comm_mcp.tool(
     name="calendar_list_events",
     description=(
-        "List upcoming Google Calendar events. "
-        "Sources (arkturian deployment): 'apopovic', 'edera', 'tsaier'. "
-        "On pdrei: 'jascha'. "
-        "Optional: time_min/time_max (ISO format), max_results."
+        "Termine einer Quelle im Zeitraum, Wiederholungen als Einzeltermine. "
+        "time_min/time_max ISO 8601 (ohne Offset gilt Europe/Vienna). Ohne "
+        "time_max: die nächsten 90 Tage, höchstens max_results (Vorgabe 25). "
+        "query sucht in Titel und Text. Antwort {events, truncated}. "
+        + _CAL_EVENT_DOC
     ),
 )
 async def comm_calendar_list_events(
     source: str = "apopovic",
     time_min: Optional[str] = None,
     time_max: Optional[str] = None,
-    max_results: int = 10,
+    max_results: Optional[int] = None,
+    calendar_id: str = "primary",
+    query: Optional[str] = None,
 ) -> Dict[str, Any]:
-    params = _clean_params(time_min=time_min, time_max=time_max, max_results=max_results)
-    return await call_comm_api("GET", f"/api/v1/calendar/{source}/events", params=params)
+    params = _clean_params(time_min=time_min, time_max=time_max, max_results=max_results,
+                           calendar_id=calendar_id, q=query)
+    return await call_comm_api("GET", _cal_path(source, "events"), params=params)
+
+
+@comm_mcp.tool(
+    name="calendar_get_event",
+    description="Einen Termin lesen (mit etag für calendar_update_event). " + _CAL_EVENT_DOC,
+)
+async def comm_calendar_get_event(event_id: str, source: str = "apopovic",
+                                  calendar_id: str = "primary") -> Dict[str, Any]:
+    return await call_comm_api("GET", _cal_path(source, "events", event_id),
+                               params={"calendar_id": calendar_id})
 
 
 @comm_mcp.tool(
     name="calendar_create_event",
     description=(
-        "Create a Google Calendar event. "
-        "Sources (arkturian deployment): 'apopovic', 'edera', 'tsaier'. "
-        "On pdrei: 'jascha'. "
-        "start/end: ISO datetime 'YYYY-MM-DDTHH:MM:SS' or date 'YYYY-MM-DD' for all-day. "
-        "attendees: list of email addresses (optional, sends invite). "
-        "google_meet: set True to auto-generate a Google Meet video link."
+        "Termin anlegen. start/end: ISO 'YYYY-MM-DDTHH:MM:SS' (Zeitzone time_zone, "
+        "Vorgabe Europe/Vienna) oder Datum 'YYYY-MM-DD' für ganztägig (end "
+        "exklusiv). attendees: E-Mail-Adressen — das ist Außenwirkung, nur im "
+        "Auftrag. send_updates 'all' verschickt Einladungen, 'none' nicht "
+        "(Outlook lädt immer ein). online_meeting: Meet bzw. Teams-Link. "
+        "Antwort: der angelegte Termin."
     ),
 )
 async def comm_calendar_create_event(
     summary: str,
     start: str,
-    end: str,
+    end: Optional[str] = None,
     source: str = "apopovic",
+    calendar_id: str = "primary",
     description: str = "",
     location: str = "",
     attendees: Optional[List[str]] = None,
-    timezone: str = "Europe/Vienna",
+    time_zone: str = "Europe/Vienna",
+    online_meeting: bool = False,
+    send_updates: str = "all",
+    timezone: Optional[str] = None,
     google_meet: bool = False,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
-        "summary": summary,
-        "start": start,
-        "end": end,
-        "description": description,
-        "timezone": timezone,
-        "google_meet": google_meet,
+        "summary": summary, "start": start, "end": end, "calendar_id": calendar_id,
+        "description": description, "location": location,
+        "time_zone": timezone or time_zone,
+        "online_meeting": bool(online_meeting or google_meet),
+        "send_updates": send_updates,
     }
-    if location:
-        payload["location"] = location
     if attendees:
         payload["attendees"] = attendees
-    return await call_comm_api("POST", f"/api/v1/calendar/{source}/events", json_body=payload)
+    return await call_comm_api("POST", _cal_path(source, "events"),
+                               json_body={k: v for k, v in payload.items() if v is not None})
+
+
+@comm_mcp.tool(
+    name="calendar_update_event",
+    description=(
+        "Termin ändern oder verschieben, nur die angegebenen Felder. Nur start "
+        "angeben verschiebt mit gleicher Dauer. attendees ersetzt die Liste "
+        "(bestehende Antworten bleiben). etag aus calendar_get_event schützt vor "
+        "Überschreiben (412 etag_mismatch). Bei Serien ändert die id eines "
+        "Vorkommens nur dieses. send_updates 'all'|'none'."
+    ),
+)
+async def comm_calendar_update_event(
+    event_id: str,
+    source: str = "apopovic",
+    calendar_id: str = "primary",
+    summary: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    all_day: Optional[bool] = None,
+    time_zone: Optional[str] = None,
+    description: Optional[str] = None,
+    location: Optional[str] = None,
+    attendees: Optional[List[str]] = None,
+    online_meeting: bool = False,
+    send_updates: str = "all",
+    etag: Optional[str] = None,
+) -> Dict[str, Any]:
+    payload = {
+        "summary": summary, "start": start, "end": end, "all_day": all_day,
+        "time_zone": time_zone, "description": description, "location": location,
+        "attendees": attendees, "online_meeting": online_meeting or None,
+        "send_updates": send_updates, "etag": etag,
+    }
+    return await call_comm_api("PATCH", _cal_path(source, "events", event_id),
+                               params={"calendar_id": calendar_id},
+                               json_body={k: v for k, v in payload.items() if v is not None})
 
 
 @comm_mcp.tool(
     name="calendar_delete_event",
-    description="Delete a Google Calendar event by ID.",
+    description=(
+        "Termin löschen. Bei Serien löscht die id eines Vorkommens nur dieses. "
+        "send_updates 'all' schickt Teilnehmern eine Absage, 'none' nicht."
+    ),
 )
 async def comm_calendar_delete_event(
     event_id: str,
     source: str = "apopovic",
+    calendar_id: str = "primary",
+    send_updates: str = "all",
 ) -> Dict[str, Any]:
-    return await call_comm_api("DELETE", f"/api/v1/calendar/{source}/events/{event_id}")
+    return await call_comm_api("DELETE", _cal_path(source, "events", event_id),
+                               params={"calendar_id": calendar_id, "send_updates": send_updates})
+
+
+@comm_mcp.tool(
+    name="calendar_respond",
+    description=(
+        "Einladung beantworten: response 'accepted', 'declined' oder 'tentative', "
+        "optional comment. send_updates 'all' teilt es dem Organisator mit. Nur "
+        "im Auftrag deines Menschen. Antwort: der Termin mit my_response."
+    ),
+)
+async def comm_calendar_respond(
+    event_id: str,
+    response: str,
+    source: str = "apopovic",
+    calendar_id: str = "primary",
+    comment: Optional[str] = None,
+    send_updates: str = "all",
+) -> Dict[str, Any]:
+    body = {"response": response, "send_updates": send_updates, "calendar_id": calendar_id}
+    if comment is not None:
+        body["comment"] = comment
+    return await call_comm_api("POST", _cal_path(source, "events", event_id, "respond"),
+                               json_body=body)
+
+
+@comm_mcp.tool(
+    name="calendar_freebusy",
+    description=(
+        "Frei/Belegt im Zeitraum: sources = eigene Quellen, emails = andere "
+        "Personen (abgefragt über via_source, Vorgabe die erste Quelle; geht bei "
+        "Google und Outlook, wenn die Person ihre Belegung teilt). Antwort: busy "
+        "je Quelle/Person, free = Lücken, in denen alle frei sind (mindestens "
+        "min_free_minutes), errors."
+    ),
+)
+async def comm_calendar_freebusy(
+    time_min: str,
+    time_max: str,
+    sources: Optional[List[str]] = None,
+    emails: Optional[List[str]] = None,
+    via_source: Optional[str] = None,
+    min_free_minutes: int = 30,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"time_min": time_min, "time_max": time_max,
+                            "sources": sources or [], "emails": emails or [],
+                            "min_free_minutes": min_free_minutes}
+    if via_source:
+        body["via_source"] = via_source
+    return await call_comm_api("POST", "/api/v1/calendar/freebusy", json_body=body)
 
 
 comm_app = comm_mcp.streamable_http_app()

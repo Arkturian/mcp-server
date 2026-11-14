@@ -39,3 +39,14 @@ class GenvideoFlowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GenimageFlowTests(GenvideoFlowTests):
+    def test_bild_rumpf(self):
+        c = self._lauf(server.ai_genimage_flow, "Haus", confirm_api_billing=True,
+                       aspect_ratio="16:9", reference_images=[4711, "https://x/y.png"])
+        self.assertTrue(c.args[1].endswith("/ai/genimage/flow"))
+        self.assertEqual(c.kwargs["json_body"], {"prompt": "Haus", "confirm_api_billing": True,
+                                                 "aspect_ratio": "16:9",
+                                                 "reference_images": ["4711", "https://x/y.png"]})
+        self.assertEqual(c.kwargs["headers"]["X-Agent-Name"], "Bauleiter")

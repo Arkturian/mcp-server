@@ -6812,6 +6812,42 @@ async def ai_genvideo_flow_account() -> Dict[str, Any]:
 
 
 @ai_mcp.tool(
+    name="genimage_flow",
+    description="""Bild mit Google Flow (Nano Banana) über Alex' Google-Ultra-Abo.
+
+    Läuft nur über das Abo, kostet kein Geld und keine Flow-Credits (gemessen
+    14.11.), nur je Auftrag eine Captcha-Lösung. Darum confirm_api_billing=True
+    Pflicht. Antwort nach ~10-20 s: image_url (Storage), storage_object_id,
+    images[] bei count>1. Auflösung ~1K (z. B. 1376x768 bei 16:9).
+
+    model: nano-banana-2 (Vorgabe), nano-banana-pro, nano-banana-2-lite
+    aspect_ratio: 16:9 | 4:3 | 1:1 | 3:4 | 9:16 | auto (nur mit Referenzen)
+    reference_images: bis 10 Storage-IDs oder https-Adressen (Bild-zu-Bild)
+    count: 1-4 (Vorgabe 1)
+    """,
+)
+async def ai_genimage_flow(
+    prompt: str,
+    confirm_api_billing: bool = False,
+    model: Optional[str] = None,
+    aspect_ratio: Optional[str] = None,
+    count: Optional[int] = None,
+    seed: Optional[int] = None,
+    reference_images: Optional[List[str]] = None,
+    link_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Nano-Banana-Bild über Flow (api-ai 2b55f00)."""
+    body: Dict[str, Any] = {"prompt": prompt, "confirm_api_billing": bool(confirm_api_billing)}
+    for key, value in (("model", model), ("aspect_ratio", aspect_ratio), ("count", count),
+                       ("seed", seed), ("link_id", link_id)):
+        if value not in (None, ""):
+            body[key] = value
+    if reference_images:
+        body["reference_images"] = [str(r) for r in reference_images]
+    return await call_ai_api("POST", "/ai/genimage/flow", json_body=body)
+
+
+@ai_mcp.tool(
     name="m3_text",
     description="""Call AI API /ai/m3 — MiniMax M3 text model (pay-as-you-go).
 

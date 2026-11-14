@@ -2058,7 +2058,7 @@ async def oneal_products_list(
     """,
 )
 async def oneal_products_get(product_id: str) -> Dict[str, Any]:
-    return await call_oneal_api("GET", f"/v1/products/{product_id}")
+    return await call_oneal_api("GET", f"/v1/products/{_seg(product_id)}")   # #2892: Hauptschluessel
 
 
 @oneal_mcp.tool(
@@ -8563,7 +8563,7 @@ async def business_transactions_import_delete_batch(
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     return await call_business_api(
-        "DELETE", f"/api/v1/transactions/import/batches/{batch_id}", api_key=api_key
+        "DELETE", f"/api/v1/transactions/import/batches/{_seg(batch_id)}", api_key=api_key   # #2892
     )
 
 

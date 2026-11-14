@@ -303,3 +303,21 @@ def test_upload_abgeschaltet(monkeypatch, tmp_path):
 def test_upload_vorgabe_ist_eigenes_verzeichnis(monkeypatch):
     monkeypatch.delenv("MCP_UPLOAD_WURZELN", raising=False)
     assert [str(w) for w in server._upload_wurzeln()] == ["/tmp/mcp-upload"]
+
+
+@pytest.mark.parametrize("aufruf,helfer", [
+    (lambda: server.oneal_products_get("x/../../admin"), "call_oneal_api"),
+    (lambda: server.business_transactions_import_delete_batch("7?all=1"), "call_business_api"),
+])
+def test_hauptschluessel_helfer_kodieren_den_pfad(monkeypatch, aufruf, helfer):
+    gesehen = []
+
+    async def fake(method, pfad, **kw):
+        gesehen.append(pfad)
+        return {}
+    monkeypatch.setattr(server, helfer, fake)
+    asyncio.run(aufruf())
+    [pfad] = gesehen
+    letztes = pfad.rsplit("/", 1)[-1]
+    assert "?" not in pfad and ".." not in pfad.split("/")
+    assert letztes in ("x%2F..%2F..%2Fadmin", "7%3Fall%3D1")

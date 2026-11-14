@@ -250,6 +250,9 @@ ENABLED_MCPS: Optional[set] = (
 )
 
 
+_ALLE_GEMOUNTETEN: set = set()   # fuer GET / (#2893): nur Namen, keine Adressen
+
+
 def mount_mcp(name: str, path: str, mcp_app) -> bool:
     """Mount an MCP server only if enabled by ENABLED_MCPS filter.
 
@@ -265,6 +268,7 @@ def mount_mcp(name: str, path: str, mcp_app) -> bool:
         print(f"⊘ Skipping MCP mount: {name} (not in MCP_SERVERS={','.join(sorted(ENABLED_MCPS))})")
         return False
     app.mount(path, mcp_app)
+    _ALLE_GEMOUNTETEN.add(name.lower())
     print(f"✓ Mounted MCP: {name} at {path}")
     return True
 
@@ -6490,7 +6494,12 @@ async def tree_service_health() -> Any:
 # FastAPI wrapper
 # --------------------------------------------------------------------------- #
 
-app = FastAPI(title="arkturian-mcp", version="3.0.0", description="Arkturian MCP Aggregator with RBAC authentication")
+# /docs, /redoc und /openapi.json nur mit MCP_DOCS=an (#2893): sie listeten
+# alle Routen des Gateways oeffentlich.
+_DOCS_AN = os.getenv("MCP_DOCS", "aus").strip().lower() in ("an", "1", "true", "yes")
+app = FastAPI(title="arkturian-mcp", version="3.0.0", description="Arkturian MCP Aggregator with RBAC authentication",
+              docs_url="/docs" if _DOCS_AN else None, redoc_url="/redoc" if _DOCS_AN else None,
+              openapi_url="/openapi.json" if _DOCS_AN else None)
 
 app.add_middleware(
     CORSMiddleware,
@@ -13355,6 +13364,14 @@ async def shutdown() -> None:
 
 
 @app.get("/")
+async def root_route() -> Dict[str, Any]:
+    """Oeffentlich nur Name, Fassung und die eingehaengten Server (#2893): die
+    volle Beschreibung mit internen Upstream-Adressen und Werkzeuglisten bleibt
+    in root() fuer den internen Gebrauch."""
+    return {"name": "arkturian-mcp", "version": "3.0.0",
+            "servers": sorted(_ALLE_GEMOUNTETEN)}
+
+
 async def root() -> Dict[str, Any]:
     """Human-friendly service descriptor."""
     return {
@@ -13495,7 +13512,35 @@ def _health_probes() -> List[tuple]:
     return [p for p in probes if ENABLED_MCPS is None or p[1] in ENABLED_MCPS]
 
 
+_HEALTH_CACHE: Dict[str, Any] = {"bis": 0.0, "wert": None}
+_HEALTH_TTL_S = float(os.getenv("MCP_HEALTH_TTL_S", "30") or 30)
+
+
 @app.get("/health")
+async def health_route() -> JSONResponse:
+    """Oeffentliche Gesundheit (#2893): zwischengespeichert (MCP_HEALTH_TTL_S,
+    Vorgabe 30 s) und ohne Fehlertexte. Vorher loeste jeder anonyme Abruf acht
+    Proben mit Betreiber-Schluesseln aus und gab die Upstream-Meldungen heraus."""
+    import time as _t
+    jetzt = _t.monotonic()
+    if _HEALTH_CACHE["wert"] is None or jetzt >= _HEALTH_CACHE["bis"]:
+        try:
+            details = await health()
+            code = 200
+        except HTTPException as e:
+            details = e.detail if isinstance(e.detail, dict) else {"status": "degraded"}
+            code = e.status_code
+        pruefungen = {k: ("fehler" if f"{k}_error" in details else "ok")
+                      for k in details if k != "status" and not k.endswith("_error")}
+        for k in details:
+            if k.endswith("_error"):
+                pruefungen[k[: -len("_error")]] = "fehler"
+        _HEALTH_CACHE["wert"] = ({"status": details.get("status", "degraded"), "checks": pruefungen}, code)
+        _HEALTH_CACHE["bis"] = jetzt + _HEALTH_TTL_S
+    wert, code = _HEALTH_CACHE["wert"]
+    return JSONResponse(wert, status_code=code)
+
+
 async def health() -> Dict[str, Any]:
     """Aggregated health check for the upstream services of mounted MCPs."""
     results: Dict[str, Any] = {"status": "healthy"}

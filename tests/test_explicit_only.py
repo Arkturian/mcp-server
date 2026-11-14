@@ -75,7 +75,19 @@ def test_andere_server_unveraendert(mit_rechten, perms):
     assert _post("/storage/") == 200
 
 
-def test_ohne_tools_call_keine_pruefung(mit_rechten):
-    mit_rechten([])
+def test_tools_list_braucht_recht_am_server(mit_rechten):
+    """#2893: auch tools/list zaehlt an einem EXPLICIT_ONLY-Server -- vorher lief
+    jede Methode ausser tools/call ungeprueft durch."""
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    mit_rechten([])
+    assert _post("/p3-buchhaltung/", body) == 403
+    mit_rechten(["*"])
+    assert _post("/p3-buchhaltung/", body) == 403
+    mit_rechten(["mcp:p3-buchhaltung:projektkosten"])
+    assert _post("/p3-buchhaltung/", body) == 200
+
+
+def test_handshake_ohne_recht(mit_rechten):
+    mit_rechten([])
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
     assert _post("/p3-buchhaltung/", body) == 200

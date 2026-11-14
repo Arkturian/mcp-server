@@ -89,8 +89,16 @@ AUTH_API_ISSUER = os.getenv("AUTH_API_ISSUER", "auth-api.arkturian.com")
 # falsche Richtung; wer den alten Zustand braucht, setzt ihn ausdruecklich.
 AUTH_REQUIRE_JWT = os.getenv("AUTH_REQUIRE_JWT", "true").lower() == "true"
 
-# Paths that don't require auth
-PUBLIC_PATHS = {"/", "/health", "/.well-known/mcp.json", "/docs", "/openapi.json"}
+# Paths that don't require auth. /docs und /openapi.json sind seit #2893 aus
+# (MCP_DOCS=an schaltet sie ein, dann auch hier offen).
+PUBLIC_PATHS = {"/", "/health", "/.well-known/mcp.json"}
+if os.getenv("MCP_DOCS", "aus").strip().lower() in ("an", "1", "true", "yes"):
+    PUBLIC_PATHS |= {"/docs", "/redoc", "/openapi.json"}
+
+# JSON-RPC-Methoden, die OHNE Anmeldung durchgehen (#2893): nur der Handshake.
+# Alles andere -- tools/list, resources/*, prompts/*, andere HTTP-Verben,
+# Rumpf ohne JSON -- braucht ein gueltiges JWT mit Recht am Server.
+OHNE_ANMELDUNG = {"initialize", "notifications/initialized", "ping"}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -473,21 +481,21 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         # Skip auth for public paths
-        if request.url.path in PUBLIC_PATHS:
+        pfad = request.url.path
+        if pfad in PUBLIC_PATHS or (request.method == "GET" and pfad.startswith("/.well-known/")) \
+                or request.method == "OPTIONS":
             request.state.agent = AgentContext()
             return await call_next(request)
 
-        # GET requests = MCP init/SSE handshake — always allow.
-        if request.method == "GET":
-            request.state.agent = AgentContext()
-            return await call_next(request)
-
-        # For POST requests, read the JSON-RPC method to decide auth level.
-        # Only "tools/call" requires JWT — initialize, tools/list, notifications
-        # are allowed without auth so Claude Code can connect and discover tools.
-        # This prevents Claude Code from triggering its built-in OAuth flow.
+        # Ohne Anmeldung geht nur der Handshake (#2893, fail-closed). Vorher
+        # galt die Pruefung nur fuer tools/call: GET, andere Verben, Rumpf ohne
+        # JSON und tools/list, resources/read, prompts/get liefen ohne JWT --
+        # auch an EXPLICIT_ONLY_SERVERS und durch die Durchreiche. Fehlt das
+        # Token, antwortet das Gateway 403 (nicht 401: kein OAuth-Ausloeser in
+        # Claude Code), ein GET ohne Token 405 wie ein zustandsloser MCP-Server.
         body_bytes = None
         jsonrpc_method = ""
+        methoden: list = []
         if request.method == "POST":
             try:
                 body_bytes = await request.body()
@@ -501,11 +509,10 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                 jsonrpc_method = "tools/call" if "tools/call" in methoden else (
                     methoden[0] if len(methoden) == 1 else "")
             except Exception:
-                pass
+                methoden = []
 
-        # Only enforce auth on tools/call — the actual tool execution
         is_tool_call = jsonrpc_method == "tools/call"
-        if not is_tool_call:
+        if request.method == "POST" and methoden and all(m in OHNE_ANMELDUNG for m in methoden):
             request.state.agent = AgentContext()
             return await call_next(request)
 
@@ -517,8 +524,10 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
 
         if not token:
             if AUTH_REQUIRE_JWT:
+                if request.method == "GET":
+                    return JSONResponse({"error": "Method Not Allowed"}, status_code=405)
                 return JSONResponse(
-                    {"error": "Authorization required for tool calls"},
+                    {"error": "Authorization required"},
                     status_code=403,  # 403 not 401 — avoids OAuth trigger
                 )
             # No token = anonymous (transition period). SICHTBAR machen, wer
@@ -663,7 +672,9 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                         )
 
             # Erlaubt: Aufrufer, Server, Werkzeug und gegriffenes Recht zaehlen (#2806).
-            _aufrufe_vermerken(agent, mcp_server, body_bytes)
+            # Nur Werkzeugaufrufe -- tools/list & Co. waeren sonst leere Zeilen.
+            if is_tool_call:
+                _aufrufe_vermerken(agent, mcp_server, body_bytes)
 
         except jwt.ExpiredSignatureError:
             return JSONResponse({"error": "Token expired"}, status_code=401)

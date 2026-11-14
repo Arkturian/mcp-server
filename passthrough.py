@@ -112,6 +112,15 @@ class Durchreiche:
         pfad, praefix = scope.get("path", ""), scope.get("root_path", "")
         if praefix and pfad.startswith(praefix):
             pfad = pfad[len(praefix):]
+        # Nur der MCP-Endpunkt selbst (#2893): kein Unterpfad, nur die Verben
+        # des Streamable-HTTP-Transports. Sonst reichte das Gateway jeden Pfad
+        # und jede Methode an den internen Dienst weiter.
+        if pfad.strip("/"):
+            await JSONResponse({"error": "Not Found"}, status_code=404)(scope, receive, send)
+            return
+        if request.method not in ("POST", "GET", "DELETE"):
+            await JSONResponse({"error": "Method Not Allowed"}, status_code=405)(scope, receive, send)
+            return
         ziel = _ziel(self.basis, pfad, scope.get("query_string", b"").decode("latin-1"))
         koepfe = [(k, v) for k, v in request.headers.items() if k.lower() not in _NICHT_HIN]
         body = await request.body()

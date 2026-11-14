@@ -10,6 +10,7 @@ import asyncio
 import json
 
 import httpx
+import pytest
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
@@ -65,10 +66,24 @@ def test_jwt_geht_durch_geheimnisse_nicht():
     assert gesehen["body"] == body.encode()
 
 
-def test_unterpfad_und_query():
+def test_unterpfad_wird_nicht_weitergereicht():
+    """#2893: nur der MCP-Endpunkt selbst; ein Unterpfad erreichte den internen Dienst."""
     app, gesehen = _client_mit(lambda req: httpx.Response(204))
-    _lauf(app, "GET", "/p3-buchhaltung/x/y?a=1")
-    assert gesehen["url"] == "http://ziel.local/mcp/x/y?a=1"
+    assert _lauf(app, "GET", "/p3-buchhaltung/x/y?a=1").status_code == 404
+    assert "url" not in gesehen
+
+
+def test_query_am_endpunkt_bleibt():
+    app, gesehen = _client_mit(lambda req: httpx.Response(204))
+    _lauf(app, "GET", "/p3-buchhaltung/?a=1")
+    assert gesehen["url"] == "http://ziel.local/mcp?a=1"
+
+
+@pytest.mark.parametrize("verb", ["PUT", "PATCH"])
+def test_nur_transport_verben(verb):
+    app, gesehen = _client_mit(lambda req: httpx.Response(204))
+    assert _lauf(app, verb, "/p3-buchhaltung/", content=b"{}").status_code == 405
+    assert "url" not in gesehen
 
 
 def test_antwortkoepfe_und_status_kommen_zurueck():

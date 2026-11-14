@@ -214,10 +214,12 @@ def test_stapel_ohne_token_wird_abgewiesen(rechte, monkeypatch):
     assert _call("persons_list", "persons_merge", token=None) == 403
 
 
-def test_ohne_werkzeugaufruf_bleibt_offen(rechte, monkeypatch):
+def test_ohne_token_nur_der_handshake(rechte, monkeypatch):
+    """#2893: ohne Anmeldung geht nur der Handshake; tools/list braucht ein Token."""
     monkeypatch.setattr(auth, "AUTH_REQUIRE_JWT", True)
-    assert _post({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, token=None) == 200
+    assert _post({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, token=None) == 403
     assert _post([{"jsonrpc": "2.0", "method": "notifications/initialized"}], token=None) == 200
+    assert _post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}, token=None) == 200
 
 
 def test_pruefung_wirft_ergibt_403(rechte, monkeypatch, caplog):

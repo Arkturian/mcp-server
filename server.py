@@ -3253,8 +3253,12 @@ async def content_posts_get(post_id: int) -> Dict[str, Any]:
         mit `content` an; eine bestehende Datei wird nie ueberschrieben.
         Optional: "space_id" (sonst der freigeschaltete Standard-Space),
         "file_id" statt "path", "mode": "datei" (Standard, normaler
-        Beitrag). Danach gleicht content-api alle 15 s in beide Richtungen
-        ab; aendern beide Seiten zugleich, gewinnt die Datei.
+        Beitrag) oder "collab" (nur mit collab_enabled=True). Danach
+        gleicht content-api alle 15 s in beide Richtungen ab. In "datei"
+        gewinnt die Datei, wenn beide Seiten zugleich aendern. In "collab"
+        fuehrt das Live-Dokument: Aenderungen der Datei an anderen Stellen
+        werden je Absatz uebernommen, an derselben Stelle gilt das Dokument
+        und die Fassung der Datei kommt als Anmerkung an den Absatz.
         Regeln: Der Beitrag wird immer `restricted`, darf keine Abschnitte
         (question, task, product …) enthalten (Anmerkungen gehen), und eine
         Datei gehoert zu hoechstens einem Beitrag (409 already_linked).

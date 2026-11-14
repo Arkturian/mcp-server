@@ -100,6 +100,7 @@ def test_file_delivery_ist_entfernt(tmp_path, monkeypatch):
     import server
     gerufen = []
     monkeypatch.setattr(server, "call_comm_api", _fake_comm(gerufen))
-    r = asyncio.run(server.comm_outlook_get_attachment("steiner", "M1", "A1", deliver="file", save_to=str(tmp_path)))
+    # save_to gibt es seit #2894 nicht mehr (Nachtrag Comm).
+    r = asyncio.run(server.comm_outlook_get_attachment("steiner", "M1", "A1", deliver="file"))
     assert r["error"] == "deliver_file_entfernt"
     assert list(tmp_path.iterdir()) == [] and gerufen == []

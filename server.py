@@ -6752,6 +6752,66 @@ async def ai_genimage(
 
 
 @ai_mcp.tool(
+    name="genvideo_flow",
+    description="""Video mit Google Flow (Veo 3.1 / Omni) über Alex' Google-Ultra-Konto.
+
+    Verbraucht Flow-Credits des Ultra-Kontos und je Clip eine Captcha-Lösung,
+    darum confirm_api_billing=True Pflicht. Läuft asynchron: liefert job_id,
+    danach genvideo_flow_status(job_id) abfragen (meist 60-180 s). Fertige
+    Clips legt api-ai im Storage ab (storage_url), Google-Links verfallen.
+
+    Modelle (Credits je Clip mit Ultra): veo-3.1-fast (10, Vorgabe),
+    veo-3.1-quality (100, nur 8 s), veo-3.1-lite (5), omni-flash,
+    omni-flash-1.2 (3-15 s, 3 Credits/s).
+    duration: Veo 4/6/8 · aspect_ratio: landscape | portrait
+    start_image / end_image: Storage-ID oder https-Adresse (Bild-zu-Video).
+    max_credits: bricht vorher ab, wenn die Schätzung höher liegt.
+    """,
+)
+async def ai_genvideo_flow(
+    prompt: str,
+    confirm_api_billing: bool = False,
+    model: Optional[str] = None,
+    aspect_ratio: Optional[str] = None,
+    duration: Optional[int] = None,
+    count: Optional[int] = None,
+    resolution: Optional[str] = None,
+    start_image: Optional[str] = None,
+    end_image: Optional[str] = None,
+    max_credits: Optional[int] = None,
+    link_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Google-Flow-Video abgeben (api-ai ebfe8ec)."""
+    body: Dict[str, Any] = {"prompt": prompt, "confirm_api_billing": bool(confirm_api_billing)}
+    for key, value in (("model", model), ("aspect_ratio", aspect_ratio), ("duration", duration),
+                       ("count", count), ("resolution", resolution), ("start_image", start_image),
+                       ("end_image", end_image), ("max_credits", max_credits), ("link_id", link_id)):
+        if value not in (None, ""):
+            body[key] = str(value) if key in ("start_image", "end_image") else value
+    return await call_ai_api("POST", "/ai/genvideo/flow", json_body=body)
+
+
+@ai_mcp.tool(
+    name="genvideo_flow_status",
+    description="""Stand eines genvideo_flow-Auftrags. status: created | started |
+    completed | failed. Bei completed stehen die Clips mit storage_url darin
+    (einmal gesichert, mehrfaches Abfragen schadet nicht). Fehlt ein Link
+    noch, sagt hint: später erneut abfragen.""",
+)
+async def ai_genvideo_flow_status(job_id: str) -> Dict[str, Any]:
+    from urllib.parse import quote
+    return await call_ai_api("GET", f"/ai/genvideo/flow/status/{quote(job_id, safe=':@-._')}")
+
+
+@ai_mcp.tool(
+    name="genvideo_flow_account",
+    description="Verknüpfte Google-Flow-Konten (Adresse gekürzt), Gesundheit und Captcha-Guthaben.",
+)
+async def ai_genvideo_flow_account() -> Dict[str, Any]:
+    return await call_ai_api("GET", "/ai/genvideo/flow/account")
+
+
+@ai_mcp.tool(
     name="m3_text",
     description="""Call AI API /ai/m3 — MiniMax M3 text model (pay-as-you-go).
 

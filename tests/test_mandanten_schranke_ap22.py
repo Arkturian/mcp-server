@@ -106,6 +106,8 @@ def mensch(monkeypatch):
         return "k"
     monkeypatch.setattr(auth, "_get_public_key", key)
     monkeypatch.setattr(auth, "MANDANTEN_SCHRANKE", auth._schranke_laden(SPEC))
+    # #2976: nur zugelassene OAuth-Clients (aud) kommen ueberhaupt bis zur Schranke.
+    monkeypatch.setattr(auth, "_ERLAUBTE_AUD", ["connector"])
 
     def setze(roles, superadmin=False):
         claims = {"sub": "u@x", "email": "u@x", "roles": roles, "is_superadmin": superadmin,

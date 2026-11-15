@@ -45,6 +45,21 @@ class BrowserAnfrageToolTests(unittest.TestCase):
         self.assertIn("agenten_chrome", tools["browser_sitzungen"].description)
         self.assertIn("eigener_tab_noetig", tools["browser_aufruf"].description)
 
+    def test_eigene_sicht_im_agenten_chrome(self):
+        """Alex 15.11.: selbst nachsehen im Agenten-Chrome, den Browser des Menschen nur auf
+        seinen Verweis. Die Vorgabe 'aktiv' bleibt (ein "schau in meinem Browser" ohne Angabe)."""
+        tools = {t.name: t for t in asyncio.run(server.cloud_mcp.list_tools())}
+        anfrage = tools["browser_anfrage"].description
+        self.assertTrue(anfrage.startswith("Geht an den aktiven Tab im Browser des Menschen. "
+                                           "Nur nehmen, wenn er dich darauf verweist."))
+        self.assertIn("Selbst etwas nachsehen: browser_aufruf mit sitzung='agenten', zuerst neuerTab", anfrage)
+        aufruf = tools["browser_aufruf"].description
+        self.assertIn("sitzung: 'aktiv' (Vorgabe) ist der Browser des Menschen: nur, wenn er dich darauf "
+                      "verweist. Selbst eine Sicht holen: 'agenten'", aufruf)
+        import inspect
+        for f in (server.cloud_browser_anfrage, server.cloud_browser_aufruf):
+            self.assertEqual(inspect.signature(f).parameters["sitzung"].default, "aktiv")
+
     def test_ergebnis_liest_eigene_anfrage(self):
         with patch.object(server, "call_cloud_api", new=AsyncMock(return_value={"status": "fertig"})) as call:
             asyncio.run(server.cloud_browser_ergebnis("abc123"))

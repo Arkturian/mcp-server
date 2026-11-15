@@ -379,6 +379,39 @@ _HAUPTSCHLUESSEL_SERVER = os.getenv("MCP_EXPLIZIT_SERVER", "business,oneal-stora
 EXPLICIT_ONLY_SERVERS.update(s.strip().lower() for s in _HAUPTSCHLUESSEL_SERVER.split(",") if s.strip())
 
 
+# Mandanten-Schranke (Cloud-Security AP 2.2, 15.11.2026): An Servern, deren Upstream
+# einen BETREIBER-Hauptschluessel bekommt (business, storage, oneal ...), zaehlt neben
+# dem Recht auch der Mandant aus dem JWT. Sonst erreichen Agenten fremder Mandanten mit
+# einer globalen Rolle (engineering/developer traegt mcp:business:* usw.) die
+# Buchhaltung und den Speicher des Betreibers. Form: "srv1,srv2:mand1,mand2;srv3:mand3".
+# Vorgabe LEER: dieselbe Codebasis laeuft als Gateway jeder Kundeninstanz mit eigenem
+# Mandanten -- gesetzt wird die Schranke je Gateway per MCP_MANDANTEN_SCHRANKE.
+# Ohne tenant-Claim (Alt-Tokens eigener Agenten, Connectoren) greift sie nicht.
+def _schranke_laden(spec: str) -> dict[str, frozenset[str]]:
+    out: dict[str, frozenset[str]] = {}
+    for teil in (spec or "").split(";"):
+        if ":" not in teil:
+            continue
+        server, mandanten = teil.split(":", 1)
+        erlaubt = frozenset(m.strip().lower() for m in mandanten.split(",") if m.strip())
+        for srv in server.split(","):
+            if srv.strip() and erlaubt:
+                out[srv.strip().lower()] = erlaubt
+    return out
+
+
+MANDANTEN_SCHRANKE: dict[str, frozenset[str]] = _schranke_laden(os.getenv("MCP_MANDANTEN_SCHRANKE", ""))
+
+
+def mandant_gesperrt(mcp_server: str, tenant: str) -> bool:
+    """True, wenn ein Aufrufer mit diesem Mandanten den Server nicht erreichen darf."""
+    erlaubt = MANDANTEN_SCHRANKE.get((mcp_server or "").lower())
+    if not erlaubt:
+        return False
+    t = (tenant or "").strip().lower()
+    return bool(t) and t not in erlaubt
+
+
 # Server, die JEDER angemeldete Agent dieser Instanz nutzen darf, ohne eigenes
 # mcp:<server>:*-Recht (Alex 08.11.2026 zu llmtime, #2679: "die Agents sollen das
 # Recht haben" -- und es soll einfach funktionieren, ohne Rollenpflege je neuem
@@ -630,6 +663,19 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
 
             # Permission check: server-level + tool-level
             mcp_server = _extract_mcp_server_from_path(request.url.path)
+            if mcp_server and mandant_gesperrt(mcp_server, agent.tenant):
+                logger.warning(
+                    "Mandanten-Schranke: agent=%s tenant=%s mcp:%s abgewiesen",
+                    agent.name, agent.tenant, mcp_server,
+                )
+                return JSONResponse(
+                    {
+                        "error": f"Permission denied: tenant '{agent.tenant}' has no access to mcp:{mcp_server}",
+                        "agent": agent.name,
+                        "code": "mandant_nicht_zugelassen",
+                    },
+                    status_code=403,
+                )
             if mcp_server and _offen(mcp_server):
                 pass  # offener Server: jedes gueltige Agenten-JWT genuegt
             elif mcp_server:

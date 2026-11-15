@@ -708,11 +708,19 @@ async def call_knowledge_api(
     json_body: Optional[Dict[str, Any]] = None,
     timeout: Optional[float] = None,
 ) -> Any:
-    """Call Knowledge API (no auth required)."""
+    """Call Knowledge API as the caller (#3114, #3002 Teil 3).
+
+    knowledge-api soll Agenten ueber ihren JWT erkennen und auf ihren Mandanten
+    begrenzen. Bisher ging kein Kopf mit, knowledge-api sah bei keinem
+    MCP-Aufruf, wer fragt. Jetzt der Aufrufer-JWT als Bearer (dazu der daraus
+    abgeleitete Agentenname), ohne statischen Schluessel als Rueckfall: Fehlt
+    der Aufrufer, geht kein Kopf mit, und knowledge-api entscheidet selbst.
+    Kein Gateway-Nachweis (X-IACP-Token): der gilt nur gegenueber cloud-api.
+    """
     return await _fetch_json(
         method,
         f"{KNOWLEDGE_API_BASE}{endpoint}",
-        headers={},
+        headers=_caller_auth_headers(),
         params=params,
         json_body=json_body,
         timeout=timeout,

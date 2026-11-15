@@ -4560,8 +4560,9 @@ async def content_sections_create(
         section_id: the section UUID (from the chunk_committed push)
         text: your reply body (Markdown). Mentions like @CloudV2 fire
               chunk_committed pushes to those agents automatically.
-        by: optional override of the `by` attr. NOT recommended for
-            federation agents — JWT identity is the canonical stamp.
+        by: ignored since 15.11.2026 (#3025). The server always stamps
+            `by` from your JWT identity; the parameter only stays for
+            backwards compatibility.
 
     Returns: {section_id, by, at}
     """,
@@ -5017,6 +5018,28 @@ async def content_doc_get_structured(post_id: int) -> Dict[str, Any]:
 
     Phase B is a pure derived layer on Phase A — no external data
     (iacp_trace etc) consulted, per Codex spec dfaf43af.
+
+    ## Relational edges (always returned, from persisted block_edges)
+
+    Typed block → block edges that the edge detector, the edges REST
+    route or a declared `triggered_by` (doc_apply_text) stored for this
+    post: replies_to, contradicts, extends, references, synthesizes,
+    triggered_by. A heading endpoint resolves to its section node.
+    Each edge: {from, to, type, weight (= confidence, or 1.0 when NULL),
+    properties: {edge_id, origin: declared|detected|manual, confidence,
+    label, author_id, created_at}}. Edges to deleted or empty paragraphs
+    are not emitted; version.sources[kind='block_edges'] carries
+    {count, unresolved}.
+
+    With detail='metrics' additionally:
+      section.properties.relations = {by_type: {edge_type: n},
+        cross_section: n} (edges touching the section; cross_section =
+        other end in another section)
+      metrics.relations = {edges_count, by_type, unresolved,
+        contradictions: [{from, to, from_block_index, to_block_index,
+        author_id, confidence, label, origin}] (manual first, max 20)}
+    Contradictions are NOT tension nodes: tension nodes stay open
+    questions only.
 
     ## Use cases
 

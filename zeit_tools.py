@@ -459,32 +459,29 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
             "`menschenzeit`: Zeit deines Besitzers je Tag und Ordner (bildschirm_h, termine_h, "
             "mail_annahme_h = ANGENOMMENE Minuten je Mail, gesamt_h), nie die anderer Menschen; "
             "menschenzeit=false spart die Rechnung. `darf_zuordnen`: ob du zeit_projekt_zuordnen "
-            "nutzen darfst. Menschenzeit ist ein Personendatum: nicht an andere Projektmitglieder."
+            "nutzen darfst. `aufgabe_id`: statt der Uebersicht die Schritte EINER Aufgabe deines "
+            "Projekts, je mit turn_id, Uhrzeit, Agent, zuege, zeit_s, quelle und knoten/knoten_quelle "
+            "(Knoten des Schritts, geht vor dem der Aufgabe); Eingabe und Satz nur bei Aufgaben deines "
+            "Besitzers, eine Aufgabe ausserhalb deines Projekts ergibt 404. "
+            "Menschenzeit ist ein Personendatum: nicht an andere Projektmitglieder."
         ),
     )
-    async def zeit_projekt(projekt: str = "", von: str = "", bis: str = "", menschenzeit: bool = True) -> Any:
+    async def zeit_projekt(projekt: str = "", von: str = "", bis: str = "", menschenzeit: bool = True,
+                           aufgabe_id: int = 0) -> Any:
+        # Ein Werkzeug fuer Uebersicht und Schritte: die Freigabe 6162 v3 nennt genau
+        # mcp:cloud:zeit_projekt und mcp:cloud:zeit_projekt_zuordnen.
+        if aufgabe_id:
+            params = {"projekt": projekt.strip()} if projekt.strip() else {}
+            d = await transport("GET", f"/api/usage/projekt/aufgaben/{int(aufgabe_id)}/schritte",
+                                params=params, timeout=60)
+            if not isinstance(d, dict) or "schritte" not in d:
+                return d
+            return json.dumps(d, ensure_ascii=False, separators=(",", ":"))
         params = {k: v for k, v in (("projekt", projekt.strip()), ("von", von.strip()), ("bis", bis.strip())) if v}
         if not menschenzeit:
             params["menschenzeit"] = "false"
         d = await transport("GET", "/api/usage/projekt", params=params, timeout=180)
         if not isinstance(d, dict) or "aufgaben" not in d:
-            return d
-        return json.dumps(d, ensure_ascii=False, separators=(",", ":"))
-
-    @mcp.tool(
-        name="zeit_projekt_schritte",
-        description=(
-            "Die Schritte einer Aufgabe deines Projekts (#3122): je Schritt turn_id, Uhrzeit, Agent, "
-            "zuege, zeit_s, quelle und knoten/knoten_quelle (Knoten des Schritts, geht vor dem der "
-            "Aufgabe). Eingabe und Satz nur bei Aufgaben deines Besitzers. Eine Aufgabe ausserhalb "
-            "deines Projekts ergibt 404. `projekt` wie bei zeit_projekt."
-        ),
-    )
-    async def zeit_projekt_schritte(aufgabe_id: int, projekt: str = "") -> Any:
-        params = {"projekt": projekt.strip()} if projekt.strip() else {}
-        d = await transport("GET", f"/api/usage/projekt/aufgaben/{int(aufgabe_id)}/schritte", params=params,
-                            timeout=60)
-        if not isinstance(d, dict) or "schritte" not in d:
             return d
         return json.dumps(d, ensure_ascii=False, separators=(",", ":"))
 

@@ -579,8 +579,11 @@ class Projekt(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(": ", text)                                    # kompakt, ohne Einrueckung
         self.assertIn("Ä", text)
 
-    async def test_schritte(self):
-        await self.mcp.call_tool("zeit_projekt_schritte", {"aufgabe_id": 50, "projekt": " sim "})
+    async def test_schritte_ueber_dasselbe_werkzeug(self):
+        """Die Freigabe 6162 v3 nennt nur zeit_projekt und zeit_projekt_zuordnen."""
+        namen = {t.name for t in await self.mcp.list_tools() if t.name.startswith("zeit_projekt")}
+        self.assertEqual(namen, {"zeit_projekt", "zeit_projekt_zuordnen"})
+        await self.mcp.call_tool("zeit_projekt", {"aufgabe_id": 50, "projekt": " sim "})
         self.assertEqual(self.calls, [("GET", "/api/usage/projekt/aufgaben/50/schritte",
                                        {"params": {"projekt": "sim"}, "timeout": 60})])
 

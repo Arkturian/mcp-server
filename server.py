@@ -11405,6 +11405,9 @@ async def cloud_rund_info(id: str) -> Dict[str, Any]:
 @cloud_mcp.tool(
     name="browser_anfrage",
     description=(
+        "Geht an den aktiven Tab im Browser des Menschen. Nur nehmen, wenn er dich darauf "
+        "verweist. Selbst etwas nachsehen: browser_aufruf mit sitzung='agenten', zuerst neuerTab "
+        "(Alex 15.11.2026). "
         "Den aktiven Tab im Chrome eines Menschen anfragen, ueber seine AgentOS-Extension "
         "und mit seiner Freigabe je Anfrage (Alex 10.11.2026, Post 5856). art: "
         "'screenshot' (sichtbarer Bereich), 'seite' (URL ohne Abfrage, Titel, markierter und "
@@ -11511,7 +11514,8 @@ async def cloud_browser_freigabe(stufe: str, grund: str, minuten: int = 15, sitz
         "evaluate{ausdruck<=5000 Zeichen}. Wartezeit: network/profile/coverage sekunden+15 s, "
         "heap 60 s, sonst ~20 s; danach zeitueberschreitung, kein Nachreichen. "
         "Ohne gueltige Freigabe: freigabe_noetig (dann browser_freigabe). "
-        "sitzung: 'aktiv' (Vorgabe) ist der Browser, an dem der Mensch sitzt, nie ein Agenten-Chrome; 'agenten' ist sein Agenten-Chrome (Chrome nur fuer Agenten, agenten_chrome in browser_sitzungen); sonst eine sitzung_id. Im Agenten-Chrome arbeitest du nur in deinem eigenen Tab: "
+        "sitzung: 'aktiv' (Vorgabe) ist der Browser des Menschen: nur, wenn er dich darauf verweist. "
+        "Selbst eine Sicht holen: 'agenten' (sein Agenten-Chrome, Chrome nur fuer Agenten, agenten_chrome in browser_sitzungen); sonst eine sitzung_id. Im Agenten-Chrome arbeitest du nur in deinem eigenen Tab: "
         "zuerst neuerTab{adresse} mit sitzung='agenten', sonst eigener_tab_noetig; danach gehen auch "
         "Aufrufe mit 'aktiv' dorthin, solange die Freigabe laeuft. browser_nicht_verbunden mit "
         "agenten_chrome_verfuegbar: verbunden ist nur ein Agenten-Chrome. "

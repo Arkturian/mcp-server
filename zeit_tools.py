@@ -166,6 +166,59 @@ def entwurf_zusammenfassen(d: Dict[str, Any]) -> Dict[str, Any]:
             "jev": d.get("jev")}
 
 
+def _arbeit_kurz(a: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Agentenarbeit einer Gruppe (direkt/kette): None bleibt None (keine Messung), sonst
+    zuege, h, output und zeilen; Zeilen nur, wenn welche geaendert wurden."""
+    if a is None:
+        return None
+    out = {"zuege": a.get("zuege"), "h": a.get("dauer_h"), "output": a.get("output")}
+    z = a.get("zeilen") or {}
+    if any(z.get(k) for k in ZEILEN_FELDER):
+        out["zeilen"] = {k: z.get(k) or 0 for k in ZEILEN_FELDER}
+    return out
+
+
+def woche_zusammenfassen(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Der Wochenrueckblick von cloud-api (#3089) kompakt. Rein, ohne Netz.
+
+    Projekte als Pfad, Gruppen ohne Zuege fallen weg. Ein Tag ohne Messung behaelt None:
+    Das ist „keine Messung“, nicht 0."""
+    projekte = []
+    for p in d.get("projekte") or []:
+        zeile: Dict[str, Any] = {"projekt": _pfad_text(p.get("projekt")), "art": (p.get("projekt") or {}).get("art")}
+        if p.get("mensch_aktiv_h"):
+            zeile["mensch_h"] = p["mensch_aktiv_h"]
+        for gruppe in ("direkt", "kette"):
+            a = p.get(gruppe) or {}
+            if a.get("zuege"):
+                zeile[gruppe] = _arbeit_kurz(a)
+        # #2837: Mails gezaehlt, Termine mit Dauer, Gesamtzeit ohne Doppelzaehlung (nur wenn da)
+        mails = {k: v for k, v in (p.get("mails") or {}).items() if v}
+        if mails:
+            zeile["mails"] = mails
+        if (p.get("termine") or {}).get("anzahl"):
+            zeile["termine"] = p["termine"]
+        if (p.get("gesamt") or {}).get("gesamt_h"):
+            zeile["gesamt"] = p["gesamt"]
+        projekte.append(zeile)
+    tage = []
+    for t in d.get("tage") or []:
+        m = t.get("mensch")
+        tage.append({"datum": t.get("datum"), "wochentag": t.get("wochentag"), "messung": t.get("messung"),
+                     "mensch": ({k: m.get(k) for k in ("aktiv_h", "passiv_h", "zugeordnet_h", "ohne_ordner_h",
+                                                        "offen_h")} if m is not None else None),
+                     "direkt": _arbeit_kurz(t.get("direkt")), "kette": _arbeit_kurz(t.get("kette")),
+                     **{k: t.get(k) for k in ("mails", "termine", "gesamt") if k in t}})
+    w = d.get("woche") or {}
+    return {"person": d.get("person"), "von": d.get("von"), "bis": d.get("bis"), "umfang": d.get("umfang"),
+            "einheit": d.get("einheit"),
+            "woche": {"tage": w.get("tage"), "tage_gemessen": w.get("tage_gemessen"), "mensch": w.get("mensch"),
+                      "direkt": _arbeit_kurz(w.get("direkt")), "kette": _arbeit_kurz(w.get("kette")),
+                      **{k: w.get(k) for k in ("mails", "termine", "gesamt") if k in w}},
+            "projekte": projekte, "tage": tage,
+            "quellen": d.get("quellen"), "jev": d.get("jev"), "regeln": d.get("regeln")}
+
+
 def _pfad_text(p: Optional[Dict[str, Any]]) -> Optional[str]:
     if not p:
         return None
@@ -282,6 +335,43 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
         if not isinstance(d, dict) or "eintraege" not in d:
             return d
         return json.dumps(entwurf_zusammenfassen(d), ensure_ascii=False, separators=(",", ":"))
+
+    @mcp.tool(
+        name="zeit_woche",
+        description=(
+            "Wochenrueckblick einer Person (#3089, Alex 15.11.2026): Summen je Projektordner und je "
+            "Tag, ohne Bloecke und ohne Uhrzeiten. Je Tag derselbe Rechenweg wie zeit_tagesentwurf, "
+            "gleiches Recht (Agenten MUESSEN `person` nennen). `von`/`bis` = Kalendertage in Wien "
+            "(JJJJ-MM-TT), `bis` zaehlt mit, hoechstens 31 Tage; leer = Montag dieser Woche bis heute "
+            "(am Sonntag die ganze Woche). Je Projekt: `mensch_h` (aktive Bildschirmzeit der Person), "
+            "`direkt` (Zuege, die die Person selbst ausgeloest hat) und `kette` (Zuege, die aus ihren "
+            "Auftraegen folgen: Agent-zu-Agent und Folgezuege, laut Mini-Hirn von einem ihrer Schritte "
+            "geerbt), je mit zuege, h (Agentenstunden, parallele Agenten zaehlen einzeln), output "
+            "(Ausgabe-Tokens) und zeilen. Ein Zug zaehlt beim Projektordner seines Agenten; ein Agent "
+            "ohne Ordner steht unter seinem Namen (art agent). `tage`: dieselben Summen je Tag. "
+            "null heisst KEINE MESSUNG, nicht 0: `messung` nennt je Tag, ob Anwesenheit (mensch), "
+            "Agentenzuege (agenten) und Ketten (kette, Mini-Hirn seit 11.11.2026) gemessen wurden. "
+            "`woche`: Summen und `tage_gemessen`. `quellen`: andere Foederationen (z.B. P3) und an "
+            "welchen Tagen sie fehlten. Mails und Kalender (#2837): `mails` zaehlt je Projekt ein, "
+            "aus_selbst und aus_agent (keine Dauer); `termine` = Kalendertermine (anzahl, dauer_h bis "
+            "jetzt); `gesamt` = Zeit des Menschen ohne Doppelzaehlung (bildschirm_h ohne die Minuten in "
+            "Terminen, termine_h, mail_annahme_h = ANGENOMMENE Minuten je Mail ausserhalb gemessener "
+            "Zeit, gesamt_h). `mensch_h` bleibt die reine Bildschirmzeit. null = nicht erfasst. "
+            "Dauert je nach Bereich einige Sekunden. "
+            "Anwesenheit ist ein Personendatum: nicht in Beitraege, Issues oder an Dritte kopieren, "
+            "nur dem Menschen selbst oder seinem Admin zeigen."
+        ),
+    )
+    async def zeit_woche(person: str = "", von: str = "", bis: str = "", foederationen: str = "",
+                         jev: bool = True) -> Any:
+        params = {k: v for k, v in (("person", person.strip()), ("von", von.strip()), ("bis", bis.strip()),
+                                    ("foederationen", foederationen.strip())) if v}
+        if not jev:
+            params["jev"] = "false"
+        d = await transport("GET", "/api/usage/woche", params=params, timeout=180)
+        if not isinstance(d, dict) or "projekte" not in d:
+            return d
+        return json.dumps(woche_zusammenfassen(d), ensure_ascii=False, separators=(",", ":"))
 
     @mcp.tool(
         name="aufgaben_tag",

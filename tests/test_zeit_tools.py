@@ -384,6 +384,97 @@ class Tagesentwurf(unittest.IsolatedAsyncioTestCase):
             self.assertIn(wort, tool.description)
 
 
+def _woche():
+    """Form von GET /api/usage/woche (cloud-api, #3089), erfundene Werte."""
+    def arbeit(n, h, out, hinzu=0):
+        return {"zuege": n, "dauer_h": h, "output": out, "zeilen": {"hinzu": hinzu, "geaendert": 0, "entfernt": 0}}
+    pf = {"id": "a", "name": "Portal & Apps", "pfad": ["AgentOS", "Portal & Apps"], "art": "ordner"}
+    return {"person": "alex@x.at", "von": "2026-11-09", "bis": "2026-11-10", "zeitzone": "Europe/Vienna",
+            "umfang": "alles", "einheit": "Stunden",
+            "woche": {"tage": 2, "tage_gemessen": {"mensch": 1, "agenten": 2, "kette": 1},
+                      "mensch": {"aktiv_h": 1.5, "passiv_h": 0.2, "zugeordnet_h": 1.0, "ohne_ordner_h": 0.0,
+                                 "offen_h": 0.5},
+                      "direkt": arbeit(3, 0.8, 300, 15), "kette": arbeit(2, 0.1, 57)},
+            "projekte": [{"projekt": pf, "mensch_aktiv_h": 1.0, "direkt": arbeit(2, 0.3, 200, 15),
+                          "kette": arbeit(0, 0.0, 0)},
+                         {"projekt": {"id": "agent:Inno", "name": "Inno", "pfad": ["Inno"], "art": "agent"},
+                          "mensch_aktiv_h": 0.0, "direkt": arbeit(0, 0.0, 0), "kette": arbeit(2, 0.1, 57)}],
+            "tage": [{"datum": "2026-11-09", "wochentag": "Mo",
+                      "messung": {"mensch": True, "agenten": True, "kette": True},
+                      "mensch": {"aktiv_h": 1.5, "passiv_h": 0.2, "zugeordnet_h": 1.0, "ohne_ordner_h": 0.0,
+                                 "offen_h": 0.5},
+                      "direkt": arbeit(2, 0.3, 200, 15), "kette": arbeit(2, 0.1, 57)},
+                     {"datum": "2026-11-10", "wochentag": "Di",
+                      "messung": {"mensch": False, "agenten": True, "kette": False},
+                      "mensch": None, "direkt": arbeit(1, 0.5, 100), "kette": None}],
+            "quellen": [{"foederation": "arkturian", "status": "ok"}],
+            "jev": {"gefragt": 1, "neu_gefragt": 0, "tage_ausgefallen": 0}, "regeln": {"projekte": 3}}
+
+
+class Woche(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.calls = []
+        self.antwort = _woche()
+
+        async def transport(method, path, **kwargs):
+            self.calls.append((method, path, kwargs))
+            return self.antwort
+        self.mcp = FastMCP("isolated-zeit-woche")
+        register_zeit_tools(self.mcp, transport)
+
+    async def test_ruft_die_wochenroute(self):
+        await self.mcp.call_tool("zeit_woche", {"person": "alex@x.at", "von": "2026-11-09", "jev": False})
+        self.assertEqual(self.calls, [("GET", "/api/usage/woche",
+                                       {"params": {"person": "alex@x.at", "von": "2026-11-09", "jev": "false"},
+                                        "timeout": 180})])
+
+    async def test_kompakt_und_keine_messung_bleibt_null(self):
+        d = json.loads(_geliefert(await self.mcp.call_tool("zeit_woche", {"person": "alex@x.at"})))
+        self.assertEqual(d["projekte"][0], {"projekt": "AgentOS › Portal & Apps", "art": "ordner", "mensch_h": 1.0,
+                                            "direkt": {"zuege": 2, "h": 0.3, "output": 200,
+                                                       "zeilen": {"hinzu": 15, "geaendert": 0, "entfernt": 0}}})
+        self.assertEqual(d["projekte"][1], {"projekt": "Inno", "art": "agent",
+                                            "kette": {"zuege": 2, "h": 0.1, "output": 57}})
+        tag2 = d["tage"][1]
+        self.assertIsNone(tag2["mensch"])
+        self.assertIsNone(tag2["kette"])
+        self.assertEqual(tag2["direkt"], {"zuege": 1, "h": 0.5, "output": 100})
+        self.assertEqual(d["woche"]["tage_gemessen"], {"mensch": 1, "agenten": 2, "kette": 1})
+
+    async def test_fremde_antwort_unveraendert(self):
+        self.antwort = {"detail": "nur die eigene Zeit, sonst Recht zeit:lesen"}
+        self.assertIn("zeit:lesen", str(await self.mcp.call_tool("zeit_woche", {"person": "a@b.at"})))
+
+    async def test_mails_termine_gesamt_kommen_mit(self):
+        """#2837: neue Felder der cloud-api kommen kompakt durch; ohne sie bleibt alles wie bisher."""
+        pr = self.antwort["projekte"][0]
+        pr.update(mails={"ein": 3, "aus_selbst": 1, "aus_agent": 0}, termine={"anzahl": 2, "dauer_h": 1.5},
+                  gesamt={"gesamt_h": 2.6, "bildschirm_h": 1.0, "termine_h": 1.5, "mail_annahme_h": 0.1})
+        self.antwort["projekte"][1].update(mails={"ein": 0, "aus_selbst": 0, "aus_agent": 0},
+                                           termine={"anzahl": 0, "dauer_h": 0.0},
+                                           gesamt={"gesamt_h": 0.0, "bildschirm_h": 0.0, "termine_h": 0.0,
+                                                   "mail_annahme_h": 0.0})
+        self.antwort["tage"][0].update(mails={"ein": 3, "aus_selbst": 1, "aus_agent": 0}, termine=None, gesamt=None)
+        self.antwort["woche"]["gesamt"] = {"gesamt_h": 2.6, "mail_annahme": 1}
+        d = json.loads(_geliefert(await self.mcp.call_tool("zeit_woche", {"person": "alex@x.at"})))
+        self.assertEqual(d["projekte"][0]["mails"], {"ein": 3, "aus_selbst": 1})
+        self.assertEqual(d["projekte"][0]["termine"], {"anzahl": 2, "dauer_h": 1.5})
+        self.assertEqual(d["projekte"][0]["gesamt"]["gesamt_h"], 2.6)
+        self.assertNotIn("mails", d["projekte"][1])
+        self.assertNotIn("termine", d["projekte"][1])
+        self.assertNotIn("gesamt", d["projekte"][1])
+        self.assertIsNone(d["tage"][0]["termine"])                  # null = nicht erfasst, bleibt null
+        self.assertNotIn("mails", d["tage"][1])                     # alte Antwort ohne Feld: wie bisher
+        self.assertEqual(d["woche"]["gesamt"], {"gesamt_h": 2.6, "mail_annahme": 1})
+        self.assertNotIn("termine", d["woche"])
+
+    async def test_beschreibung(self):
+        tool = {t.name: t for t in await self.mcp.list_tools()}["zeit_woche"]
+        for wort in ("Personendatum", "`person`", "KEINE MESSUNG", "kette", "direkt", "Montag", "31 Tage",
+                     "ANGENOMMENE", "termine"):
+            self.assertIn(wort, tool.description)
+
+
 def _aufgaben_tag():
     """Form von GET /api/aufgaben/tag (cloud-api, 13.11.2026), erfundene Werte."""
     pf = {"id": "kern", "name": "Kern-Dienste", "pfad": ["AgentOS", "Kern-Dienste"], "art": "ordner"}

@@ -471,6 +471,32 @@ def _storage_grant_scope() -> str:
     return storage_grant_scope_for(current_caller_verified_agent())
 
 
+def _storage_headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """X-API-KEY plus, for an agent caller, X-Grant-Scope-Restrict (#3030).
+
+    The gateway authenticates as one shared account that owns every agent's
+    attachments, so without the header any agent read any other agent's
+    private files. With it, storage-api shows non-public objects only when
+    they are bound to the caller's scope. The scope comes from the verified
+    gateway identity, never from tool arguments. Non-agent callers send no
+    header and are judged as before."""
+    headers = {"X-API-KEY": STORAGE_API_KEY}
+    scope = _storage_grant_scope()
+    if scope:
+        headers["X-Grant-Scope-Restrict"] = scope
+    if extra:
+        headers.update(extra)
+    return headers
+
+
+def _agent_private(is_public: bool) -> bool:
+    """#3030: an agent's non-public upload is confidential (private_media),
+    as assets_upload_file/_ticket/_chunked already default for callers."""
+    from auth import current_caller_verified_agent
+
+    return (not is_public) and bool(current_caller_verified_agent())
+
+
 def _with_grant_scope(
     fields: Optional[Dict[str, Any]], share_scopes: Optional[List[str]] = None
 ) -> Dict[str, Any]:
@@ -562,7 +588,7 @@ async def call_storage_api(
     return await _fetch_json(
         method,
         f"{STORAGE_API_BASE}{endpoint}",
-        headers={"X-API-KEY": STORAGE_API_KEY},
+        headers=_storage_headers(),
         params=params,
         json_body=json_body,
     )
@@ -582,7 +608,7 @@ async def call_storage_upload(
             data = _with_grant_scope(form_fields, share_scopes)
             response = await client.post(
                 f"{STORAGE_API_BASE}/storage/upload",
-                headers={"X-API-KEY": STORAGE_API_KEY},
+                headers=_storage_headers(),
                 files=files,
                 data=data,
             )
@@ -1622,6 +1648,7 @@ async def storage_assets_upload(
             ai_mode="none" if ai_mode == "safety" else ai_mode,
             ttl_hours=ttl_hours,
             share_with=share_with,
+            private=_agent_private(is_public),
         )
 
     if file_base64.strip().upper() in ("TICKET", "REQUEST_TICKET"):
@@ -1630,6 +1657,8 @@ async def storage_assets_upload(
             "is_public": str(is_public).lower(),
             "ai_mode": "none" if ai_mode == "safety" else ai_mode,
         }
+        if _agent_private(is_public):
+            params["private"] = "true"
         if context:
             params["context"] = context
         if collection_id:
@@ -1648,6 +1677,8 @@ async def storage_assets_upload(
     share_scopes = await _share_with_scopes(share_with)
     file_bytes = base64.b64decode(file_base64)
     form_fields: Dict[str, str] = {"ai_mode": ai_mode, "is_public": str(is_public).lower()}
+    if _agent_private(is_public):
+        form_fields["private"] = "true"
     if context:
         form_fields["context"] = context
     if collection_id:
@@ -1904,7 +1935,7 @@ async def storage_assets_upload_chunked(
     return await _fetch_json(
         "POST",
         f"{STORAGE_API_BASE}/storage/upload-chunk",
-        headers={"X-API-KEY": STORAGE_API_KEY, "Content-Type": "text/plain"},
+        headers=_storage_headers({"Content-Type": "text/plain"}),
         params=_with_grant_scope(params, await _share_with_scopes(share_with)),
         content=chunk_base64,
     )
@@ -1950,6 +1981,8 @@ async def storage_assets_fetch(
     share_with: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {"url": url, "is_public": is_public, "analyze": analyze}
+    if _agent_private(is_public):
+        body["private"] = True
     if context:
         body["context"] = context
     if collection_id:

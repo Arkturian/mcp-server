@@ -490,13 +490,15 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
         description=(
             "Zuordnung im eigenen Projekt korrigieren (#3122), nur mit dem Recht `zeit:projekt:zuordnen`. "
             "`aenderungen` (1 bis 200), je eine von: {\"art\": \"knoten\", \"aufgabe\": <id>, \"knoten\": "
-            "<Tree-Knoten oder null>} setzt die Vorgabe einer Aufgabe; {\"art\": \"knoten\", \"schritt\": "
+            "<Id des Tree-Knotens (ganze Zahl) oder null>} setzt die Vorgabe einer Aufgabe; {\"art\": \"knoten\", \"schritt\": "
             "<turn_id>, \"knoten\": …} den Knoten eines Schritts (geht vor); {\"art\": \"verschieben\", "
             "\"schritt\": <turn_id>, \"aufgabe\": <id>} haengt einen Schritt an eine andere Aufgabe "
             "desselben Projekts und derselben Person. Je Aenderung ein `ergebnis`: ok, unveraendert, "
             "unbekannt (nicht in deinem Projekt), ziel_unbekannt, andere_person, mensch_hat_gesetzt "
-            "(was ein Mensch festgelegt hat, aenderst du nicht). Knoten nur, wenn der Ordner mit einem "
-            "Tree-Plan verknuepft ist (sonst 409 kein_tree_projekt). Aus dem Projekt hinaus geht nichts: "
+            "(was ein Mensch festgelegt hat, aenderst du nicht), knoten_nicht_im_plan (tree-api kennt "
+            "den Knoten nicht im Tree-Plan deines Ordners). Knoten nur, wenn der Ordner mit einem "
+            "Tree-Plan verknuepft ist (sonst 409 kein_tree_projekt). Den Status am Knoten setzt du "
+            "direkt in tree-api, nicht hier. Aus dem Projekt hinaus geht nichts: "
             "Gehoert etwas nicht ins Projekt, frag den Menschen."
         ),
     )

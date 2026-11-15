@@ -5840,9 +5840,11 @@ tree_mcp = FastMCP(
 # Rechte-Stufen der Tree-Werkzeuge (#3121, Projektmanager-Rolle, Beitrag 6162).
 # tree-api trennt mcp:tree:* auf in mcp:tree:read (GETs), mcp:tree:status (PATCH nur
 # status bzw. metadata.progress -- welche Felder, prueft tree-api) und
-# mcp:tree:project:<id> (Begrenzung auf Projekte, prueft nur tree-api). Das Gateway
-# laesst ein Werkzeug mit mcp:tree:<stufe> oder mcp:tree:<werkzeug> durch; die Stufen
-# gelten woertlich, ohne Vererbung (wer schreibt, braucht auch read). mcp:tree:* und
+# mcp:tree:write. Die Bindung an ein Projekt ist das Recht tree:projekt:<id> (ohne
+# mcp:, Muster <dienst>:projekt:<id> aus 6162); das Gateway wertet es nicht aus, nur
+# tree-api. Das Gateway laesst ein Werkzeug mit mcp:tree:<stufe> oder
+# mcp:tree:<werkzeug> durch; die Stufen gelten woertlich, ohne Vererbung (wer
+# schreibt, braucht auch read, fuer nodes_update auch status). mcp:tree:* und
 # die Platzhalter decken weiter alles ab. Ein neues Tree-Werkzeug gehoert hier
 # hinein, sonst geht es nur mit mcp:tree:* (tests/test_tree_stufen_3121.py prueft das).
 TREE_WERKZEUG_STUFEN: Dict[str, str] = {

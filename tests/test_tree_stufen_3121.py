@@ -1,6 +1,7 @@
 """Tree-Werkzeuge mit Rechte-Stufen im Gateway (#3121, Projektmanager-Rolle Beitrag 6162).
 
-tree-api trennt mcp:tree:* auf in read / status / project:<id>. Das Gateway prueft je
+tree-api trennt mcp:tree:* auf in read / status / write, die Projekt-Bindung ist
+tree:projekt:<id> (ohne mcp:, Beitrag 6162). Das Gateway prueft je
 Werkzeug mcp:tree:<werkzeug> oder mcp:tree:<stufe> (WERKZEUG_STUFEN["tree"]); ohne
 Anmeldung wiese es einen Agenten mit nur read und status ab, bevor tree-api ihn sieht.
 Die Stufen gelten woertlich, ohne Vererbung; mcp:tree:* und Platzhalter decken alles.
@@ -122,13 +123,18 @@ def test_read_und_status(rechte):
 
 
 def test_mit_projekt_begrenzung(rechte):
-    """mcp:tree:project:<id> wertet nur tree-api aus; am Gateway oeffnet es kein Werkzeug,
-    auch nicht als Platzhalter, und stoert die Stufen nicht."""
-    rechte(["mcp:tree:read", "mcp:tree:status", "mcp:tree:project:42"])
+    """tree:projekt:<id> (Beitrag 6162, ohne mcp:) wertet nur tree-api aus; am Gateway
+    oeffnet es kein Werkzeug und stoert die Stufen nicht. Auch eine versehentlich mit
+    mcp: gepraegte Form oeffnet nichts, nicht einmal als Platzhalter."""
+    rechte(["mcp:tree:read", "mcp:tree:status", "tree:projekt:5"])
     assert _erlaubt() == LESEN | STATUS
-    rechte(["mcp:tree:project:42"])
+    rechte(["tree:projekt:5"])
     assert _erlaubt() == set()
-    rechte(["mcp:tree:project:*"])
+    rechte(["tree:projekt:*"])
+    assert _erlaubt() == set()
+    rechte(["mcp:tree:projekt:5"])
+    assert _erlaubt() == set()
+    rechte(["mcp:tree:projekt:*"])
     assert _erlaubt() == set()
 
 

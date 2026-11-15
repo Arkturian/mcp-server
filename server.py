@@ -5837,6 +5837,25 @@ tree_mcp = FastMCP(
     log_level="INFO",
 )
 
+# Rechte-Stufen der Tree-Werkzeuge (#3121, Projektmanager-Rolle, Beitrag 6162).
+# tree-api trennt mcp:tree:* auf in mcp:tree:read (GETs), mcp:tree:status (PATCH nur
+# status bzw. metadata.progress -- welche Felder, prueft tree-api) und
+# mcp:tree:project:<id> (Begrenzung auf Projekte, prueft nur tree-api). Das Gateway
+# laesst ein Werkzeug mit mcp:tree:<stufe> oder mcp:tree:<werkzeug> durch; die Stufen
+# gelten woertlich, ohne Vererbung (wer schreibt, braucht auch read). mcp:tree:* und
+# die Platzhalter decken weiter alles ab. Ein neues Tree-Werkzeug gehoert hier
+# hinein, sonst geht es nur mit mcp:tree:* (tests/test_tree_stufen_3121.py prueft das).
+TREE_WERKZEUG_STUFEN: Dict[str, str] = {
+    **{w: "read" for w in (
+        "service_health", "projects_list", "projects_get", "tree_get", "tree_outline",
+        "tree_compact", "tree_export", "nodes_get", "persons_list")},
+    "nodes_update": "status",
+    **{w: "write" for w in (
+        "projects_create", "projects_delete", "tree_import", "nodes_create", "nodes_move",
+        "nodes_delete", "persons_create", "persons_update", "persons_delete",
+        "assign_person", "unassign_person")},
+}
+
 
 @tree_mcp.resource(
     uri="docs://tree/guide",
@@ -6550,6 +6569,8 @@ mount_mcp("artrack", ARTRACK_PATH, artrack_app)
 mount_mcp("codepilot", CODEPILOT_PATH, codepilot_app)
 mount_mcp("content", CONTENT_PATH, content_app)
 mount_mcp("tree", TREE_PATH, tree_app)
+import auth as _tree_auth  # noqa: E402
+_tree_auth.WERKZEUG_STUFEN["tree"] = dict(TREE_WERKZEUG_STUFEN)
 ai_mcp = FastMCP(
     name="ai-api",
     streamable_http_path="/",

@@ -95,3 +95,47 @@ def test_vorgabe_leer_kundeninstanz(gateway):
 def test_recht_bleibt_pflicht(gateway):
     gateway("arkturian", perms=())
     assert _post("/business/") == 403
+
+
+# --- Menschen-/OAuth-Tokens ohne tenant-Claim (Cloud-Security AP 2.2, Restluecke) ---
+@pytest.fixture
+def mensch(monkeypatch):
+    monkeypatch.setattr(auth, "EXPLICIT_ONLY_SERVERS", set())
+
+    async def key():
+        return "k"
+    monkeypatch.setattr(auth, "_get_public_key", key)
+    monkeypatch.setattr(auth, "MANDANTEN_SCHRANKE", auth._schranke_laden(SPEC))
+
+    def setze(roles, superadmin=False):
+        claims = {"sub": "u@x", "email": "u@x", "roles": roles, "is_superadmin": superadmin,
+                  "scope": "openid mcp:business mcp:storage mcp:oneal", "aud": "connector"}
+        monkeypatch.setattr(auth, "_decode_jwt", lambda token, key: claims)
+    return setze
+
+
+def test_mensch_fremder_mandant_abgewiesen(mensch):
+    mensch([{"sys": "content", "role": "editor", "tid": "edera"}])
+    assert _post("/business/") == 403
+    assert _post("/storage/") == 403
+
+
+def test_mensch_ohne_rollen_abgewiesen(mensch):
+    mensch([])
+    assert _post("/business/") == 403
+
+
+def test_mensch_mit_betreiberrolle_durch(mensch):
+    mensch([{"sys": "engineering", "role": "developer", "tid": "arkturian"}])
+    assert _post("/business/") == 200
+
+
+def test_mensch_oneal_nur_oneal(mensch):
+    mensch([{"sys": "x", "role": "y", "tid": "oneal"}])
+    assert _post("/oneal/") == 200
+    assert _post("/business/") == 403
+
+
+def test_superadmin_durch(mensch):
+    mensch([], superadmin=True)
+    assert _post("/business/") == 200

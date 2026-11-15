@@ -403,13 +403,28 @@ def _schranke_laden(spec: str) -> dict[str, frozenset[str]]:
 MANDANTEN_SCHRANKE: dict[str, frozenset[str]] = _schranke_laden(os.getenv("MCP_MANDANTEN_SCHRANKE", ""))
 
 
-def mandant_gesperrt(mcp_server: str, tenant: str) -> bool:
-    """True, wenn ein Aufrufer mit diesem Mandanten den Server nicht erreichen darf."""
+def mandant_gesperrt(mcp_server: str, tenant: str, *, ist_agent: bool = True,
+                     user_tids=(), superadmin: bool = False) -> bool:
+    """True, wenn ein Aufrufer mit diesem Mandanten den Server nicht erreichen darf.
+
+    Agenten-/Dienst-Tokens: der einzelne `tenant`-Claim; ohne Claim (Alt-Tokens eigener
+    Agenten) unveraendert durchgelassen. Menschen-/OAuth-Tokens tragen keinen `tenant`,
+    sondern `roles[].tid` (Cloud-Security AP 2.2): durch nur Superadmin oder wer einen
+    zugelassenen Mandanten in seinen Rollen hat -- sonst fail-closed."""
     erlaubt = MANDANTEN_SCHRANKE.get((mcp_server or "").lower())
     if not erlaubt:
         return False
     t = (tenant or "").strip().lower()
-    return bool(t) and t not in erlaubt
+    if t:
+        return t not in erlaubt
+    if ist_agent or superadmin:
+        return False
+    tids = {str(x or "").strip().lower() for x in (user_tids or ())}
+    return not (tids & erlaubt)
+
+
+def _rollen_mandanten(claims: dict) -> list:
+    return [r.get("tid") for r in (claims.get("roles") or []) if isinstance(r, dict) and r.get("tid")]
 
 
 # Server, die JEDER angemeldete Agent dieser Instanz nutzen darf, ohne eigenes
@@ -663,7 +678,12 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
 
             # Permission check: server-level + tool-level
             mcp_server = _extract_mcp_server_from_path(request.url.path)
-            if mcp_server and mandant_gesperrt(mcp_server, agent.tenant):
+            if mcp_server and mandant_gesperrt(
+                mcp_server, agent.tenant,
+                ist_agent=claims.get("type") in ("agent", "service"),
+                user_tids=_rollen_mandanten(claims),
+                superadmin=claims.get("is_superadmin") is True,
+            ):
                 logger.warning(
                     "Mandanten-Schranke: agent=%s tenant=%s mcp:%s abgewiesen",
                     agent.name, agent.tenant, mcp_server,

@@ -307,6 +307,42 @@ def _pfad_sicher(url: str) -> None:
             raise ValueError("unsicherer Pfad in der Anfrage (Punkt-Segment)")
 
 
+def _obo_ziel(url: str) -> str:
+    """Ziel (audience) eines Backend-Aufrufs nach seiner Basis-URL (#3004). '' = keins."""
+    paare = (
+        (CLOUD_API_BASE, "cloud-api"), (CONTENT_API_BASE, "content-api"),
+        (ISSUE_API_BASE, "issue-api"), (STORAGE_API_BASE, "storage-api"),
+        (COMM_API_BASE, "comm-api"), (BUSINESS_API_BASE, "business-api"),
+        (AI_API_BASE, "ai-api"), (KNOWLEDGE_API_BASE, "knowledge-api"),
+        (TREE_API_BASE, "tree-api"), (ARTRACK_API_BASE, "artrack-api"),
+        (LLMTIME_API_BASE, "llmtime-api"), (REVIEW_API_BASE, "review-api"),
+        (CONVERSATION_API_BASE, "conversation-api"),
+    )
+    for basis, ziel in paare:
+        b = (basis or "").rstrip("/")
+        if b and (url == b or url.startswith(b + "/") or url.startswith(b + "?")):
+            return ziel
+    return ""
+
+
+async def _obo_kopf(url: str, headers: Dict[str, str]) -> Dict[str, str]:
+    """Traegt der Aufruf das Token eines MENSCHEN und ist das Ziel fuer den Tausch
+    freigeschaltet, geht statt des rohen Tokens ein getauschtes fuer genau dieses Ziel
+    hinaus (obo.py). Agenten und Dienste unveraendert; ohne Schalter wie bisher."""
+    import obo
+    from auth import current_caller_ist_mensch, current_caller_jwt
+    if not headers or not current_caller_ist_mensch():
+        return headers
+    roh = current_caller_jwt()
+    if headers.get("Authorization") != f"Bearer {roh}":
+        return headers                               # kein Aufrufer-Token in diesem Aufruf
+    ziel = _obo_ziel(url)
+    if not obo.aktiv(ziel):
+        return headers
+    getauscht = await obo.tausche(roh, ziel)
+    return {**headers, "Authorization": f"Bearer {getauscht}"}
+
+
 async def _fetch_json(
     method: str,
     url: str,
@@ -319,6 +355,7 @@ async def _fetch_json(
     timeout: Optional[float] = None,
 ) -> Any:
     _pfad_sicher(url)
+    headers = await _obo_kopf(url, headers)          # #3004: Menschen-Token je Ziel tauschen
     async with httpx.AsyncClient(timeout=timeout or HTTP_TIMEOUT) as client:
         try:
             # NOTE: pass `params` through as-is (don't coerce None → {}).

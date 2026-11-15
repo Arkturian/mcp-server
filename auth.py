@@ -62,6 +62,18 @@ _current_is_agent: contextvars.ContextVar[bool] = contextvars.ContextVar(
 )
 
 
+# #3004: Klasse des gepruefften Tokens (user, oauth_access, agent, service, ...), damit
+# der on-behalf-of-Tausch nur Menschen-Tokens tauscht.
+_current_token_typ: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "current_caller_token_typ", default=""
+)
+
+
+def current_caller_ist_mensch() -> bool:
+    """Ist das gepruefte Aufrufer-Token das eines Menschen (kein Agent, kein Dienst)?"""
+    return bool(_current_jwt.get()) and _current_token_typ.get() not in ("agent", "service")
+
+
 def current_caller_jwt() -> str:
     """Return the JWT (raw token string) of the agent that made the
     current MCP request, or empty string if anonymous/no auth.
@@ -830,6 +842,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             _is_agent_token = _current_is_agent.set(
                 claims.get("type") == "agent" and bool(claims.get("agent_name"))
             )
+            _typ_token = _current_token_typ.set(str(claims.get("type") or "user"))
 
             # Permission check: server-level + tool-level
             mcp_server = _extract_mcp_server_from_path(request.url.path)
@@ -950,6 +963,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                 _current_jwt.reset(_jwt_token)
                 _current_agent_name.reset(_name_token)
                 _current_is_agent.reset(_is_agent_token)
+                _current_token_typ.reset(_typ_token)
             except (LookupError, NameError):
                 pass
 

@@ -445,9 +445,33 @@ class Woche(unittest.IsolatedAsyncioTestCase):
         self.antwort = {"detail": "nur die eigene Zeit, sonst Recht zeit:lesen"}
         self.assertIn("zeit:lesen", str(await self.mcp.call_tool("zeit_woche", {"person": "a@b.at"})))
 
+    async def test_mails_termine_gesamt_kommen_mit(self):
+        """#2837: neue Felder der cloud-api kommen kompakt durch; ohne sie bleibt alles wie bisher."""
+        pr = self.antwort["projekte"][0]
+        pr.update(mails={"ein": 3, "aus_selbst": 1, "aus_agent": 0}, termine={"anzahl": 2, "dauer_h": 1.5},
+                  gesamt={"gesamt_h": 2.6, "bildschirm_h": 1.0, "termine_h": 1.5, "mail_annahme_h": 0.1})
+        self.antwort["projekte"][1].update(mails={"ein": 0, "aus_selbst": 0, "aus_agent": 0},
+                                           termine={"anzahl": 0, "dauer_h": 0.0},
+                                           gesamt={"gesamt_h": 0.0, "bildschirm_h": 0.0, "termine_h": 0.0,
+                                                   "mail_annahme_h": 0.0})
+        self.antwort["tage"][0].update(mails={"ein": 3, "aus_selbst": 1, "aus_agent": 0}, termine=None, gesamt=None)
+        self.antwort["woche"]["gesamt"] = {"gesamt_h": 2.6, "mail_annahme": 1}
+        d = json.loads(_geliefert(await self.mcp.call_tool("zeit_woche", {"person": "alex@x.at"})))
+        self.assertEqual(d["projekte"][0]["mails"], {"ein": 3, "aus_selbst": 1})
+        self.assertEqual(d["projekte"][0]["termine"], {"anzahl": 2, "dauer_h": 1.5})
+        self.assertEqual(d["projekte"][0]["gesamt"]["gesamt_h"], 2.6)
+        self.assertNotIn("mails", d["projekte"][1])
+        self.assertNotIn("termine", d["projekte"][1])
+        self.assertNotIn("gesamt", d["projekte"][1])
+        self.assertIsNone(d["tage"][0]["termine"])                  # null = nicht erfasst, bleibt null
+        self.assertNotIn("mails", d["tage"][1])                     # alte Antwort ohne Feld: wie bisher
+        self.assertEqual(d["woche"]["gesamt"], {"gesamt_h": 2.6, "mail_annahme": 1})
+        self.assertNotIn("termine", d["woche"])
+
     async def test_beschreibung(self):
         tool = {t.name: t for t in await self.mcp.list_tools()}["zeit_woche"]
-        for wort in ("Personendatum", "`person`", "KEINE MESSUNG", "kette", "direkt", "Montag", "31 Tage"):
+        for wort in ("Personendatum", "`person`", "KEINE MESSUNG", "kette", "direkt", "Montag", "31 Tage",
+                     "ANGENOMMENE", "termine"):
             self.assertIn(wort, tool.description)
 
 

@@ -192,6 +192,14 @@ def woche_zusammenfassen(d: Dict[str, Any]) -> Dict[str, Any]:
             a = p.get(gruppe) or {}
             if a.get("zuege"):
                 zeile[gruppe] = _arbeit_kurz(a)
+        # #2837: Mails gezaehlt, Termine mit Dauer, Gesamtzeit ohne Doppelzaehlung (nur wenn da)
+        mails = {k: v for k, v in (p.get("mails") or {}).items() if v}
+        if mails:
+            zeile["mails"] = mails
+        if (p.get("termine") or {}).get("anzahl"):
+            zeile["termine"] = p["termine"]
+        if (p.get("gesamt") or {}).get("gesamt_h"):
+            zeile["gesamt"] = p["gesamt"]
         projekte.append(zeile)
     tage = []
     for t in d.get("tage") or []:
@@ -199,12 +207,14 @@ def woche_zusammenfassen(d: Dict[str, Any]) -> Dict[str, Any]:
         tage.append({"datum": t.get("datum"), "wochentag": t.get("wochentag"), "messung": t.get("messung"),
                      "mensch": ({k: m.get(k) for k in ("aktiv_h", "passiv_h", "zugeordnet_h", "ohne_ordner_h",
                                                         "offen_h")} if m is not None else None),
-                     "direkt": _arbeit_kurz(t.get("direkt")), "kette": _arbeit_kurz(t.get("kette"))})
+                     "direkt": _arbeit_kurz(t.get("direkt")), "kette": _arbeit_kurz(t.get("kette")),
+                     **{k: t.get(k) for k in ("mails", "termine", "gesamt") if k in t}})
     w = d.get("woche") or {}
     return {"person": d.get("person"), "von": d.get("von"), "bis": d.get("bis"), "umfang": d.get("umfang"),
             "einheit": d.get("einheit"),
             "woche": {"tage": w.get("tage"), "tage_gemessen": w.get("tage_gemessen"), "mensch": w.get("mensch"),
-                      "direkt": _arbeit_kurz(w.get("direkt")), "kette": _arbeit_kurz(w.get("kette"))},
+                      "direkt": _arbeit_kurz(w.get("direkt")), "kette": _arbeit_kurz(w.get("kette")),
+                      **{k: w.get(k) for k in ("mails", "termine", "gesamt") if k in w}},
             "projekte": projekte, "tage": tage,
             "quellen": d.get("quellen"), "jev": d.get("jev"), "regeln": d.get("regeln")}
 
@@ -342,7 +352,12 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
             "null heisst KEINE MESSUNG, nicht 0: `messung` nennt je Tag, ob Anwesenheit (mensch), "
             "Agentenzuege (agenten) und Ketten (kette, Mini-Hirn seit 11.11.2026) gemessen wurden. "
             "`woche`: Summen und `tage_gemessen`. `quellen`: andere Foederationen (z.B. P3) und an "
-            "welchen Tagen sie fehlten. Dauert je nach Bereich einige Sekunden. "
+            "welchen Tagen sie fehlten. Mails und Kalender (#2837): `mails` zaehlt je Projekt ein, "
+            "aus_selbst und aus_agent (keine Dauer); `termine` = Kalendertermine (anzahl, dauer_h bis "
+            "jetzt); `gesamt` = Zeit des Menschen ohne Doppelzaehlung (bildschirm_h ohne die Minuten in "
+            "Terminen, termine_h, mail_annahme_h = ANGENOMMENE Minuten je Mail ausserhalb gemessener "
+            "Zeit, gesamt_h). `mensch_h` bleibt die reine Bildschirmzeit. null = nicht erfasst. "
+            "Dauert je nach Bereich einige Sekunden. "
             "Anwesenheit ist ein Personendatum: nicht in Beitraege, Issues oder an Dritte kopieren, "
             "nur dem Menschen selbst oder seinem Admin zeigen."
         ),

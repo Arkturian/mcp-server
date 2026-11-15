@@ -51,6 +51,7 @@ def test_rechte_aus_claims(claims, erwartet):
 
 def test_superadmin_oauth_ohne_scope_schaltbar(monkeypatch):
     c = {"sub": "u1", "aud": "cid", "scope": "openid", "is_superadmin": True}
+    monkeypatch.setattr(auth, "_ERLAUBTE_AUD", ["cid"])        # #2976: nur zugelassene aud
     monkeypatch.setattr(auth, "_SUPERADMIN_OHNE_SCOPE", True)
     assert auth._rechte_aus_claims(c) == ["*"]
     monkeypatch.setattr(auth, "_SUPERADMIN_OHNE_SCOPE", False)
@@ -100,8 +101,9 @@ def test_benutzer_token_ohne_rechte_kommt_nicht_durch(gateway):
     assert post("/cloud/").status_code == 403
 
 
-def test_oauth_scope_oeffnet_nur_seinen_server(gateway):
+def test_oauth_scope_oeffnet_nur_seinen_server(gateway, monkeypatch):
     mit, post = gateway
+    monkeypatch.setattr(auth, "_ERLAUBTE_AUD", ["chatgpt-cid"])   # #2976: zugelassener Client
     mit({"sub": "u1", "aud": "chatgpt-cid", "scope": "openid mcp:cloud"})
     assert post("/cloud/").status_code == 200
     assert post("/content/").status_code == 403

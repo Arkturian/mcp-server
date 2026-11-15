@@ -14,6 +14,14 @@ Flow:
 Configuration:
   AUTH_API_JWKS_URL   — JWKS endpoint (default: https://auth-api.arkturian.com/api/v1/auth/.well-known/jwks.json)
   AUTH_REQUIRE_JWT    — If "true", reject requests without JWT (default: "false" for transition)
+  MCP_ERLAUBTE_AUD    — OAuth-Zielgruppen (client_id, fnmatch, kommagetrennt), die das
+                        Gateway annimmt (#2976). Jedes andere aud gibt 401, auch bei leerer
+                        Liste: dann gelten nur Tokens ohne aud (Agenten, Dienste, Login).
+  MCP_SUPERADMIN_OHNE_SCOPE — "aus": ein Superadmin bekommt "*" nur mit eigenem Login,
+                        nicht mit einem Token aus MCP_ERLAUBTE_AUD (Vorgabe: an).
+  MCP_ABGELEHNTE_AUD  — aud-Muster, die nie gelten (Vorgabe: opencloud*); ai-realtime:*
+                        gilt ausserdem immer als abgelehnt.
+  JWKS_TTL_SECONDS    — Hoechstalter der JWKS im Speicher (Vorgabe 300).
 """
 
 from __future__ import annotations
@@ -145,12 +153,29 @@ def _match_permission(held: str, required: str) -> bool:
 
 _public_key = None
 _public_key_fetched_at = 0.0
-_PUBLIC_KEY_TTL = 3600  # refresh every hour
+# Hoechstens 5 min alt (#2972: Notfall-Rotation darf nicht eine Stunde haengen).
+_PUBLIC_KEY_TTL = int(os.getenv("JWKS_TTL_SECONDS", "300") or 300)
+# Alle Schluessel der JWKS je `kid` (#2972): vorher galt nur keys[0], ein Token mit
+# dem zweiten Schluessel einer Rotation fiel durch, ein alter Schluessel blieb gueltig,
+# solange er vorne stand.
+_jwks_nach_kid: dict = {}
+_JWKS_NACHLADEN_AB_S = 30.0          # unbekannter kid: hoechstens so oft neu holen
+
+
+def _rsa_schluessel(key_data: dict):
+    import base64
+    from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
+    from cryptography.hazmat.backends import default_backend
+    n = int.from_bytes(base64.urlsafe_b64decode(key_data["n"] + "=="), "big")
+    e = int.from_bytes(base64.urlsafe_b64decode(key_data["e"] + "=="), "big")
+    return RSAPublicNumbers(e, n).public_key(default_backend())
 
 
 async def _get_public_key():
-    """Fetch and cache the Auth-API public key from JWKS endpoint."""
-    global _public_key, _public_key_fetched_at
+    """JWKS holen und je `kid` ablegen; liefert den ersten Schluessel (fuer die
+    Verfuegbarkeitspruefung im Middleware-Pfad). Gewaehlt wird je Token in
+    _schluessel_fuer() nach seinem `kid`."""
+    global _public_key, _public_key_fetched_at, _jwks_nach_kid
 
     if _public_key and (time.time() - _public_key_fetched_at < _PUBLIC_KEY_TTL):
         return _public_key
@@ -161,33 +186,116 @@ async def _get_public_key():
             res.raise_for_status()
             jwks = res.json()
 
-        # Extract RSA public key from JWKS
-        import base64
-        from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
-        from cryptography.hazmat.backends import default_backend
-
-        key_data = jwks["keys"][0]
-        n_bytes = base64.urlsafe_b64decode(key_data["n"] + "==")
-        e_bytes = base64.urlsafe_b64decode(key_data["e"] + "==")
-        n = int.from_bytes(n_bytes, "big")
-        e = int.from_bytes(e_bytes, "big")
-
-        _public_key = RSAPublicNumbers(e, n).public_key(default_backend())
+        neu = {}
+        erster = None
+        for key_data in jwks.get("keys") or []:
+            if key_data.get("kty") not in (None, "RSA"):
+                continue
+            k = _rsa_schluessel(key_data)
+            neu[str(key_data.get("kid") or "")] = k
+            erster = erster or k
+        if erster is None:
+            raise ValueError("JWKS ohne RSA-Schluessel")
+        _jwks_nach_kid = neu
+        _public_key = erster
         _public_key_fetched_at = time.time()
-        logger.info("JWKS public key fetched from %s", AUTH_API_JWKS_URL)
+        logger.info("JWKS fetched from %s: %d key(s) %s", AUTH_API_JWKS_URL, len(neu), sorted(neu))
         return _public_key
     except Exception as exc:
         logger.error("Failed to fetch JWKS from %s: %s", AUTH_API_JWKS_URL, exc)
         return _public_key  # return cached key if available
 
 
+def _kid_aus(token: str) -> Optional[str]:
+    try:
+        kid = jwt.get_unverified_header(token).get("kid")
+    except Exception:
+        return None
+    return str(kid) if kid else None
+
+
+async def _jwks_fuer_kid(kid: Optional[str]) -> None:
+    """Kennt der Zwischenspeicher den `kid` des Tokens nicht, einmal neu holen
+    (Rotation), aber nicht oefter als alle 30 s (kein Hebel fuer Last auf auth-api)."""
+    global _public_key_fetched_at
+    if not kid or not _jwks_nach_kid or kid in _jwks_nach_kid:
+        return
+    if time.time() - _public_key_fetched_at < _JWKS_NACHLADEN_AB_S:
+        return
+    _public_key_fetched_at = 0.0
+    await _get_public_key()
+
+
+def _schluessel_fuer(token: str, public_key):
+    """Der Schluessel, mit dem dieses Token geprueft wird. Mit `kid`: genau der aus
+    der JWKS, ein unbekannter `kid` wird abgewiesen. Ohne `kid`: nur, wenn die JWKS
+    genau einen Schluessel hat. Ist (noch) keine JWKS geladen, gilt `public_key`."""
+    if not _jwks_nach_kid:
+        return public_key
+    kid = _kid_aus(token)
+    if kid:
+        if kid not in _jwks_nach_kid:
+            raise jwt.InvalidTokenError(f"unknown signing key (kid {kid!r})")
+        return _jwks_nach_kid[kid]
+    if len(_jwks_nach_kid) == 1:
+        return next(iter(_jwks_nach_kid.values()))
+    raise jwt.InvalidTokenError("token without kid, JWKS has several keys")
+
+
 # Zielgruppen (aud), die am Gateway nichts zu suchen haben (#2890): Tokens, die
 # auth-api fuer ANDERE Anwendungen ausstellt (OpenCloud-Web u. a.). Muster mit
 # fnmatch, kommagetrennt in MCP_ABGELEHNTE_AUD.
 _ABGELEHNTE_AUD = [m.strip() for m in os.getenv("MCP_ABGELEHNTE_AUD", "opencloud*").split(",") if m.strip()]
-# Ein Superadmin mit OAuth-Token OHNE mcp:-Scope (Client fragte keinen an)
-# bekommt "*". Abschalten: MCP_SUPERADMIN_OHNE_SCOPE=aus.
+# Voice-Grants (create_realtime_grant_token: aud "ai-realtime:<profil>", ohne type)
+# gelten am Gateway nie, auch nicht ueber MCP_ERLAUBTE_AUD (#2976, Befund 76).
+_IMMER_ABGELEHNTE_AUD = ("ai-realtime:*",)
+# Token-Arten am Gateway (#2976): ohne type = Login- bzw. OAuth-Token des Menschen
+# (heute), user/oauth_access = dieselben, sobald auth-api type setzt (#2970).
+# Abgewiesen: ephemeral_capability, realtime_grant und jede unbekannte Art.
+_ZUGELASSENE_TYPEN = frozenset({"", "agent", "service", "user", "oauth_access"})
+# Positive Liste der OAuth-Zielgruppen (client_id), fnmatch, kommagetrennt, je Gateway
+# (#2976, Entscheid Cloud 15.11.2026). Ein Token mit aud aus der Liste gilt wie ein
+# eigenes Login (Superadmin "*", sonst seine ausdruecklichen mcp:-Scopes). Jedes andere
+# aud gibt 401 -- auch bei LEERER Liste: dann gelten nur Tokens ohne aud (Agenten,
+# Dienste, eigenes Login). Das schliesst die Kette ueber anonym per DCR registrierte
+# Clients (Befund 76): ein Superadmin, der sich dort anmeldet, gab dem Client "*".
+_ERLAUBTE_AUD = [m.strip() for m in os.getenv("MCP_ERLAUBTE_AUD", "").split(",") if m.strip()]
+# Superadmin ohne mcp:-Scope bekommt mit einem Token aus MCP_ERLAUBTE_AUD "*" (die
+# ChatGPT-Connectoren des Betreibers tragen keine Scopes). Abschalten:
+# MCP_SUPERADMIN_OHNE_SCOPE=aus, dann gilt "*" nur fuer das eigene Login (ohne aud).
 _SUPERADMIN_OHNE_SCOPE = os.getenv("MCP_SUPERADMIN_OHNE_SCOPE", "an").strip().lower() not in ("aus", "0", "false", "no")
+
+
+def _aud_werte(claims: dict) -> list:
+    aud = claims.get("aud")
+    return [str(a) for a in (aud if isinstance(aud, list) else ([aud] if aud else []))]
+
+
+def _passt(werte: list, muster) -> bool:
+    import fnmatch
+    return any(fnmatch.fnmatchcase(a.lower(), m.lower()) for a in werte for m in muster)
+
+
+def _token_abweisen(claims: dict) -> Optional[str]:
+    """None = Token darf weiter, sonst der Grund fuer 401 (#2976).
+
+    Reihenfolge: Token-Art, Voice-Grant, gesperrte aud (#2890), positive aud-Liste,
+    min_agent_iat fuer Agenten- und Dienst-Tokens (#2972)."""
+    typ = str(claims.get("type") or "")
+    if typ not in _ZUGELASSENE_TYPEN:
+        return f"token type {typ!r} not accepted"
+    auds = _aud_werte(claims)
+    if _passt(auds, _IMMER_ABGELEHNTE_AUD):
+        return "voice grant not accepted"
+    if _aud_abgelehnt(claims):
+        return "audience not accepted"
+    if auds and not _passt(auds, _ERLAUBTE_AUD):
+        return "audience not allowed (MCP_ERLAUBTE_AUD)"
+    if typ in ("agent", "service"):
+        grund = _zu_alt(claims)
+        if grund:
+            return grund
+    return None
 
 
 def _aud_abgelehnt(claims: dict) -> bool:
@@ -206,7 +314,8 @@ def _rechte_aus_claims(claims: dict) -> list:
       - Agent und Dienst (type agent/service): genau ihr `permissions`-Claim.
       - Mensch mit OAuth-Token: je Scope `mcp:<server>` das Recht mcp:<server>:*.
       - Superadmin (Betreiber) mit eigenem Login-Token (ohne aud): "*"; mit
-        OAuth-Token ohne mcp:-Scope ebenso, solange MCP_SUPERADMIN_OHNE_SCOPE an ist.
+        OAuth-Token ohne mcp:-Scope nur, wenn dessen aud in MCP_ERLAUBTE_AUD steht
+        (#2976). Jedes andere aud weist _token_abweisen ohnehin ab.
       - sonst: keine Rechte.
     """
     typ = claims.get("type")
@@ -218,8 +327,10 @@ def _rechte_aus_claims(claims: dict) -> list:
                          if sc.startswith("mcp:") and sc.count(":") == 1 and len(sc) > 4})
     if aus_scopes:
         return aus_scopes
-    if claims.get("is_superadmin") is True and (claims.get("aud") is None or _SUPERADMIN_OHNE_SCOPE):
-        return ["*"]
+    if claims.get("is_superadmin") is True:
+        auds = _aud_werte(claims)
+        if not auds or (_SUPERADMIN_OHNE_SCOPE and _passt(auds, _ERLAUBTE_AUD)):
+            return ["*"]
     return []
 
 
@@ -250,7 +361,7 @@ def _decode_jwt(token: str, public_key) -> dict:
     """
     claims = jwt.decode(
         token,
-        public_key,
+        _schluessel_fuer(token, public_key),
         algorithms=["RS256"],
         issuer=AUTH_API_ISSUER,
         options={"verify_exp": True, "verify_aud": False},
@@ -275,6 +386,37 @@ _REVOKED_STATE = os.getenv("REVOKED_JTIS_STATE", "/var/lib/mcp-server/revoked_jt
 _revoked_polled: set = set()
 _revoked_as_of = ""
 _revoked_loaded = False
+# min_agent_iat der auth-api (#2972): Agenten- und Dienst-Tokens, die davor
+# ausgestellt wurden, gelten nicht mehr. Spiegelt den AKTUELLEN Wert, auch ein
+# Absenken oder null (wie content-api/issue-api); fehlt der Schluessel in der
+# Antwort (alter Stand der auth-api), bleibt der letzte Stand.
+_min_agent_iat: Optional[int] = None
+
+
+def _als_epoch(wert) -> Optional[int]:
+    if wert is None or wert == "" or isinstance(wert, bool):
+        return None
+    if isinstance(wert, (int, float)):
+        return int(wert)
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(str(wert).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    except (TypeError, ValueError):
+        logger.warning("revoked_jtis: min_agent_iat unlesbar (%r), ignoriert", wert)
+        return None
+
+
+def _zu_alt(claims: dict) -> Optional[str]:
+    _revoked_load()
+    if _min_agent_iat is None:
+        return None
+    iat = claims.get("iat")
+    if isinstance(iat, (int, float)) and not isinstance(iat, bool) and iat < _min_agent_iat:
+        return "token too old (iat before min_agent_iat), mint a new one"
+    return None
 
 
 def _revoked_endpoint() -> str:
@@ -282,7 +424,7 @@ def _revoked_endpoint() -> str:
 
 
 def _revoked_load() -> None:
-    global _revoked_polled, _revoked_as_of, _revoked_loaded
+    global _revoked_polled, _revoked_as_of, _revoked_loaded, _min_agent_iat
     if _revoked_loaded:
         return
     _revoked_loaded = True
@@ -292,6 +434,7 @@ def _revoked_load() -> None:
             d = json.load(f)
         _revoked_polled = set(d.get("revoked") or [])
         _revoked_as_of = str(d.get("as_of") or "")
+        _min_agent_iat = _als_epoch(d.get("min_agent_iat"))
     except Exception:
         pass
 
@@ -302,7 +445,8 @@ def _revoked_save() -> None:
         os.makedirs(os.path.dirname(_REVOKED_STATE), exist_ok=True)
         tmp = _REVOKED_STATE + ".tmp"
         with open(tmp, "w") as f:
-            json.dump({"revoked": sorted(_revoked_polled), "as_of": _revoked_as_of}, f)
+            json.dump({"revoked": sorted(_revoked_polled), "as_of": _revoked_as_of,
+                       "min_agent_iat": _min_agent_iat}, f)
         os.replace(tmp, _REVOKED_STATE)
     except Exception as e:
         logger.warning("revoked_jtis: Spiegel nicht geschrieben: %s", e)
@@ -310,7 +454,7 @@ def _revoked_save() -> None:
 
 async def revoked_poll_once(client=None) -> int:
     """Einmal abholen; liefert Anzahl NEUER jtis. Wirft nicht."""
-    global _revoked_as_of
+    global _revoked_as_of, _min_agent_iat
     _revoked_load()
     try:
         import httpx
@@ -332,7 +476,16 @@ async def revoked_poll_once(client=None) -> int:
                 _revoked_polled.add(j)
                 neu += 1
         _revoked_as_of = str(d.get("as_of") or _revoked_as_of)
-        if neu or not os.path.exists(_REVOKED_STATE):
+        geaendert = False
+        if "min_agent_iat" in d:             # fehlt der Schluessel: letzter Stand bleibt
+            geliefert = _als_epoch(d.get("min_agent_iat"))
+            if geliefert != _min_agent_iat:
+                if geliefert is not None and geliefert > time.time() + 300:
+                    logger.error("revoked_jtis: min_agent_iat liegt in der Zukunft, auch frisch "
+                                 "gepraegte Agenten-Tokens werden abgewiesen")
+                _min_agent_iat = geliefert
+                geaendert = True
+        if neu or geaendert or not os.path.exists(_REVOKED_STATE):
             _revoked_save()
         if neu:
             logger.warning("revoked_jtis: %d neue widerrufene Agent-Token (gesamt %d)", neu, len(_revoked_polled))
@@ -635,11 +788,13 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                 request.state.agent = AgentContext()
                 return await call_next(request)
 
+            await _jwks_fuer_kid(_kid_aus(token))
             claims = _decode_jwt(token, public_key)
-            if _aud_abgelehnt(claims):
-                logger.warning("JWT abgewiesen: aud %r ist am Gateway nicht zugelassen (sub=%s)",
-                               claims.get("aud"), claims.get("sub"))
-                return JSONResponse({"error": "Invalid token: audience not accepted"}, status_code=401)
+            _grund = _token_abweisen(claims)
+            if _grund:
+                logger.warning("JWT abgewiesen: %s (type=%r aud=%r sub=%s)", _grund,
+                               claims.get("type"), claims.get("aud"), claims.get("sub"))
+                return JSONResponse({"error": f"Invalid token: {_grund}"}, status_code=401)
 
             agent = AgentContext(
                 name=claims.get("agent_name", claims.get("sub", "")),

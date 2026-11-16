@@ -530,6 +530,43 @@ class Aufgaben(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((mit["schritte"][1]["eingabe"], mit["schritte"][1]["satz"]), ("Bau das Drive", "Drive gebaut."))
         self.assertNotIn("eingabe", mit["schritte"][0])          # nicht geliefert: kein Feld
 
+    async def test_gekappte_null_bleibt_null(self):
+        """#3173: zeit_s ist gekappt und darf 0 sein; dann nicht auf dauer_s zurueckfallen."""
+        self.antwort["schritte"][1]["zeit_s"] = 0
+        d = json.loads(_geliefert(await self.mcp.call_tool("aufgaben_tag", {"person": "p@x.at"})))
+        self.assertEqual(d["schritte"][1]["min"], 0.0)
+        self.assertEqual(d["aufgaben"][0]["min"], 10)                      # nur t1 (600 s)
+
+    async def test_aufwand_mit_tokens(self):
+        """#3175: Tokens, Ende und Durchlaufzeit je Schritt und Aufgabe, nur mit tokens=true."""
+        t1, t2 = self.antwort["schritte"][0], self.antwort["schritte"][1]
+        t1.update(tokens={"anfragen": 3, "input": 8, "output": 4608, "cache_read": 1372154, "cache_write": 4018,
+                          "reasoning": 0}, ende_letzter="2026-11-13T08:32:30+00:00", durchlauf_s=630.0, zuege_offen=0)
+        t2.update(tokens={"anfragen": 2, "input": 2, "output": 100, "cache_read": 0, "cache_write": 0,
+                          "reasoning": 0}, ende_letzter="2026-11-13T09:05:00+00:00", durchlauf_s=300.0, zuege_offen=1)
+        d = json.loads(_geliefert(await self.mcp.call_tool("aufgaben_tag", {"person": "p@x.at", "tokens": True})))
+        self.assertEqual(self.calls[-1][2]["params"]["tokens"], "true")
+        s1 = d["schritte"][0]
+        self.assertEqual((s1["uhr"], s1["ende"], s1["durchlauf_min"]), ("09:22:00", "09:32:30", 10.5))
+        self.assertEqual(s1["tokens"], {"anfragen": 3, "input": 8, "output": 4608, "cache_read": 1372154,
+                                        "cache_write": 4018})                     # Nullen fallen weg
+        self.assertNotIn("offen", s1)
+        self.assertEqual(d["schritte"][1]["offen"], 1)
+        a = d["aufgaben"][0]
+        self.assertEqual(a["tokens"], {"anfragen": 5, "input": 10, "output": 4708, "cache_read": 1372154,
+                                       "cache_write": 4018})
+        self.assertEqual((a["von"], a["bis"], a["durchlauf_min"], a["offen"]), ("09:22:00", "10:05:00", 43.0, 1))
+        self.antwort = _aufgaben_tag()                                    # cloud-api ohne tokens=true
+        ohne = json.loads(_geliefert(await self.mcp.call_tool("aufgaben_tag", {"person": "p@x.at"})))
+        self.assertNotIn("tokens", self.calls[-1][2]["params"])
+        self.assertNotIn("tokens", ohne["aufgaben"][0])
+        self.assertEqual(ohne["schritte"][0]["uhr"], "09:22")
+
+    async def test_beschreibung_nennt_aufwand(self):
+        tool = {t.name: t for t in await self.mcp.list_tools()}["aufgaben_tag"]
+        for wort in ("tokens=true", "durchlauf_min", "getrennt", "Cache", "erst nach seinem Ende"):
+            self.assertIn(wort, tool.description)
+
     async def test_umordnen_baut_ziel_und_auswahl(self):
         self.antwort = {"geaendert": 1}
         await self.mcp.call_tool("aufgaben_umordnen", {"person": "p@x.at", "projekt_id": "d3f3", "aufgaben": [64]})

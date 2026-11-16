@@ -33,6 +33,10 @@ TOKEN_FELDER = ("anfragen", "input", "output", "cache_read", "cache_write", "rea
 ZEILEN_FELDER = ("hinzu", "geaendert", "entfernt")
 
 
+def _zeitpunkt(iso: str) -> datetime:
+    return datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+
+
 def _uhr(iso: Optional[str], tz: ZoneInfo, sekunden: bool = False) -> Optional[str]:
     """ISO-Zeit als Uhrzeit des Tages in der Zeitzone der Antwort."""
     if not iso:
@@ -235,27 +239,53 @@ def aufgaben_zusammenfassen(d: Dict[str, Any], texte: bool = False) -> Dict[str,
     je_projekt: Dict[Any, Dict[str, Any]] = {}
     zeilen = []
     for s in schritte:
-        sek = float(s.get("zeit_s") or s.get("dauer_s") or 0)
+        # zeit_s ist gekappt (cloud-api #3173) und darf 0 sein; nur wenn es fehlt, gilt dauer_s.
+        z = s.get("zeit_s")
+        sek = float(z) if z is not None else float(s.get("dauer_s") or 0)
         projekt = _pfad_text(s.get("projekt"))
+        tok = s.get("tokens") if isinstance(s.get("tokens"), dict) else None
+        lauf = s.get("durchlauf_s")
         zeilen.append({k: v for k, v in {
-            "turn_id": s.get("turn_id"), "uhr": _uhr(s.get("beginn"), tz), "agent": s.get("agent"),
+            "turn_id": s.get("turn_id"), "uhr": _uhr(s.get("beginn"), tz, sekunden=tok is not None),
+            "agent": s.get("agent"),
             "min": round(sek / 60, 1), "aufgabe_id": s.get("aufgabe_id"), "titel": s.get("titel"),
             "projekt": projekt, "quelle": s.get("quelle"), "projekt_quelle": s.get("projekt_quelle"),
             "geerbt": s.get("geerbt") or None,
+            "tokens": {k: v for k, v in tok.items() if v} if tok is not None else None,
+            "ende": _uhr(s.get("ende_letzter"), tz, sekunden=True) if tok is not None else None,
+            "durchlauf_min": round(float(lauf) / 60, 1) if tok is not None and lauf is not None else None,
+            "offen": s.get("zuege_offen") or None,
             "eingabe": s.get("eingabe_kurz") if texte else None,
             "satz": s.get("satz") if texte else None}.items() if v not in (None, "")})
         a = je_aufgabe.setdefault(s.get("aufgabe_id"), {"aufgabe_id": s.get("aufgabe_id"), "titel": s.get("titel"),
                                                         "projekt": projekt, "schritte": 0, "s": 0.0,
-                                                        "agenten": set()})
+                                                        "agenten": set(), "tokens": None, "von": None,
+                                                        "bis": None, "offen": 0})
         a["schritte"] += 1
         a["s"] += sek
         a["agenten"].add(s.get("agent") or "?")
+        if tok is not None:
+            a["tokens"] = a["tokens"] or {}
+            for k, v in tok.items():
+                a["tokens"][k] = a["tokens"].get(k, 0) + int(v or 0)
+            a["von"] = min(filter(None, (a["von"], s.get("beginn"))), default=None, key=_zeitpunkt)
+            a["bis"] = max(filter(None, (a["bis"], s.get("ende_letzter"))), default=None, key=_zeitpunkt)
+            a["offen"] += int(s.get("zuege_offen") or 0)
         pr = je_projekt.setdefault(projekt, {"projekt": projekt, "s": 0.0, "schritte": 0})
         pr["s"] += sek
         pr["schritte"] += 1
-    aufgaben = [{"aufgabe_id": a["aufgabe_id"], "titel": a["titel"], "projekt": a["projekt"],
+    aufgaben = []
+    for a in sorted(je_aufgabe.values(), key=lambda a: -a["s"]):
+        zeile = {"aufgabe_id": a["aufgabe_id"], "titel": a["titel"], "projekt": a["projekt"],
                  "schritte": a["schritte"], "min": round(a["s"] / 60), "agenten": sorted(a["agenten"])}
-                for a in sorted(je_aufgabe.values(), key=lambda a: -a["s"])]
+        if a["tokens"] is not None:
+            zeile["tokens"] = {k: v for k, v in a["tokens"].items() if v}
+            zeile["von"], zeile["bis"] = _uhr(a["von"], tz, sekunden=True), _uhr(a["bis"], tz, sekunden=True)
+            if a["von"] and a["bis"]:
+                zeile["durchlauf_min"] = round((_zeitpunkt(a["bis"]) - _zeitpunkt(a["von"])).total_seconds() / 60, 1)
+            if a["offen"]:
+                zeile["offen"] = a["offen"]
+        aufgaben.append(zeile)
     out: Dict[str, Any] = {
         "person": d.get("person"), "datum": d.get("datum"), "noch_offen": d.get("noch_offen"),
         "aufgaben": aufgaben,
@@ -388,15 +418,24 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
             "die Person dein Besitzer ist, oder wenn du ohne Leserecht in ihrem eigenen Zug liest; "
             "ein Leserecht allein (`zeit:lesen`, `zeit:lesen:<mail>`) gibt keine Texte. Lesen darf, "
             "wer `zeit:lesen` hat, oder ein Agent, dessen laufenden Zug genau diese Person selbst "
-            "begonnen hat. Personendaten: nur dem Menschen selbst zeigen."
+            "begonnen hat. Personendaten: nur dem Menschen selbst zeigen. "
+            "`tokens=true` (Aufwand einer Anweisung, #3175): je Schritt und je Aufgabe auch `tokens` "
+            "(anfragen, input = neue Eingabe, output, cache_read, cache_write), `ende` des letzten Zugs, "
+            "`durchlauf_min` (Eingabe bis Ende des letzten Zugs) und `offen` (laufende Zuege, die Zahlen "
+            "wachsen noch); `uhr` dann mit Sekunden. `min` ist die aktive Zeit, gekappt wie in der "
+            "Uebersicht. Nenne Tokens immer getrennt nach Ausgabe, neuer Eingabe und Cache, nie als "
+            "eine Summe: der Cache ist meist ueber 99 %. Ein Zug erscheint erst nach seinem Ende in "
+            "der Ablage, die juengste Arbeit fehlt also noch."
         ),
     )
     async def aufgaben_tag(person: str, datum: str = "", agent: str = "", katalog: bool = True,
-                           texte: bool = False) -> Any:
+                           texte: bool = False, tokens: bool = False) -> Any:
         params = {k: v for k, v in (("person", person.strip()), ("datum", datum.strip()),
                                     ("agent", agent.strip())) if v}
         if katalog:
             params["katalog"] = "true"
+        if tokens:
+            params["tokens"] = "true"
         d = await transport("GET", "/api/aufgaben/tag", params=params, timeout=60)
         if not isinstance(d, dict) or "schritte" not in d:
             return d

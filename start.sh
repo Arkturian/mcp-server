@@ -21,4 +21,8 @@ if [[ ! -x "$UVICORN_BIN" ]]; then
   exit 1
 fi
 
-exec "$UVICORN_BIN" server:app --host "$MCP_HOST" --port "$MCP_PORT" --proxy-headers --log-level info
+# --timeout-keep-alive 120 (#3201): uvicorn closes idle connections after 5 s by
+# default, Codex clients (rmcp/reqwest) keep them pooled for up to 90 s. A reuse right
+# at the 5-s edge lost the request ("Transport send error"). Same value as the tenant
+# gateway unit in cloud-api/.devops/tenant/agentos-tenant-bootstrap.sh.
+exec "$UVICORN_BIN" server:app --timeout-keep-alive 120 --host "$MCP_HOST" --port "$MCP_PORT" --proxy-headers --log-level info

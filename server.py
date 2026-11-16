@@ -471,17 +471,51 @@ def _storage_grant_scope() -> str:
     return storage_grant_scope_for(current_caller_verified_agent())
 
 
+# #3138: Einschraenkung fuer Aufrufer ohne eigenen Storage-Scope. Der Wert passt
+# auf keine Freigabe, jetzt und kuenftig: storage-api schreibt jede Freigabe nur
+# nach `_validate_scope` (storage/signing.py SCOPE_RE `<art>:<id>`, ID ohne
+# Leerzeichen), dieser Wert hat eines. Unter ihm sieht der Aufrufer nur, was
+# schlicht oeffentlich ist (is_public und nicht private_media).
+STORAGE_RESTRICT_OHNE_SCOPE = "mcp-gateway:ohne storage-scope"
+
+
+def _storage_restrict_scope() -> str:
+    """Wert für X-Grant-Scope-Restrict aus der geprüften Identität ("" = keine).
+
+    - Agent: sein Scope `cloud-session:<Name>` (#3030).
+    - Superadmin (Betreiber, is_superadmin im geprüften JWT): keine Einschränkung.
+    - Alle anderen (Mensch per Login oder OAuth-Connector, Dienst, anonym):
+      STORAGE_RESTRICT_OHNE_SCOPE (#3138). Vorher sahen sie mit dem gemeinsamen
+      Schlüssel alles, was das Konto sieht; seit die Mandanten-Schranke für
+      storage edera durchlässt, auch Menschen von edera.
+
+    Der eigene Scope eines Menschen wäre `cloud-user:<Storage-Benutzernummer>`
+    (cloud-api private_media.user_scope), nicht seine auth-api-ID. Die Nummer
+    vergibt storage-api über /storage/principals/ensure, und das nimmt nur einen
+    Dienstschlüssel an, den das Gateway nicht hat. Bis das geklärt ist, sieht ein
+    Mensch über das Gateway nur Öffentliches, auch nicht seine eigenen privaten
+    Dateien."""
+    from auth import current_caller_is_superadmin
+
+    scope = _storage_grant_scope()
+    if scope:
+        return scope
+    if current_caller_is_superadmin():
+        return ""
+    return STORAGE_RESTRICT_OHNE_SCOPE
+
+
 def _storage_headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-    """X-API-KEY plus, for an agent caller, X-Grant-Scope-Restrict (#3030).
+    """X-API-KEY plus X-Grant-Scope-Restrict (#3030, #3138).
 
     The gateway authenticates as one shared account that owns every agent's
-    attachments, so without the header any agent read any other agent's
-    private files. With it, storage-api shows non-public objects only when
-    they are bound to the caller's scope. The scope comes from the verified
-    gateway identity, never from tool arguments. Non-agent callers send no
-    header and are judged as before."""
+    attachments, so without the header any caller read any agent's private
+    files. With it, storage-api shows non-public objects only when they are
+    bound to the restricting scope. The scope comes from the verified gateway
+    identity, never from tool arguments (_storage_restrict_scope). Only a
+    superadmin goes unrestricted."""
     headers = {"X-API-KEY": STORAGE_API_KEY}
-    scope = _storage_grant_scope()
+    scope = _storage_restrict_scope()
     if scope:
         headers["X-Grant-Scope-Restrict"] = scope
     if extra:

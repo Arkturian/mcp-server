@@ -594,17 +594,32 @@ OFFENE_SERVER: set[str] = {
 # Server mit Rechte-STUFEN statt Rechten je Werkzeug (#2441, person-api): Werkzeug ->
 # Stufe, z. B. {"person": {"persons_list": "read", "person_create": "write"}}. Ein
 # Werkzeug ist dann mit mcp:<server>:<stufe> ODER mcp:<server>:<werkzeug> frei.
-# Die Stufen gelten woertlich, ohne Vererbung -- wie in der person-api selbst.
-# server.py meldet die Zuordnung beim Einhaengen an.
+# Die Stufen gelten woertlich, ohne Vererbung -- wie in der person-api selbst --,
+# ausser der Server steht in STUFEN_REIHE. server.py meldet die Zuordnung beim
+# Einhaengen an.
 WERKZEUG_STUFEN: dict[str, dict[str, str]] = {}
+
+# Gestaffelte Stufen (#3130), aufsteigend: eine hoehere Stufe enthaelt alle
+# niedrigeren. tree: ("read", "status", "write") wie tree-api app/auth.py
+# tree_scopes (write ⊇ status ⊇ read), damit dasselbe Recht ueber REST und MCP
+# dasselbe bedeutet. Ohne Eintrag (person) bleiben die Stufen woertlich.
+STUFEN_REIHE: dict[str, tuple[str, ...]] = {}
+
+
+def _stufen_fuer(mcp_server: str, tool_name: str) -> list[str]:
+    """Die Stufen, die ein Werkzeug freigeben: seine eigene und, bei gestaffelten
+    Servern, jede hoehere. Leer, wenn das Werkzeug keine Stufe hat."""
+    stufe = WERKZEUG_STUFEN.get(mcp_server, {}).get(tool_name)
+    if stufe is None:
+        return []
+    reihe = STUFEN_REIHE.get(mcp_server) or ()
+    return list(reihe[reihe.index(stufe):]) if stufe in reihe else [stufe]
 
 
 def _werkzeug_erlaubt(perms: list[str], mcp_server: str, tool_name: str) -> bool:
     """Darf ein Agent mit `perms` (schon nach _permissions_for_server) das Werkzeug rufen?"""
-    if any(_match_permission(p, f"mcp:{mcp_server}:{tool_name}") for p in perms):
-        return True
-    stufe = WERKZEUG_STUFEN.get(mcp_server, {}).get(tool_name)
-    return stufe is not None and any(_match_permission(p, f"mcp:{mcp_server}:{stufe}") for p in perms)
+    ziele = [f"mcp:{mcp_server}:{tool_name}"] + [f"mcp:{mcp_server}:{s}" for s in _stufen_fuer(mcp_server, tool_name)]
+    return any(_match_permission(p, z) for p in perms for z in ziele)
 
 
 def _jsonrpc_teile(body_json) -> list:
@@ -671,12 +686,15 @@ def gegriffenes_recht(permissions: list[str], mcp_server: str, tool_name: str) -
     if mcp_server and _offen(mcp_server):
         return "offen"
     perms = _permissions_for_server(permissions, mcp_server)
-    ziele = [f"mcp:{mcp_server}:{tool_name}"]
-    stufe = WERKZEUG_STUFEN.get(mcp_server, {}).get(tool_name)
-    if stufe:
-        ziele.append(f"mcp:{mcp_server}:{stufe}")
+    ziele = [f"mcp:{mcp_server}:{tool_name}"] + [f"mcp:{mcp_server}:{s}" for s in _stufen_fuer(mcp_server, tool_name)]
+
+    def _rang(p: str) -> int:
+        # Gleich genau: das Werkzeug selbst vor seiner eigenen Stufe vor hoeheren (#3130).
+        return min((i for i, z in enumerate(ziele) if _match_permission(p, z)), default=len(ziele))
     treffer = [p for p in perms if any(_match_permission(p, z) for z in ziele)]
-    return max(treffer, key=_ap.genauigkeit) if treffer else "?"
+    if not treffer:
+        return "?"
+    return max(treffer, key=lambda p: (_ap.genauigkeit(p)[0], -_rang(p), _ap.genauigkeit(p)[1]))
 
 
 def _aufrufe_vermerken(agent: "AgentContext", mcp_server: str, body_bytes) -> None:
@@ -891,10 +909,9 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                         body_json = _json.loads(body_bytes)
                         # Jeder Aufruf eines Stapels einzeln.
                         for tool_name in _aufgerufene_werkzeuge(body_json):
-                            required_perm = f"mcp:{mcp_server}:{tool_name}"
-                            stufe = WERKZEUG_STUFEN.get(mcp_server, {}).get(tool_name)
-                            if stufe:
-                                required_perm += f" | mcp:{mcp_server}:{stufe}"
+                            required_perm = " | ".join(
+                                [f"mcp:{mcp_server}:{tool_name}"]
+                                + [f"mcp:{mcp_server}:{s}" for s in _stufen_fuer(mcp_server, tool_name)])
                             if not tool_name or not _werkzeug_erlaubt(perms, mcp_server, tool_name):
                                 logger.warning(
                                     "RBAC denied (tool): agent=%s role=%s perm=%s",

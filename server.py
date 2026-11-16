@@ -5907,10 +5907,13 @@ tree_mcp = FastMCP(
 # mcp:tree:write. Die Bindung an ein Projekt ist das Recht tree:projekt:<id> (ohne
 # mcp:, Muster <dienst>:projekt:<id> aus 6162); das Gateway wertet es nicht aus, nur
 # tree-api. Das Gateway laesst ein Werkzeug mit mcp:tree:<stufe> oder
-# mcp:tree:<werkzeug> durch; die Stufen gelten woertlich, ohne Vererbung (wer
-# schreibt, braucht auch read, fuer nodes_update auch status). mcp:tree:* und
-# die Platzhalter decken weiter alles ab. Ein neues Tree-Werkzeug gehoert hier
+# mcp:tree:<werkzeug> durch. Die Stufen sind gestaffelt wie in tree-api
+# (app/auth.py tree_scopes, #3130): write enthaelt status und read, status
+# enthaelt read (TREE_STUFEN_REIHE). mcp:tree:* und die Platzhalter decken weiter
+# alles ab. Ein Recht je Werkzeug (mcp:tree:nodes_get) laesst das Gateway durch,
+# tree-api gibt dafuer nichts frei (403). Ein neues Tree-Werkzeug gehoert hier
 # hinein, sonst geht es nur mit mcp:tree:* (tests/test_tree_stufen_3121.py prueft das).
+TREE_STUFEN_REIHE = ("read", "status", "write")
 TREE_WERKZEUG_STUFEN: Dict[str, str] = {
     **{w: "read" for w in (
         "service_health", "projects_list", "projects_get", "tree_get", "tree_outline",
@@ -6637,6 +6640,7 @@ mount_mcp("content", CONTENT_PATH, content_app)
 mount_mcp("tree", TREE_PATH, tree_app)
 import auth as _tree_auth  # noqa: E402
 _tree_auth.WERKZEUG_STUFEN["tree"] = dict(TREE_WERKZEUG_STUFEN)
+_tree_auth.STUFEN_REIHE["tree"] = TREE_STUFEN_REIHE
 ai_mcp = FastMCP(
     name="ai-api",
     streamable_http_path="/",

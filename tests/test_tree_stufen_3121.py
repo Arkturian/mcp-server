@@ -4,7 +4,8 @@ tree-api trennt mcp:tree:* auf in read / status / write, die Projekt-Bindung ist
 tree:projekt:<id> (ohne mcp:, Beitrag 6162). Das Gateway prueft je
 Werkzeug mcp:tree:<werkzeug> oder mcp:tree:<stufe> (WERKZEUG_STUFEN["tree"]); ohne
 Anmeldung wiese es einen Agenten mit nur read und status ab, bevor tree-api ihn sieht.
-Die Stufen gelten woertlich, ohne Vererbung; mcp:tree:* und Platzhalter decken alles.
+Die Stufen sind gestaffelt wie in tree-api (#3130: write ⊇ status ⊇ read); mcp:tree:*
+und Platzhalter decken alles.
 Nur gegen die echte JWTAuthMiddleware mit gefaelschtem JWT -- keine tree-api.
 """
 import asyncio
@@ -54,6 +55,7 @@ def test_server_meldet_tree_am_gateway_an():
     server.py beim Import angemeldet hat -- im Dienst geschieht das nie."""
     code = ("import json, auth, server; print(json.dumps({"
             "'stufen': auth.WERKZEUG_STUFEN.get('tree') == server.TREE_WERKZEUG_STUFEN,"
+            "'reihe': auth.STUFEN_REIHE.get('tree') == ('read', 'status', 'write'),"
             "'explicit': 'tree' in auth.EXPLICIT_ONLY_SERVERS,"
             "'werkzeuge': sorted(t.name for t in server.tree_mcp._tool_manager.list_tools())}))")
     wurzel = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -61,7 +63,8 @@ def test_server_meldet_tree_am_gateway_an():
     assert r.returncode == 0, r.stderr[-2000:]
     stand = json.loads(r.stdout.strip().splitlines()[-1])
     # Kein reiner Ausdruecklich-Server: mcp:*, mcp:*:* und * gelten fuer tree weiter.
-    assert stand == {"stufen": True, "explicit": False, "werkzeuge": sorted(LESEN | STATUS | SCHREIBEN)}
+    assert stand == {"stufen": True, "reihe": True, "explicit": False,
+                     "werkzeuge": sorted(LESEN | STATUS | SCHREIBEN)}
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +83,7 @@ def rechte(monkeypatch):
     monkeypatch.setattr(auth, "EXPLICIT_ONLY_SERVERS", set())
     monkeypatch.setattr(auth, "OFFENE_SERVER", set())
     monkeypatch.setattr(auth, "WERKZEUG_STUFEN", {"tree": dict(server.TREE_WERKZEUG_STUFEN)})
+    monkeypatch.setattr(auth, "STUFEN_REIHE", {"tree": server.TREE_STUFEN_REIHE})
 
     async def key():
         return "k"
@@ -139,9 +143,9 @@ def test_mit_projekt_begrenzung(rechte):
 
 
 @pytest.mark.parametrize("perms,erlaubt", [
-    (["mcp:tree:status"], STATUS),                         # woertlich: status ohne read liest nicht
-    (["mcp:tree:write"], SCHREIBEN),                       # woertlich: write ohne read liest nicht
-    (["mcp:tree:read", "mcp:tree:write"], LESEN | SCHREIBEN),
+    (["mcp:tree:status"], LESEN | STATUS),                 # gestaffelt (#3130): status liest auch
+    (["mcp:tree:write"], LESEN | STATUS | SCHREIBEN),      # gestaffelt (#3130): write deckt alles
+    (["mcp:tree:read", "mcp:tree:write"], LESEN | STATUS | SCHREIBEN),
     (["mcp:tree:read", "mcp:tree:status", "mcp:tree:write"], LESEN | STATUS | SCHREIBEN),
     (["mcp:tree:nodes_get"], {"nodes_get"}),               # einzelnes Werkzeug ausdruecklich
     (["mcp:tree:*"], LESEN | STATUS | SCHREIBEN),          # bestehende Agenten: unveraendert
@@ -151,7 +155,7 @@ def test_mit_projekt_begrenzung(rechte):
     (["mcp:content:read"], set()),                         # Stufe eines anderen Servers
     ([], set()),
 ])
-def test_stufen_woertlich(rechte, perms, erlaubt):
+def test_stufen_gestaffelt(rechte, perms, erlaubt):
     rechte(perms)
     assert _erlaubt() == erlaubt
 
@@ -167,6 +171,7 @@ def test_protokoll_nennt_die_stufe(monkeypatch):
     monkeypatch.setattr(auth, "EXPLICIT_ONLY_SERVERS", set())
     monkeypatch.setattr(auth, "OFFENE_SERVER", set())
     monkeypatch.setattr(auth, "WERKZEUG_STUFEN", {"tree": dict(server.TREE_WERKZEUG_STUFEN)})
+    monkeypatch.setattr(auth, "STUFEN_REIHE", {"tree": server.TREE_STUFEN_REIHE})
     perms = ["mcp:tree:read", "mcp:tree:status"]
     assert auth.gegriffenes_recht(perms, "tree", "tree_outline") == "mcp:tree:read"
     assert auth.gegriffenes_recht(perms, "tree", "nodes_update") == "mcp:tree:status"

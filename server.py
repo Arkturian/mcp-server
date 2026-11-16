@@ -10751,6 +10751,27 @@ _CAL_EVENT_DOC = (
 )
 
 
+# Vorgabe-Quelle der Kalender-Werkzeuge je Instanz (Cloud, P3 16.11.2026).
+# Fest "apopovic" ergab auf einer Kundeninstanz ohne ausdrückliche Quelle
+# immer 403. Nicht gesetzt: "apopovic" wie bisher (Betreiber). Leer
+# gesetzt: keine Vorgabe, `source` ist Pflicht. Sonst: dieser Name.
+_CAL_DEFAULT_SOURCE_ENV = "COMM_CALENDAR_DEFAULT_SOURCE"
+
+
+def _cal_source(source: Optional[str]) -> str:
+    wert = (source or "").strip()
+    if wert:
+        return wert
+    vorgabe = os.getenv(_CAL_DEFAULT_SOURCE_ENV, "apopovic").strip()
+    if vorgabe:
+        return vorgabe
+    raise ValueError(
+        "calendar_source_required: Diese Instanz hat keine Vorgabe-Quelle "
+        f"({_CAL_DEFAULT_SOURCE_ENV} ist leer). Gib source an; "
+        "calendar_list_sources nennt die Quellen deines Menschen."
+    )
+
+
 def _cal_path(source: str, *parts: str) -> str:
     from urllib.parse import quote as _q
     segs = [_q(source, safe="")] + [_q(p, safe="~=") for p in parts]
@@ -10777,8 +10798,8 @@ async def comm_calendar_list_sources() -> Dict[str, Any]:
         "immer 'primary'. access: owner|writer|reader|freebusy."
     ),
 )
-async def comm_calendar_list_calendars(source: str = "apopovic") -> Dict[str, Any]:
-    return await call_comm_api("GET", _cal_path(source, "calendars"))
+async def comm_calendar_list_calendars(source: Optional[str] = None) -> Dict[str, Any]:
+    return await call_comm_api("GET", _cal_path(_cal_source(source), "calendars"))
 
 
 @comm_mcp.tool(
@@ -10792,7 +10813,7 @@ async def comm_calendar_list_calendars(source: str = "apopovic") -> Dict[str, An
     ),
 )
 async def comm_calendar_list_events(
-    source: str = "apopovic",
+    source: Optional[str] = None,
     time_min: Optional[str] = None,
     time_max: Optional[str] = None,
     max_results: Optional[int] = None,
@@ -10801,16 +10822,16 @@ async def comm_calendar_list_events(
 ) -> Dict[str, Any]:
     params = _clean_params(time_min=time_min, time_max=time_max, max_results=max_results,
                            calendar_id=calendar_id, q=query)
-    return await call_comm_api("GET", _cal_path(source, "events"), params=params)
+    return await call_comm_api("GET", _cal_path(_cal_source(source), "events"), params=params)
 
 
 @comm_mcp.tool(
     name="calendar_get_event",
     description="Einen Termin lesen (mit etag für calendar_update_event). " + _CAL_EVENT_DOC,
 )
-async def comm_calendar_get_event(event_id: str, source: str = "apopovic",
+async def comm_calendar_get_event(event_id: str, source: Optional[str] = None,
                                   calendar_id: str = "primary") -> Dict[str, Any]:
-    return await call_comm_api("GET", _cal_path(source, "events", event_id),
+    return await call_comm_api("GET", _cal_path(_cal_source(source), "events", event_id),
                                params={"calendar_id": calendar_id})
 
 
@@ -10829,7 +10850,7 @@ async def comm_calendar_create_event(
     summary: str,
     start: str,
     end: Optional[str] = None,
-    source: str = "apopovic",
+    source: Optional[str] = None,
     calendar_id: str = "primary",
     description: str = "",
     location: str = "",
@@ -10849,7 +10870,7 @@ async def comm_calendar_create_event(
     }
     if attendees:
         payload["attendees"] = attendees
-    return await call_comm_api("POST", _cal_path(source, "events"),
+    return await call_comm_api("POST", _cal_path(_cal_source(source), "events"),
                                json_body={k: v for k, v in payload.items() if v is not None})
 
 
@@ -10865,7 +10886,7 @@ async def comm_calendar_create_event(
 )
 async def comm_calendar_update_event(
     event_id: str,
-    source: str = "apopovic",
+    source: Optional[str] = None,
     calendar_id: str = "primary",
     summary: Optional[str] = None,
     start: Optional[str] = None,
@@ -10885,7 +10906,7 @@ async def comm_calendar_update_event(
         "attendees": attendees, "online_meeting": online_meeting or None,
         "send_updates": send_updates, "etag": etag,
     }
-    return await call_comm_api("PATCH", _cal_path(source, "events", event_id),
+    return await call_comm_api("PATCH", _cal_path(_cal_source(source), "events", event_id),
                                params={"calendar_id": calendar_id},
                                json_body={k: v for k, v in payload.items() if v is not None})
 
@@ -10899,11 +10920,11 @@ async def comm_calendar_update_event(
 )
 async def comm_calendar_delete_event(
     event_id: str,
-    source: str = "apopovic",
+    source: Optional[str] = None,
     calendar_id: str = "primary",
     send_updates: str = "all",
 ) -> Dict[str, Any]:
-    return await call_comm_api("DELETE", _cal_path(source, "events", event_id),
+    return await call_comm_api("DELETE", _cal_path(_cal_source(source), "events", event_id),
                                params={"calendar_id": calendar_id, "send_updates": send_updates})
 
 
@@ -10918,7 +10939,7 @@ async def comm_calendar_delete_event(
 async def comm_calendar_respond(
     event_id: str,
     response: str,
-    source: str = "apopovic",
+    source: Optional[str] = None,
     calendar_id: str = "primary",
     comment: Optional[str] = None,
     send_updates: str = "all",
@@ -10926,7 +10947,7 @@ async def comm_calendar_respond(
     body = {"response": response, "send_updates": send_updates, "calendar_id": calendar_id}
     if comment is not None:
         body["comment"] = comment
-    return await call_comm_api("POST", _cal_path(source, "events", event_id, "respond"),
+    return await call_comm_api("POST", _cal_path(_cal_source(source), "events", event_id, "respond"),
                                json_body=body)
 
 

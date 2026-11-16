@@ -3965,10 +3965,17 @@ async def content_media_list(post_id: int) -> List[Dict[str, Any]]:
 
 @content_mcp.tool(
     name="media_add",
-    description="""Add media attachment to a post.
+    description="""Add media to a post.
 
     Required: storage_id (int) - ID from Storage API
-    Optional: position (int), caption (str), role (str, e.g. 'hero', 'gallery')
+    Optional: position (int), caption (str), role (str: 'hero', 'gallery', 'inline',
+    'thumbnail', 'attachment', 'illustration', 'video'; default 'gallery')
+
+    role='attachment' = a file that goes out with an e-mail draft ("Entwurf prüfen", #3135).
+    The tool reads filename, type, size and SHA-256 from the storage object itself, with your
+    own storage rights, and hands them to content-api. A file you cannot read cannot be
+    attached. Every attachment change creates a new doc_version: an open review card must be
+    sent again (send_draft_for_review with the new version) before the human approves.
     """,
 )
 async def content_media_add(
@@ -3986,6 +3993,26 @@ async def content_media_add(
         body["caption"] = caption
     if role:
         body["role"] = role
+    if role == "attachment":
+        # #3135: Angaben vom Storage-Objekt, gelesen mit den Rechten des
+        # Aufrufers (X-Grant-Scope-Restrict). Nie aus Werkzeug-Argumenten.
+        obj = await call_storage_api("GET", f"/storage/objects/{int(storage_id)}")
+        meta = {
+            "filename": obj.get("original_filename") if isinstance(obj, dict) else None,
+            "content_type": obj.get("mime_type") if isinstance(obj, dict) else None,
+            "sha256": obj.get("checksum") if isinstance(obj, dict) else None,
+            "size_bytes": obj.get("file_size_bytes") if isinstance(obj, dict) else None,
+        }
+        missing = [k for k in ("filename", "content_type", "sha256") if not meta[k]]
+        if missing:
+            return {
+                "error": "attachment_storage_metadata_missing",
+                "storage_id": storage_id,
+                "missing": missing,
+                "hint": "the storage object has no " + ", ".join(missing)
+                        + "; upload the file again so storage records it",
+            }
+        body.update(meta)
     return await call_content_api("POST", f"/api/v1/posts/{post_id}/media/", json_body=body)
 
 

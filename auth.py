@@ -60,6 +60,11 @@ _current_agent_name: contextvars.ContextVar[str] = contextvars.ContextVar(
 _current_is_agent: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "current_caller_is_agent", default=False
 )
+# Nur fuer gepruefte Tokens mit is_superadmin=true (Betreiber). Ohne diese
+# Markierung schraenkt das Gateway Storage-Aufrufe eines Nicht-Agenten ein (#3138).
+_current_is_superadmin: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "current_caller_is_superadmin", default=False
+)
 
 
 def current_caller_jwt() -> str:
@@ -77,6 +82,11 @@ def current_caller_agent_name() -> str:
 def current_caller_verified_agent() -> str:
     """Name des Agenten, wenn das geprüfte JWT ein Agenten-Token ist, sonst ""."""
     return _current_agent_name.get() if _current_is_agent.get() else ""
+
+
+def current_caller_is_superadmin() -> bool:
+    """True, wenn das geprüfte JWT des Aufrufers is_superadmin=true trägt."""
+    return _current_is_superadmin.get()
 
 logger = logging.getLogger("mcp-auth")
 
@@ -848,6 +858,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             _is_agent_token = _current_is_agent.set(
                 claims.get("type") == "agent" and bool(claims.get("agent_name"))
             )
+            _superadmin_token = _current_is_superadmin.set(claims.get("is_superadmin") is True)
 
             # Permission check: server-level + tool-level
             mcp_server = _extract_mcp_server_from_path(request.url.path)
@@ -967,6 +978,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                 _current_jwt.reset(_jwt_token)
                 _current_agent_name.reset(_name_token)
                 _current_is_agent.reset(_is_agent_token)
+                _current_is_superadmin.reset(_superadmin_token)
             except (LookupError, NameError):
                 pass
 

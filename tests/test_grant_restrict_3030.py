@@ -49,12 +49,13 @@ def test_agent_reads_are_restricted(monkeypatch, als_agent, call):
             assert kw["headers"]["X-Grant-Scope-Restrict"] == "cloud-session:Business"
 
 
-def test_non_agent_has_no_restriction(monkeypatch):
+def test_non_agent_is_restricted_too(monkeypatch):
+    """#3138: vorher ohne Header; jetzt geht nur ein Superadmin uneingeschraenkt."""
     import server
     calls = []
     monkeypatch.setattr(server, "_fetch_json", _capture(calls))
     asyncio.run(server.storage_assets_get(id=5))
-    assert "X-Grant-Scope-Restrict" not in calls[0][2]["headers"]
+    assert calls[0][2]["headers"]["X-Grant-Scope-Restrict"] == server.STORAGE_RESTRICT_OHNE_SCOPE
 
 
 def test_scope_not_from_arguments(monkeypatch, als_agent):

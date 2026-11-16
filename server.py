@@ -8286,7 +8286,7 @@ Activity view are not visible until they clear (1-3 business days).
 - cat_type: "income" or "expense"
 
 ## Important Defaults
-- VAT rate: 0% (Kleinunternehmerregelung — VAT exempt)
+- VAT rate: the tenant's own (Kleinunternehmer → 0 %, VAT exempt). Pass vat_rate only to override it.
 - Currency: EUR
 - Due days: 14
 - Country: AT (Austria)
@@ -8512,28 +8512,43 @@ async def business_documents_get(doc_id: int) -> Dict[str, Any]:
     return await call_business_api("GET", f"/api/v1/documents/{doc_id}")
 
 
+def _ust_wenn_gesetzt(body: Dict[str, Any], vat_rate: Optional[float]) -> None:
+    """USt-Satz nur mitschicken, wenn der Aufrufer ihn ausdruecklich setzt (#3197).
+
+    Ohne Wert waehlt business-api den Satz des Mandanten (_resolve_vat_rate: ausdruecklich
+    gewinnt, sonst 0 bei Kleinunternehmer, sonst default_vat_rate). Bis #3197 schickten
+    create_invoice und create_honorarnote fest 0.0 und gaben so auch einem Mandanten mit
+    USt Rechnungen ohne USt (16.11.2026: Mandanten 2 und 3 mit 20 %, noch ohne Dokument)."""
+    if vat_rate is not None:
+        body["vat_rate"] = vat_rate
+
+
 @business_mcp.tool(
     name="create_honorarnote",
-    description="Create a new Honorarnote. Required: client_id, hours, rate, description. Auto-generates PDF. Returns document with items.",
+    description=(
+        "Create a new Honorarnote. Required: client_id, hours, rate, description. vat_rate: leave empty "
+        "to use the tenant default (Kleinunternehmer → 0 %), set it only to override. Auto-generates PDF. "
+        "Returns document with items."
+    ),
 )
 async def business_create_honorarnote(
     client_id: int,
     hours: float,
     rate: float,
     description: str,
-    vat_rate: float = 0.0,
+    vat_rate: Optional[float] = None,
     issued_date: Optional[str] = None,
     due_days: int = 14,
     notes: Optional[str] = None,
 ) -> Dict[str, Any]:
-    body = {
+    body: Dict[str, Any] = {
         "client_id": client_id,
         "hours": hours,
         "rate": rate,
         "description": description,
-        "vat_rate": vat_rate,
         "due_days": due_days,
     }
+    _ust_wenn_gesetzt(body, vat_rate)
     if issued_date:
         body["issued_date"] = issued_date
     if notes:
@@ -8543,22 +8558,26 @@ async def business_create_honorarnote(
 
 @business_mcp.tool(
     name="create_invoice",
-    description="Create a new invoice with line items. Required: client_id, items (list of {description, quantity, unit_price}). Auto-generates PDF.",
+    description=(
+        "Create a new invoice with line items. Required: client_id, items (list of {description, quantity, "
+        "unit_price}). vat_rate: leave empty to use the tenant default (Kleinunternehmer → 0 %), set it only "
+        "to override. Auto-generates PDF."
+    ),
 )
 async def business_create_invoice(
     client_id: int,
     items: List[Dict[str, Any]],
-    vat_rate: float = 0.0,
+    vat_rate: Optional[float] = None,
     issued_date: Optional[str] = None,
     due_days: int = 14,
     notes: Optional[str] = None,
 ) -> Dict[str, Any]:
-    body = {
+    body: Dict[str, Any] = {
         "client_id": client_id,
         "items": items,
-        "vat_rate": vat_rate,
         "due_days": due_days,
     }
+    _ust_wenn_gesetzt(body, vat_rate)
     if issued_date:
         body["issued_date"] = issued_date
     if notes:
@@ -8590,11 +8609,8 @@ async def business_create_angebot(
     notes: Optional[str] = None,
     content_post_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    # vat_rate nur, wenn gesetzt: ohne Wert waehlt business-api den Satz des Mandanten
-    # (_resolve_vat_rate). Ein fest mitgeschicktes 0.0 wuerde ihn ueberschreiben.
     body: Dict[str, Any] = {"client_id": client_id, "items": items, "valid_days": valid_days}
-    if vat_rate is not None:
-        body["vat_rate"] = vat_rate
+    _ust_wenn_gesetzt(body, vat_rate)
     if issued_date:
         body["issued_date"] = issued_date
     if notes:

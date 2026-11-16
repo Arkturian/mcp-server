@@ -22,6 +22,7 @@ from starlette.routing import Route
 
 os.environ.setdefault("MCP_SERVERS", "person")
 import auth  # noqa: E402
+from pruef_helfer import claims_fest  # noqa: E402
 import person_tools as pt  # noqa: E402
 import server  # noqa: E402
 from mcp.server.fastmcp import FastMCP  # noqa: E402
@@ -156,11 +157,10 @@ def rechte(monkeypatch):
 
     async def key():
         return "k"
-    monkeypatch.setattr(auth, "_get_public_key", key)
 
     def setze(perms):
-        monkeypatch.setattr(auth, "_decode_jwt", lambda token, key: {
-            "type": "agent", "agent_name": "X", "role": "r", "permissions": perms})
+        monkeypatch.setattr(auth, "_pruefen", claims_fest(lambda token: {
+            "type": "agent", "agent_name": "X", "role": "r", "permissions": perms}))
     return setze
 
 

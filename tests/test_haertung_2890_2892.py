@@ -26,6 +26,7 @@ for _k in ("ARKTURIAN_API_KEY", "ONEAL_STORAGE_API_KEY", "JWT_PUBLIC_KEY", "COMM
     os.environ.setdefault(_k, "test-only")
 
 import auth  # noqa: E402
+from pruef_helfer import claims_fest  # noqa: E402
 import server  # noqa: E402
 
 CALL = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -49,24 +50,13 @@ def test_rechte_aus_claims(claims, erwartet):
     assert auth._rechte_aus_claims(claims) == erwartet
 
 
-def test_superadmin_oauth_ohne_scope_schaltbar(monkeypatch):
-    c = {"sub": "u1", "aud": "cid", "scope": "openid", "is_superadmin": True}
-    monkeypatch.setattr(auth, "_ERLAUBTE_AUD", ["cid"])        # #2976: nur zugelassene aud
-    monkeypatch.setattr(auth, "_SUPERADMIN_OHNE_SCOPE", True)
-    assert auth._rechte_aus_claims(c) == ["*"]
-    monkeypatch.setattr(auth, "_SUPERADMIN_OHNE_SCOPE", False)
-    assert auth._rechte_aus_claims(c) == []
+# Schalter MCP_SUPERADMIN_OHNE_SCOPE und fremde Zielgruppen (vorher _aud_abgelehnt):
+# seit #3161 mit echt signierten Tokens in tests/test_agentos_jwt_3161.py.
 
 
 def test_kontext_ohne_rechte_hat_keine():
     assert auth.AgentContext().permissions == []
     assert not auth.AgentContext().has_permission("mcp:cloud:send_message")
-
-
-@pytest.mark.parametrize("aud,abgelehnt", [("opencloud-web", True), (["x", "OpenCloud-Desktop"], True),
-                                           ("chatgpt-cid", False), (None, False)])
-def test_fremde_zielgruppe(aud, abgelehnt):
-    assert auth._aud_abgelehnt({"aud": aud} if aud is not None else {}) is abgelehnt
 
 
 def _app():
@@ -81,10 +71,9 @@ def _app():
 def gateway(monkeypatch):
     async def key():
         return "k"
-    monkeypatch.setattr(auth, "_get_public_key", key)
 
     def mit(claims):
-        monkeypatch.setattr(auth, "_decode_jwt", lambda token, key: dict(claims))
+        monkeypatch.setattr(auth, "_pruefen", claims_fest(lambda token: dict(claims)))
 
     def post(pfad):
         async def go():
@@ -109,11 +98,9 @@ def test_oauth_scope_oeffnet_nur_seinen_server(gateway, monkeypatch):
     assert post("/content/").status_code == 403
 
 
-def test_opencloud_token_wird_abgewiesen(gateway):
-    mit, post = gateway
-    mit({"sub": "u1", "aud": "opencloud-web", "is_superadmin": True})
-    r = post("/cloud/")
-    assert r.status_code == 401 and "audience" in r.text
+# OpenCloud-Token (aud opencloud-*): seit #3161 weist das Pruefmodul sie ab (aud_mismatch),
+# hier ist die Pruefung durch claims_fest ersetzt -- siehe test_agentos_jwt_3161.py
+# test_fremde_zielgruppen_401 mit echt signierten Tokens.
 
 
 @pytest.mark.parametrize("srv", ["business", "oneal-storage", "codepilot", "artrack", "story"])

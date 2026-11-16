@@ -14,6 +14,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import auth
+from pruef_helfer import claims_fest  # noqa: E402
 
 CALL = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                    "params": {"name": "projektkosten", "arguments": {}}})
@@ -33,11 +34,10 @@ def mit_rechten(monkeypatch):
 
     async def key():
         return "k"
-    monkeypatch.setattr(auth, "_get_public_key", key)
 
     def setze(perms):
-        monkeypatch.setattr(auth, "_decode_jwt", lambda token, key: {
-            "type": "agent", "agent_name": "X", "role": "r", "permissions": perms})
+        monkeypatch.setattr(auth, "_pruefen", claims_fest(lambda token: {
+            "type": "agent", "agent_name": "X", "role": "r", "permissions": perms}))
     return setze
 
 

@@ -16,6 +16,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import auth
+from pruef_helfer import claims_fest  # noqa: E402
 import aufruf_protokoll as ap
 
 GEHEIM = "streng-geheimes-argument-4711"
@@ -53,9 +54,8 @@ def agent(monkeypatch):
 
     async def key():
         return "k"
-    monkeypatch.setattr(auth, "_get_public_key", key)
-    monkeypatch.setattr(auth, "_decode_jwt", lambda token, key: {
-        "type": "agent", "agent_name": "SWFME", "role": "service", "permissions": rechte["p"]})
+    monkeypatch.setattr(auth, "_pruefen", claims_fest(lambda token: {
+        "type": "agent", "agent_name": "SWFME", "role": "service", "permissions": rechte["p"]}))
     return rechte
 
 
@@ -169,9 +169,8 @@ def test_server_startet_den_schreiber_und_schreibt_beim_beenden(monkeypatch):
             return 0
     monkeypatch.setattr(ap, "_instanz", _P())
 
-    async def still():
-        return None
-    monkeypatch.setattr(auth, "revoked_poll_loop", still)
+    # #3161: kein eigener Widerrufs-Poller mehr; startup legt nur den Verifier an.
+    monkeypatch.setattr(auth, "_verifier_obj", None)
     monkeypatch.setattr(server, "ENABLED_MCPS", set())
     monkeypatch.setattr(server, "_started_mcps", [])
 

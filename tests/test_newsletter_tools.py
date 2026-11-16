@@ -82,6 +82,7 @@ from starlette.responses import JSONResponse  # noqa: E402
 from starlette.routing import Route  # noqa: E402
 
 import auth  # noqa: E402
+from pruef_helfer import claims_fest  # noqa: E402
 
 CALL = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                    "params": {"name": "templates_list", "arguments": {"tenant": "x"}}})
@@ -115,11 +116,10 @@ def perms(monkeypatch):
 
     async def key():
         return "k"
-    monkeypatch.setattr(auth, "_get_public_key", key)
 
     def set_perms(values):
-        monkeypatch.setattr(auth, "_decode_jwt", lambda token, key: {
-            "type": "agent", "agent_name": "X", "role": "r", "permissions": values})
+        monkeypatch.setattr(auth, "_pruefen", claims_fest(lambda token: {
+            "type": "agent", "agent_name": "X", "role": "r", "permissions": values}))
     return set_perms
 
 

@@ -12,16 +12,22 @@ Flow:
   5. Propagates agent context to backend API calls via X-Agent-* headers
 
 Configuration:
-  AUTH_API_JWKS_URL   — JWKS endpoint (default: https://auth-api.arkturian.com/api/v1/auth/.well-known/jwks.json)
-  AUTH_REQUIRE_JWT    — If "true", reject requests without JWT (default: "false" for transition)
-  MCP_ERLAUBTE_AUD    — OAuth-Zielgruppen (client_id, fnmatch, kommagetrennt), die das
-                        Gateway annimmt (#2976). Jedes andere aud gibt 401, auch bei leerer
-                        Liste: dann gelten nur Tokens ohne aud (Agenten, Dienste, Login).
-  MCP_SUPERADMIN_OHNE_SCOPE — "aus": ein Superadmin bekommt "*" nur mit eigenem Login,
-                        nicht mit einem Token aus MCP_ERLAUBTE_AUD (Vorgabe: an).
-  MCP_ABGELEHNTE_AUD  — aud-Muster, die nie gelten (Vorgabe: opencloud*); ai-realtime:*
-                        gilt ausserdem immer als abgelehnt.
-  JWKS_TTL_SECONDS    — Hoechstalter der JWKS im Speicher (Vorgabe 300).
+  AUTH_API_ISSUER     — iss der auth-api (Vorgabe auth-api.arkturian.com, ohne https://)
+  AUTH_API_JWKS_URL   — JWKS endpoint (default: https://auth-api.arkturian.com/api/v1/auth/.well-known/jwks.json);
+                        der Widerruf (revoked-agent-jtis) liegt daneben. Gilt, solange
+                        MCP_JWT_BASE_URL leer ist.
+  MCP_JWT_BASE_URL    — Abrufadresse der auth-api fuer JWKS und Widerruf (agentos_jwt, #3161);
+                        auf arkturian http://localhost:8050.
+  MCP_JWT_STATE_DIR   — Widerrufszustand des Pruefmoduls (Vorgabe /var/lib/mcp-server/agentos_jwt,
+                        0700/0600). Pflicht, weil Agenten- und Dienst-Tokens angenommen werden.
+  AUTH_REQUIRE_JWT    — If "true", reject requests without JWT (default: "true", fail-closed)
+  MCP_ERLAUBTE_AUD    — OAuth-Zielgruppen (genaue client_ids, kommagetrennt), die das
+                        Gateway als oauth_access annimmt (#2976, #3161). Jedes andere aud gibt
+                        401, auch bei leerer Liste: dann gelten nur Tokens ohne aud.
+  MCP_SUPERADMIN_OHNE_SCOPE — Uebergang (B) bis OBO (#3004): "an" (Vorgabe) liest fuer einen
+                        Connector aus MCP_ERLAUBTE_AUD ohne mcp:-Scope is_superadmin aus dem
+                        gepruften Token; "aus": Superadmin nur nach dem Pruefmodul.
+  REVOKED_AGENT_JTIS  — Notnagel: zusaetzlich gesperrte jti, kommagetrennt.
 """
 
 from __future__ import annotations
@@ -29,15 +35,12 @@ from __future__ import annotations
 import contextvars
 import logging
 import os
-import time
 from dataclasses import dataclass, field
 from typing import Optional
 
 import json as _json
 
-import httpx
 import jwt
-from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -158,122 +161,84 @@ def _match_permission(held: str, required: str) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────
-# JWKS public key cache
+# JWT-Pruefung: agentos_jwt v1.0.1 (#3161, Teil von #2972/#2970)
 # ──────────────────────────────────────────────────────────────
+# Vorher stand hier eine eigene Pruefung: JWKS je kid mit Rueckfall auf den einzigen
+# Schluessel bei Tokens ohne kid, eigener Abruf der Widerrufsliste (revoked-agent-jtis,
+# min_agent_iat) mit eigenem Zustand, aud-Tor in _token_abweisen, verify_aud=False.
+# Jetzt das gemeinsame Pruefmodul der auth-api, von Cloud-Security abgenommen (#2987,
+# Kommentar 8827): vendort als agentos_jwt.py, Tag jwt-v1.0.1 (225a7e7),
+# sha256 ff39755338d7e96d24e2b6a5bdfb6f16e4b6b5f07e7cd541f706f2c6dee2063d
+# (tests/test_agentos_jwt_3161.py prueft die Summe). Es prueft:
+#   - Signatur nur RS256, Schluessel nur nach kid (ohne kid: abgewiesen), JWKS
+#     hoechstens 300 s alt, unbekannter kid laedt einmal nach (hoechstens alle 10 s);
+#   - Klasse (type) und aud je Klasse, seltsame Claim-Formen als `malformed` (401);
+#   - Widerruf fuer agent/service: jti-Liste, min_agent_iat, owner_min_iat, Zustand in
+#     MCP_JWT_STATE_DIR (ein Fehlschlag beim Abruf loescht ihn nie).
+# Angenommen am Gateway:
+#   agent, service, user  -- ohne aud
+#   oauth_access          -- aud aus MCP_ERLAUBTE_AUD (genaue client_ids, #2976)
+# Nie: delegated, realtime_grant (Voice), ephemeral_capability, Tokens ohne type.
+import agentos_jwt as _aj
 
-_public_key = None
-_public_key_fetched_at = 0.0
-# Hoechstens 5 min alt (#2972: Notfall-Rotation darf nicht eine Stunde haengen).
-_PUBLIC_KEY_TTL = int(os.getenv("JWKS_TTL_SECONDS", "300") or 300)
-# Alle Schluessel der JWKS je `kid` (#2972): vorher galt nur keys[0], ein Token mit
-# dem zweiten Schluessel einer Rotation fiel durch, ein alter Schluessel blieb gueltig,
-# solange er vorne stand.
-_jwks_nach_kid: dict = {}
-_JWKS_NACHLADEN_AB_S = 30.0          # unbekannter kid: hoechstens so oft neu holen
-
-
-def _rsa_schluessel(key_data: dict):
-    import base64
-    from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
-    from cryptography.hazmat.backends import default_backend
-    n = int.from_bytes(base64.urlsafe_b64decode(key_data["n"] + "=="), "big")
-    e = int.from_bytes(base64.urlsafe_b64decode(key_data["e"] + "=="), "big")
-    return RSAPublicNumbers(e, n).public_key(default_backend())
-
-
-async def _get_public_key():
-    """JWKS holen und je `kid` ablegen; liefert den ersten Schluessel (fuer die
-    Verfuegbarkeitspruefung im Middleware-Pfad). Gewaehlt wird je Token in
-    _schluessel_fuer() nach seinem `kid`."""
-    global _public_key, _public_key_fetched_at, _jwks_nach_kid
-
-    if _public_key and (time.time() - _public_key_fetched_at < _PUBLIC_KEY_TTL):
-        return _public_key
-
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.get(AUTH_API_JWKS_URL)
-            res.raise_for_status()
-            jwks = res.json()
-
-        neu = {}
-        erster = None
-        for key_data in jwks.get("keys") or []:
-            if key_data.get("kty") not in (None, "RSA"):
-                continue
-            k = _rsa_schluessel(key_data)
-            neu[str(key_data.get("kid") or "")] = k
-            erster = erster or k
-        if erster is None:
-            raise ValueError("JWKS ohne RSA-Schluessel")
-        _jwks_nach_kid = neu
-        _public_key = erster
-        _public_key_fetched_at = time.time()
-        logger.info("JWKS fetched from %s: %d key(s) %s", AUTH_API_JWKS_URL, len(neu), sorted(neu))
-        return _public_key
-    except Exception as exc:
-        logger.error("Failed to fetch JWKS from %s: %s", AUTH_API_JWKS_URL, exc)
-        return _public_key  # return cached key if available
-
-
-def _kid_aus(token: str) -> Optional[str]:
-    try:
-        kid = jwt.get_unverified_header(token).get("kid")
-    except Exception:
-        return None
-    return str(kid) if kid else None
-
-
-async def _jwks_fuer_kid(kid: Optional[str]) -> None:
-    """Kennt der Zwischenspeicher den `kid` des Tokens nicht, einmal neu holen
-    (Rotation), aber nicht oefter als alle 30 s (kein Hebel fuer Last auf auth-api)."""
-    global _public_key_fetched_at
-    if not kid or not _jwks_nach_kid or kid in _jwks_nach_kid:
-        return
-    if time.time() - _public_key_fetched_at < _JWKS_NACHLADEN_AB_S:
-        return
-    _public_key_fetched_at = 0.0
-    await _get_public_key()
-
-
-def _schluessel_fuer(token: str, public_key):
-    """Der Schluessel, mit dem dieses Token geprueft wird. Mit `kid`: genau der aus
-    der JWKS, ein unbekannter `kid` wird abgewiesen. Ohne `kid`: nur, wenn die JWKS
-    genau einen Schluessel hat. Ist (noch) keine JWKS geladen, gilt `public_key`."""
-    if not _jwks_nach_kid:
-        return public_key
-    kid = _kid_aus(token)
-    if kid:
-        if kid not in _jwks_nach_kid:
-            raise jwt.InvalidTokenError(f"unknown signing key (kid {kid!r})")
-        return _jwks_nach_kid[kid]
-    if len(_jwks_nach_kid) == 1:
-        return next(iter(_jwks_nach_kid.values()))
-    raise jwt.InvalidTokenError("token without kid, JWKS has several keys")
-
-
-# Zielgruppen (aud), die am Gateway nichts zu suchen haben (#2890): Tokens, die
-# auth-api fuer ANDERE Anwendungen ausstellt (OpenCloud-Web u. a.). Muster mit
-# fnmatch, kommagetrennt in MCP_ABGELEHNTE_AUD.
-_ABGELEHNTE_AUD = [m.strip() for m in os.getenv("MCP_ABGELEHNTE_AUD", "opencloud*").split(",") if m.strip()]
-# Voice-Grants (create_realtime_grant_token: aud "ai-realtime:<profil>", ohne type)
-# gelten am Gateway nie, auch nicht ueber MCP_ERLAUBTE_AUD (#2976, Befund 76).
-_IMMER_ABGELEHNTE_AUD = ("ai-realtime:*",)
-# Token-Arten am Gateway (#2976): ohne type = Login- bzw. OAuth-Token des Menschen
-# (heute), user/oauth_access = dieselben, sobald auth-api type setzt (#2970).
-# Abgewiesen: ephemeral_capability, realtime_grant und jede unbekannte Art.
-_ZUGELASSENE_TYPEN = frozenset({"", "agent", "service", "user", "oauth_access"})
-# Positive Liste der OAuth-Zielgruppen (client_id), fnmatch, kommagetrennt, je Gateway
-# (#2976, Entscheid Cloud 15.11.2026). Ein Token mit aud aus der Liste gilt wie ein
-# eigenes Login (Superadmin "*", sonst seine ausdruecklichen mcp:-Scopes). Jedes andere
-# aud gibt 401 -- auch bei LEERER Liste: dann gelten nur Tokens ohne aud (Agenten,
-# Dienste, eigenes Login). Das schliesst die Kette ueber anonym per DCR registrierte
-# Clients (Befund 76): ein Superadmin, der sich dort anmeldet, gab dem Client "*".
+# Positive Liste der OAuth-Zielgruppen (client_id), kommagetrennt, je Gateway (#2976,
+# Entscheid Cloud 15.11.2026). Seit #3161 GENAUE client_ids: das Modul vergleicht
+# exakt, Muster mit * ? [ gelten nicht mehr (Fehlerzeile beim Laden). Jedes andere aud
+# gibt 401 -- auch bei LEERER Liste: dann gelten nur Tokens ohne aud (Agenten, Dienste,
+# eigenes Login). Das schliesst die Kette ueber anonym per DCR registrierte Clients
+# (Befund 76); Tokens fuer andere Anwendungen (OpenCloud-Web, Voice-Grants) fallen
+# ebenso heraus.
 _ERLAUBTE_AUD = [m.strip() for m in os.getenv("MCP_ERLAUBTE_AUD", "").split(",") if m.strip()]
-# Superadmin ohne mcp:-Scope bekommt mit einem Token aus MCP_ERLAUBTE_AUD "*" (die
-# ChatGPT-Connectoren des Betreibers tragen keine Scopes). Abschalten:
-# MCP_SUPERADMIN_OHNE_SCOPE=aus, dann gilt "*" nur fuer das eigene Login (ohne aud).
+# Uebergang (B) fuer Connectoren ohne mcp:-Scope, siehe _superadmin().
 _SUPERADMIN_OHNE_SCOPE = os.getenv("MCP_SUPERADMIN_OHNE_SCOPE", "an").strip().lower() not in ("aus", "0", "false", "no")
+# Widerrufszustand des Moduls (revocation.json, 0600; das Verzeichnis legt das Modul
+# mit 0700 an). Unter ProtectSystem=strict liegt es unter /var/lib/mcp-server (#2895).
+MCP_JWT_STATE_DIR = os.getenv("MCP_JWT_STATE_DIR", "/var/lib/mcp-server/agentos_jwt")
+# Abrufadresse der auth-api fuer JWKS und Widerruf. Auf arkturian (gleicher Host wie
+# auth-api): http://localhost:8050. Leer: JWKS aus AUTH_API_JWKS_URL, Widerruf daneben.
+MCP_JWT_BASE_URL = os.getenv("MCP_JWT_BASE_URL", "").strip()
+
+
+def _connector_ids() -> list[str]:
+    ids = []
+    for m in _ERLAUBTE_AUD:
+        if any(z in m for z in "*?["):
+            logger.error("MCP_ERLAUBTE_AUD: Muster %r gilt seit #3161 nicht mehr, nur genaue client_ids", m)
+            continue
+        ids.append(m)
+    return ids
+
+
+def _annahme() -> dict:
+    accept: dict = {"agent": None, "service": None, "user": None}
+    ids = _connector_ids()
+    if ids:
+        accept["oauth_access"] = set(ids)
+    return accept
+
+
+def _verifier_bauen(**anders) -> "_aj.Verifier":
+    """Der Verifier dieses Prozesses. `anders` nur fuer Tests (ephemeral_state, afetch)."""
+    if MCP_JWT_BASE_URL:
+        adressen = {"base_url": MCP_JWT_BASE_URL}
+    else:
+        adressen = {"jwks_url": AUTH_API_JWKS_URL,
+                    "revocation_url": AUTH_API_JWKS_URL.rsplit("/", 1)[0] + "/revoked-agent-jtis"}
+    args = dict(issuer=AUTH_API_ISSUER, accept=_annahme(), state_dir=MCP_JWT_STATE_DIR, **adressen)
+    args.update(anders)
+    if args.get("ephemeral_state"):
+        args["state_dir"] = None
+    return _aj.Verifier(**args)
+
+
+_verifier_obj: Optional["_aj.Verifier"] = None
+
+
+def _verifier() -> "_aj.Verifier":
+    global _verifier_obj
+    if _verifier_obj is None:
+        _verifier_obj = _verifier_bauen()
+    return _verifier_obj
 
 
 def _aud_werte(claims: dict) -> list:
@@ -281,51 +246,61 @@ def _aud_werte(claims: dict) -> list:
     return [str(a) for a in (aud if isinstance(aud, list) else ([aud] if aud else []))]
 
 
-def _passt(werte: list, muster) -> bool:
-    import fnmatch
-    return any(fnmatch.fnmatchcase(a.lower(), m.lower()) for a in werte for m in muster)
+def _notnagel_widerrufen(claims: dict) -> bool:
+    """REVOKED_AGENT_JTIS (kommagetrennt): Sperre einzelner jti ohne Release, falls die
+    Widerrufsliste der auth-api einmal nicht reicht. Zusaetzlich zum Modul, nie statt."""
+    jti = str(claims.get("jti") or "")
+    if not jti:
+        return False
+    return jti in {x.strip() for x in os.getenv("REVOKED_AGENT_JTIS", "").split(",") if x.strip()}
 
 
-def _token_abweisen(claims: dict) -> Optional[str]:
-    """None = Token darf weiter, sonst der Grund fuer 401 (#2976).
+def _superadmin(token: str, claims: dict) -> bool:
+    """Superadmin am Gateway. Grundsatz: nur der Wert des Moduls -- True allein bei
+    user/delegated mit is_superadmin=true; ein Agenten-, Dienst- oder OAuth-Client-Token
+    traegt nie Superadmin-Macht.
 
-    Reihenfolge: Token-Art, Voice-Grant, gesperrte aud (#2890), positive aud-Liste,
-    min_agent_iat fuer Agenten- und Dienst-Tokens (#2972)."""
-    typ = str(claims.get("type") or "")
-    if typ not in _ZUGELASSENE_TYPEN:
-        return f"token type {typ!r} not accepted"
-    auds = _aud_werte(claims)
-    if _passt(auds, _IMMER_ABGELEHNTE_AUD):
-        return "voice grant not accepted"
-    if _aud_abgelehnt(claims):
-        return "audience not accepted"
-    if auds and not _passt(auds, _ERLAUBTE_AUD):
-        return "audience not allowed (MCP_ERLAUBTE_AUD)"
-    if typ in ("agent", "service"):
-        grund = _zu_alt(claims)
-        if grund:
-            return grund
-    return None
+    UEBERGANG (B), Entscheid Cloud 16.11.2026 (IACP 060afe45): Die Connectoren des
+    Betreibers (ChatGPT, iOS-App) tragen keine mcp:-Scopes und kamen bisher nur ueber
+    is_superadmin an "*". Damit nichts still wegbricht, liest das Gateway is_superadmin
+    aus dem signierten Token -- aber nur fuer oauth_access, dessen aud in
+    MCP_ERLAUBTE_AUD steht und das das Modul eben vollstaendig geprueft hat (Signatur,
+    Klasse, aud), und nur solange MCP_SUPERADMIN_OHNE_SCOPE an ist. Endet mit OBO
+    (#3004): Dann tauscht das Gateway das Connector-Token gegen ein delegated-Token,
+    dessen is_superadmin das Modul selbst liefert, und dieser Zweig faellt weg."""
+    if claims.get("is_superadmin") is True:
+        return True
+    if not _SUPERADMIN_OHNE_SCOPE or claims.get("type") != "oauth_access":
+        return False
+    if not set(_aud_werte(claims)) & set(_connector_ids()):
+        return False
+    try:
+        roh = jwt.decode(token, options={"verify_signature": False})   # dasselbe, eben gepruefte Token
+    except jwt.PyJWTError:
+        return False
+    return isinstance(roh, dict) and roh.get("is_superadmin") is True
 
 
-def _aud_abgelehnt(claims: dict) -> bool:
-    import fnmatch
-    aud = claims.get("aud")
-    werte = aud if isinstance(aud, list) else ([aud] if aud else [])
-    return any(fnmatch.fnmatchcase(str(a).lower(), m.lower()) for a in werte for m in _ABGELEHNTE_AUD)
+async def _pruefen(token: str) -> dict:
+    """Die geprueften Claims des Aufrufers. `is_superadmin` ist der Wert am Gateway
+    (_superadmin), `type` immer gesetzt. Wirft agentos_jwt.TokenRejected (401),
+    RevocationUnknown / KeysUnavailable (503)."""
+    claims = await _verifier().averify(token)
+    if _notnagel_widerrufen(claims):
+        logger.warning("JWT abgewiesen: jti %s per REVOKED_AGENT_JTIS gesperrt (sub=%s)",
+                       claims.get("jti"), claims.get("sub"))
+        raise _aj.TokenRejected("jti_revoked")
+    claims["is_superadmin"] = _superadmin(token, claims)
+    return claims
 
 
 def _rechte_aus_claims(claims: dict) -> list:
     """Die Rechte eines gepruften Tokens -- nie aus dem FEHLEN eines Claims (#2890).
 
-    Vorher `claims.get("permissions", ["*"])`: auth-api stellt Benutzer-, OIDC-
-    und OAuth-Tokens ohne `permissions` aus, jedes gueltige Benutzer-Token hatte
-    damit am Gateway alle Rechte.
       - Agent und Dienst (type agent/service): genau ihr `permissions`-Claim.
       - Mensch mit OAuth-Token: je Scope `mcp:<server>` das Recht mcp:<server>:*.
-      - Superadmin (Betreiber) mit eigenem Login-Token (ohne aud): "*"; mit
-        OAuth-Token ohne mcp:-Scope nur, wenn dessen aud in MCP_ERLAUBTE_AUD steht
-        (#2976). Jedes andere aud weist _token_abweisen ohnehin ab.
+      - Superadmin am Gateway (_superadmin: eigenes Login, oder im Uebergang (B) ein
+        Connector aus MCP_ERLAUBTE_AUD ohne mcp:-Scope): "*".
       - sonst: keine Rechte.
     """
     typ = claims.get("type")
@@ -338,190 +313,8 @@ def _rechte_aus_claims(claims: dict) -> list:
     if aus_scopes:
         return aus_scopes
     if claims.get("is_superadmin") is True:
-        auds = _aud_werte(claims)
-        if not auds or (_SUPERADMIN_OHNE_SCOPE and _passt(auds, _ERLAUBTE_AUD)):
-            return ["*"]
+        return ["*"]
     return []
-
-
-def _decode_jwt(token: str, public_key) -> dict:
-    """Decode and validate a JWT token.
-
-    `verify_aud` is off deliberately. PyJWT raises InvalidAudienceError when a
-    token *carries* an `aud` claim and the verifier passes no expected audience
-    — silence is not an option, it is an error. auth-api stamps `aud=client_id`
-    on OAuth access tokens (oauth_service.py), and that client_id is minted per
-    client by dynamic registration, so a resource server cannot know the set of
-    valid values in advance.
-
-    The practical effect before this change: agents using a static JWT (no
-    `aud`) worked, while every OAuth client was rejected with
-    "401 Invalid token: Invalid audience" — ChatGPT could not use any MCP
-    server at all, Claude Code could (Alex 2026-08-04).
-
-    Dropping the check does not widen trust: the token is still proven to come
-    from auth-api by RS256 signature over the JWKS key plus the issuer check,
-    expiry is still enforced, and authorisation is decided further down by the
-    per-agent RBAC lookup on `sub`. `aud` only records which client the token
-    was issued to — it was never the gate here.
-
-    The cleaner long-term shape is RFC 8707: have auth-api stamp the resource
-    (this server) as the audience and verify it explicitly. That touches every
-    auth-api consumer, so it belongs in its own change, not in an outage fix.
-    """
-    claims = jwt.decode(
-        token,
-        _schluessel_fuer(token, public_key),
-        algorithms=["RS256"],
-        issuer=AUTH_API_ISSUER,
-        options={"verify_exp": True, "verify_aud": False},
-    )
-    _reject_if_revoked(claims)
-    return claims
-
-
-# Interims-Widerruf (27.08.2026): auth-api prueft Agent-Tokens rein per JWKS und
-# hat noch keine Deny-Liste (AuthAPI baut revoked_agent_jtis + Poll-Endpunkt).
-# Bis dahin: feste jti-Liste + Env-Override REVOKED_AGENT_JTIS (kommagetrennt),
-# damit der naechste Fall keinen Release braucht. Gleiche Liste wie in cloud-api.
-_REVOKED_JTIS: set = set()   # Notnagel ohne auth-api; Regelweg ist revoked_poll_loop (Deny-Liste, seit 27.08.)
-
-
-# Poll-Seite der auth-api Deny-Liste (Spur B, AuthAPI 27.08.): oeffentlicher
-# Endpunkt neben JWKS, Zeilen werden nie erneut ausgegeben, ``since=<as_of>``
-# ist die Fortschrittsmarke. Menge im Prozess + Spiegel auf Platte; ein
-# Poll-Ausfall leert nichts.
-_REVOKED_POLL_SECONDS = int(os.getenv("REVOKED_JTIS_POLL_SECONDS", "30") or 30)
-_REVOKED_STATE = os.getenv("REVOKED_JTIS_STATE", "/var/lib/mcp-server/revoked_jtis.json")
-_revoked_polled: set = set()
-_revoked_as_of = ""
-_revoked_loaded = False
-# min_agent_iat der auth-api (#2972): Agenten- und Dienst-Tokens, die davor
-# ausgestellt wurden, gelten nicht mehr. Spiegelt den AKTUELLEN Wert, auch ein
-# Absenken oder null (wie content-api/issue-api); fehlt der Schluessel in der
-# Antwort (alter Stand der auth-api), bleibt der letzte Stand.
-_min_agent_iat: Optional[int] = None
-
-
-def _als_epoch(wert) -> Optional[int]:
-    if wert is None or wert == "" or isinstance(wert, bool):
-        return None
-    if isinstance(wert, (int, float)):
-        return int(wert)
-    try:
-        from datetime import datetime, timezone
-        dt = datetime.fromisoformat(str(wert).replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return int(dt.timestamp())
-    except (TypeError, ValueError):
-        logger.warning("revoked_jtis: min_agent_iat unlesbar (%r), ignoriert", wert)
-        return None
-
-
-def _zu_alt(claims: dict) -> Optional[str]:
-    _revoked_load()
-    if _min_agent_iat is None:
-        return None
-    iat = claims.get("iat")
-    if isinstance(iat, (int, float)) and not isinstance(iat, bool) and iat < _min_agent_iat:
-        return "token too old (iat before min_agent_iat), mint a new one"
-    return None
-
-
-def _revoked_endpoint() -> str:
-    return AUTH_API_JWKS_URL.rsplit("/", 1)[0] + "/revoked-agent-jtis"
-
-
-def _revoked_load() -> None:
-    global _revoked_polled, _revoked_as_of, _revoked_loaded, _min_agent_iat
-    if _revoked_loaded:
-        return
-    _revoked_loaded = True
-    try:
-        import json
-        with open(_REVOKED_STATE) as f:
-            d = json.load(f)
-        _revoked_polled = set(d.get("revoked") or [])
-        _revoked_as_of = str(d.get("as_of") or "")
-        _min_agent_iat = _als_epoch(d.get("min_agent_iat"))
-    except Exception:
-        pass
-
-
-def _revoked_save() -> None:
-    try:
-        import json
-        os.makedirs(os.path.dirname(_REVOKED_STATE), exist_ok=True)
-        tmp = _REVOKED_STATE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump({"revoked": sorted(_revoked_polled), "as_of": _revoked_as_of,
-                       "min_agent_iat": _min_agent_iat}, f)
-        os.replace(tmp, _REVOKED_STATE)
-    except Exception as e:
-        logger.warning("revoked_jtis: Spiegel nicht geschrieben: %s", e)
-
-
-async def revoked_poll_once(client=None) -> int:
-    """Einmal abholen; liefert Anzahl NEUER jtis. Wirft nicht."""
-    global _revoked_as_of, _min_agent_iat
-    _revoked_load()
-    try:
-        import httpx
-        params = {"since": _revoked_as_of} if _revoked_as_of else {}
-        c = client or httpx.AsyncClient(timeout=6)
-        try:
-            r = await c.get(_revoked_endpoint(), params=params)
-        finally:
-            if client is None:
-                await c.aclose()
-        if r.status_code != 200:
-            logger.warning("revoked_jtis: Poll -> HTTP %s", r.status_code)
-            return 0
-        d = r.json() or {}
-        neu = 0
-        for e in d.get("revoked_jtis") or []:
-            j = str((e or {}).get("jti") or "")
-            if j and j not in _revoked_polled:
-                _revoked_polled.add(j)
-                neu += 1
-        _revoked_as_of = str(d.get("as_of") or _revoked_as_of)
-        geaendert = False
-        if "min_agent_iat" in d:             # fehlt der Schluessel: letzter Stand bleibt
-            geliefert = _als_epoch(d.get("min_agent_iat"))
-            if geliefert != _min_agent_iat:
-                if geliefert is not None and geliefert > time.time() + 300:
-                    logger.error("revoked_jtis: min_agent_iat liegt in der Zukunft, auch frisch "
-                                 "gepraegte Agenten-Tokens werden abgewiesen")
-                _min_agent_iat = geliefert
-                geaendert = True
-        if neu or geaendert or not os.path.exists(_REVOKED_STATE):
-            _revoked_save()
-        if neu:
-            logger.warning("revoked_jtis: %d neue widerrufene Agent-Token (gesamt %d)", neu, len(_revoked_polled))
-        return neu
-    except Exception as e:
-        logger.warning("revoked_jtis: Poll fehlgeschlagen: %s", e)
-        return 0
-
-
-async def revoked_poll_loop() -> None:
-    import asyncio
-    await asyncio.sleep(5)
-    while True:
-        await revoked_poll_once()
-        await asyncio.sleep(_REVOKED_POLL_SECONDS)
-
-
-def _reject_if_revoked(claims: dict) -> None:
-    jti = str(claims.get("jti") or "")
-    if not jti:
-        return
-    _revoked_load()
-    extra = {x.strip() for x in os.getenv("REVOKED_AGENT_JTIS", "").split(",") if x.strip()}
-    if jti in _REVOKED_JTIS or jti in extra or jti in _revoked_polled:
-        logger.warning("JWT abgewiesen: jti %s widerrufen (sub=%s)", jti, claims.get("sub"))
-        raise jwt.InvalidTokenError("token revoked")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -818,157 +611,149 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             request.state.agent = AgentContext()
             return await call_next(request)
 
-        # Validate JWT
+        # Validate JWT (agentos_jwt, #3161)
         try:
-            public_key = await _get_public_key()
-            if not public_key:
-                # Can't validate — allow in transition mode, deny in strict mode
-                if AUTH_REQUIRE_JWT:
-                    return JSONResponse(
-                        {"error": "Auth service unavailable (JWKS fetch failed)"},
-                        status_code=503,
-                    )
-                request.state.agent = AgentContext()
-                return await call_next(request)
+            claims = await _pruefen(token)
+        except _aj.TokenRejected as e:
+            # Das Modul protokolliert reason, sub und jti selbst, nie das Token.
+            return JSONResponse({"error": f"Invalid token: {e.reason}", "reason": e.reason},
+                                status_code=401)
+        except (_aj.RevocationUnknown, _aj.KeysUnavailable) as e:
+            # Schluessel oder Widerrufsstand fehlen (auth-api nicht erreichbar):
+            # im strikten Modus 503, sonst wie bisher anonym (Uebergangsmodus).
+            logger.error("JWT nicht pruefbar: %s", type(e).__name__)
+            if AUTH_REQUIRE_JWT:
+                return JSONResponse({"error": "Auth service unavailable",
+                                     "reason": type(e).__name__}, status_code=503)
+            request.state.agent = AgentContext()
+            return await call_next(request)
 
-            await _jwks_fuer_kid(_kid_aus(token))
-            claims = _decode_jwt(token, public_key)
-            _grund = _token_abweisen(claims)
-            if _grund:
-                logger.warning("JWT abgewiesen: %s (type=%r aud=%r sub=%s)", _grund,
-                               claims.get("type"), claims.get("aud"), claims.get("sub"))
-                return JSONResponse({"error": f"Invalid token: {_grund}"}, status_code=401)
+        agent = AgentContext(
+            name=claims.get("agent_name", claims.get("sub", "")),
+            agent_type=claims.get("agent_type", ""),
+            role=claims.get("role", ""),
+            department=claims.get("department", ""),
+            tenant=claims.get("tenant", ""),
+            permissions=_rechte_aus_claims(claims),
+            authenticated=True,
+        )
+        request.state.agent = agent
 
-            agent = AgentContext(
-                name=claims.get("agent_name", claims.get("sub", "")),
-                agent_type=claims.get("agent_type", ""),
-                role=claims.get("role", ""),
-                department=claims.get("department", ""),
-                tenant=claims.get("tenant", ""),
-                permissions=_rechte_aus_claims(claims),
-                authenticated=True,
+        # Stash the raw JWT into ContextVars so tool functions further
+        # downstream can read it for upstream API forwarding. Reset on
+        # response (no token-leak between requests).
+        _jwt_token = _current_jwt.set(token)
+        _name_token = _current_agent_name.set(agent.name)
+        _is_agent_token = _current_is_agent.set(
+            claims.get("type") == "agent" and bool(claims.get("agent_name"))
+        )
+        _superadmin_token = _current_is_superadmin.set(claims.get("is_superadmin") is True)
+
+        # Permission check: server-level + tool-level
+        mcp_server = _extract_mcp_server_from_path(request.url.path)
+        if mcp_server and mandant_gesperrt(
+            mcp_server, agent.tenant,
+            ist_agent=claims.get("type") in ("agent", "service"),
+            user_tids=_rollen_mandanten(claims),
+            superadmin=claims.get("is_superadmin") is True,
+        ):
+            logger.warning(
+                "Mandanten-Schranke: agent=%s tenant=%s mcp:%s abgewiesen",
+                agent.name, agent.tenant, mcp_server,
             )
-            request.state.agent = agent
-
-            # Stash the raw JWT into ContextVars so tool functions further
-            # downstream can read it for upstream API forwarding. Reset on
-            # response (no token-leak between requests).
-            _jwt_token = _current_jwt.set(token)
-            _name_token = _current_agent_name.set(agent.name)
-            _is_agent_token = _current_is_agent.set(
-                claims.get("type") == "agent" and bool(claims.get("agent_name"))
+            return JSONResponse(
+                {
+                    "error": f"Permission denied: tenant '{agent.tenant}' has no access to mcp:{mcp_server}",
+                    "agent": agent.name,
+                    "code": "mandant_nicht_zugelassen",
+                },
+                status_code=403,
             )
-            _superadmin_token = _current_is_superadmin.set(claims.get("is_superadmin") is True)
-
-            # Permission check: server-level + tool-level
-            mcp_server = _extract_mcp_server_from_path(request.url.path)
-            if mcp_server and mandant_gesperrt(
-                mcp_server, agent.tenant,
-                ist_agent=claims.get("type") in ("agent", "service"),
-                user_tids=_rollen_mandanten(claims),
-                superadmin=claims.get("is_superadmin") is True,
-            ):
+        if mcp_server and _offen(mcp_server):
+            pass  # offener Server: jedes gueltige Agenten-JWT genuegt
+        elif mcp_server:
+            # 1. Server-level: does agent have ANY permission on this MCP?
+            # Recognized claims:
+            #   "*"                       — global wildcard
+            #   "mcp:*"                   — all MCPs (2-part)
+            #   "mcp:*:*"                 — all MCPs (3-part, architect)
+            #   "mcp:<server>:*"          — full access to this MCP
+            #   "mcp:<server>:<tool>"     — any specific tool on this MCP
+            # The literal 2-part vs 3-part mismatch (mcp:* vs mcp:*:*)
+            # silently broke architect-role agents — both forms now valid.
+            server_prefix = f"mcp:{mcp_server}:"
+            perms = _permissions_for_server(agent.permissions, mcp_server)
+            has_any = any(
+                p == "*" or p == "mcp:*" or p == "mcp:*:*" or p.startswith(server_prefix)
+                for p in perms
+            )
+            if not has_any:
                 logger.warning(
-                    "Mandanten-Schranke: agent=%s tenant=%s mcp:%s abgewiesen",
-                    agent.name, agent.tenant, mcp_server,
+                    "RBAC denied (server): agent=%s role=%s mcp:%s",
+                    agent.name, agent.role, mcp_server,
                 )
                 return JSONResponse(
                     {
-                        "error": f"Permission denied: tenant '{agent.tenant}' has no access to mcp:{mcp_server}",
+                        "error": f"Permission denied: agent '{agent.name}' (role '{agent.role}') "
+                                 f"does not have access to mcp:{mcp_server}",
                         "agent": agent.name,
-                        "code": "mandant_nicht_zugelassen",
+                        "role": agent.role,
+                        "required": f"mcp:{mcp_server}:*",
                     },
                     status_code=403,
                 )
-            if mcp_server and _offen(mcp_server):
-                pass  # offener Server: jedes gueltige Agenten-JWT genuegt
-            elif mcp_server:
-                # 1. Server-level: does agent have ANY permission on this MCP?
-                # Recognized claims:
-                #   "*"                       — global wildcard
-                #   "mcp:*"                   — all MCPs (2-part)
-                #   "mcp:*:*"                 — all MCPs (3-part, architect)
-                #   "mcp:<server>:*"          — full access to this MCP
-                #   "mcp:<server>:<tool>"     — any specific tool on this MCP
-                # The literal 2-part vs 3-part mismatch (mcp:* vs mcp:*:*)
-                # silently broke architect-role agents — both forms now valid.
-                server_prefix = f"mcp:{mcp_server}:"
-                perms = _permissions_for_server(agent.permissions, mcp_server)
-                has_any = any(
-                    p == "*" or p == "mcp:*" or p == "mcp:*:*" or p.startswith(server_prefix)
-                    for p in perms
-                )
-                if not has_any:
-                    logger.warning(
-                        "RBAC denied (server): agent=%s role=%s mcp:%s",
+
+            # 2. Tool-level: check specific tool from the body we already parsed
+            if not any(_match_permission(p, f"mcp:{mcp_server}:*") for p in perms) and body_bytes:
+                try:
+                    body_json = _json.loads(body_bytes)
+                    # Jeder Aufruf eines Stapels einzeln.
+                    for tool_name in _aufgerufene_werkzeuge(body_json):
+                        required_perm = " | ".join(
+                            [f"mcp:{mcp_server}:{tool_name}"]
+                            + [f"mcp:{mcp_server}:{s}" for s in _stufen_fuer(mcp_server, tool_name)])
+                        if not tool_name or not _werkzeug_erlaubt(perms, mcp_server, tool_name):
+                            logger.warning(
+                                "RBAC denied (tool): agent=%s role=%s perm=%s",
+                                agent.name, agent.role, required_perm,
+                            )
+                            return JSONResponse(
+                                {
+                                    "jsonrpc": "2.0",
+                                    "id": body_json.get("id") if isinstance(body_json, dict) else None,
+                                    "error": {
+                                        "code": -32600,
+                                        "message": f"Permission denied: agent '{agent.name}' "
+                                                   f"(role '{agent.role}') cannot call {required_perm}",
+                                    },
+                                },
+                                status_code=403,
+                            )
+                except Exception:
+                    # Fail-closed: wirft die Pruefung unerwartet, wird der Aufruf
+                    # abgewiesen statt ungeprueft durchgelassen (vorher `pass`).
+                    logger.exception(
+                        "RBAC tool check failed, denied: agent=%s role=%s mcp:%s",
                         agent.name, agent.role, mcp_server,
                     )
                     return JSONResponse(
                         {
-                            "error": f"Permission denied: agent '{agent.name}' (role '{agent.role}') "
-                                     f"does not have access to mcp:{mcp_server}",
-                            "agent": agent.name,
-                            "role": agent.role,
-                            "required": f"mcp:{mcp_server}:*",
+                            "jsonrpc": "2.0",
+                            "id": None,
+                            "error": {
+                                "code": -32600,
+                                "message": f"Permission check failed for agent '{agent.name}' "
+                                           f"on mcp:{mcp_server}; call denied",
+                            },
                         },
                         status_code=403,
                     )
 
-                # 2. Tool-level: check specific tool from the body we already parsed
-                if not any(_match_permission(p, f"mcp:{mcp_server}:*") for p in perms) and body_bytes:
-                    try:
-                        body_json = _json.loads(body_bytes)
-                        # Jeder Aufruf eines Stapels einzeln.
-                        for tool_name in _aufgerufene_werkzeuge(body_json):
-                            required_perm = " | ".join(
-                                [f"mcp:{mcp_server}:{tool_name}"]
-                                + [f"mcp:{mcp_server}:{s}" for s in _stufen_fuer(mcp_server, tool_name)])
-                            if not tool_name or not _werkzeug_erlaubt(perms, mcp_server, tool_name):
-                                logger.warning(
-                                    "RBAC denied (tool): agent=%s role=%s perm=%s",
-                                    agent.name, agent.role, required_perm,
-                                )
-                                return JSONResponse(
-                                    {
-                                        "jsonrpc": "2.0",
-                                        "id": body_json.get("id") if isinstance(body_json, dict) else None,
-                                        "error": {
-                                            "code": -32600,
-                                            "message": f"Permission denied: agent '{agent.name}' "
-                                                       f"(role '{agent.role}') cannot call {required_perm}",
-                                        },
-                                    },
-                                    status_code=403,
-                                )
-                    except Exception:
-                        # Fail-closed: wirft die Pruefung unerwartet, wird der Aufruf
-                        # abgewiesen statt ungeprueft durchgelassen (vorher `pass`).
-                        logger.exception(
-                            "RBAC tool check failed, denied: agent=%s role=%s mcp:%s",
-                            agent.name, agent.role, mcp_server,
-                        )
-                        return JSONResponse(
-                            {
-                                "jsonrpc": "2.0",
-                                "id": None,
-                                "error": {
-                                    "code": -32600,
-                                    "message": f"Permission check failed for agent '{agent.name}' "
-                                               f"on mcp:{mcp_server}; call denied",
-                                },
-                            },
-                            status_code=403,
-                        )
+        # Erlaubt: Aufrufer, Server, Werkzeug und gegriffenes Recht zaehlen (#2806).
+        # Nur Werkzeugaufrufe -- tools/list & Co. waeren sonst leere Zeilen.
+        if is_tool_call:
+            _aufrufe_vermerken(agent, mcp_server, body_bytes)
 
-            # Erlaubt: Aufrufer, Server, Werkzeug und gegriffenes Recht zaehlen (#2806).
-            # Nur Werkzeugaufrufe -- tools/list & Co. waeren sonst leere Zeilen.
-            if is_tool_call:
-                _aufrufe_vermerken(agent, mcp_server, body_bytes)
-
-        except jwt.ExpiredSignatureError:
-            return JSONResponse({"error": "Token expired"}, status_code=401)
-        except jwt.InvalidTokenError as e:
-            return JSONResponse({"error": f"Invalid token: {e}"}, status_code=401)
 
         try:
             return await call_next(request)

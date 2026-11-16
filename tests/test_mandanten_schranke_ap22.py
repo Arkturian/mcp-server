@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import auth
+from pruef_helfer import claims_fest  # noqa: E402
 
 CALL = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                    "params": {"name": "documents_list", "arguments": {}}})
@@ -33,14 +34,13 @@ def gateway(monkeypatch):
 
     async def key():
         return "k"
-    monkeypatch.setattr(auth, "_get_public_key", key)
 
     def setze(tenant, schranke=SPEC, perms=("*",)):
         monkeypatch.setattr(auth, "MANDANTEN_SCHRANKE", auth._schranke_laden(schranke))
         claims = {"type": "agent", "agent_name": "X", "role": "developer", "permissions": list(perms)}
         if tenant is not None:
             claims["tenant"] = tenant
-        monkeypatch.setattr(auth, "_decode_jwt", lambda token, key: claims)
+        monkeypatch.setattr(auth, "_pruefen", claims_fest(lambda token: claims))
     return setze
 
 
@@ -104,7 +104,6 @@ def mensch(monkeypatch):
 
     async def key():
         return "k"
-    monkeypatch.setattr(auth, "_get_public_key", key)
     monkeypatch.setattr(auth, "MANDANTEN_SCHRANKE", auth._schranke_laden(SPEC))
     # #2976: nur zugelassene OAuth-Clients (aud) kommen ueberhaupt bis zur Schranke.
     monkeypatch.setattr(auth, "_ERLAUBTE_AUD", ["connector"])
@@ -112,7 +111,7 @@ def mensch(monkeypatch):
     def setze(roles, superadmin=False):
         claims = {"sub": "u@x", "email": "u@x", "roles": roles, "is_superadmin": superadmin,
                   "scope": "openid mcp:business mcp:storage mcp:oneal", "aud": "connector"}
-        monkeypatch.setattr(auth, "_decode_jwt", lambda token, key: claims)
+        monkeypatch.setattr(auth, "_pruefen", claims_fest(lambda token: claims))
     return setze
 
 

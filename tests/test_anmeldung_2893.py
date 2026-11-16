@@ -25,6 +25,7 @@ for _k in ("ARKTURIAN_API_KEY", "ONEAL_STORAGE_API_KEY", "JWT_PUBLIC_KEY", "COMM
     os.environ.setdefault(_k, "test-only")
 
 import auth  # noqa: E402
+from pruef_helfer import claims_fest  # noqa: E402
 import server  # noqa: E402
 
 
@@ -47,9 +48,8 @@ def gw(monkeypatch):
 
     async def key():
         return "k"
-    monkeypatch.setattr(auth, "_get_public_key", key)
     stand = {"claims": {"type": "agent", "agent_name": "A", "permissions": ["mcp:cloud:*"]}}
-    monkeypatch.setattr(auth, "_decode_jwt", lambda token, key: dict(stand["claims"]))
+    monkeypatch.setattr(auth, "_pruefen", claims_fest(lambda token: dict(stand["claims"])))
 
     def ruf(verb, pfad, body=None, token=None, typ="application/json"):
         kopf = {"Content-Type": typ}

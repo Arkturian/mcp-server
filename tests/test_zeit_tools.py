@@ -599,3 +599,10 @@ class Projekt(unittest.IsolatedAsyncioTestCase):
         self.antwort = {"detail": {"grund": "agent_ohne_projekt"}}
         text = _geliefert(await self.mcp.call_tool("zeit_projekt", {}))
         self.assertIn("agent_ohne_projekt", text)
+
+    async def test_beschreibung_nennt_grenze_der_menschenzeit(self):
+        """#3171: mit Menschenzeit hoechstens 14 Tage, eine Wiederholung bekommt das Ergebnis."""
+        tool = {t.name: t for t in await self.mcp.list_tools()}["zeit_projekt"]
+        for wort in ("hoechstens 14 Tage", "menschenzeit_zu_lang", "wiederholen", "menschenzeit=false",
+                     "ausserhalb", "regeln_stand"):
+            self.assertIn(wort, tool.description)

@@ -8223,6 +8223,16 @@ Austrian tax rules apply (Kleinunternehmerregelung, 0% VAT default).
 4. documents_mark_paid(doc_id)           → status → paid
 ```
 
+### 2b. Angebot (quote) → accepted → invoice
+```
+1. clients_list(search="name")           → get client_id
+2. create_angebot(client_id, items=[{description, quantity, unit_price}], valid_days=30)
+                                         → AN-YYYY-NNN + PDF, valid_until = issued_date + valid_days
+3. documents_send(doc_id)                → emails PDF to client, status → sent
+4. angebot_accept(doc_id) | angebot_decline(doc_id)
+5. angebot_convert(doc_id, target_type="invoice")  → new invoice with the same items
+```
+
 ### 3. Record Expense
 ```
 transactions_create(tx_type="expense", amount=X, category="...", description="...")
@@ -8259,10 +8269,11 @@ Activity view are not visible until they clear (1-3 business days).
 - id, name, company, email, phone, address, zip, city, country, uid_number
 - Each document is linked to a client
 
-### Documents (Honorarnoten & Rechnungen)
-- doc_type: "honorarnote" or "invoice"
-- status: draft → sent → paid (or cancelled/overdue)
-- doc_number: auto-generated (HN-YYYY-NNN or RE-YYYY-NNN)
+### Documents (Honorarnoten, Rechnungen, Angebote)
+- doc_type: "honorarnote", "invoice" or "angebot"
+- status: draft → sent → paid (or cancelled/overdue); Angebote: draft → sent → accepted/declined
+- doc_number: auto-generated (HN-YYYY-NNN, RE-YYYY-NNN or AN-YYYY-NNN)
+- Angebote have valid_until instead of due_date
 - Has line items, totals, PDF, dates
 
 ### Transactions
@@ -8480,7 +8491,7 @@ async def business_clients_set_followup(
 
 @business_mcp.tool(
     name="documents_list",
-    description="List documents (Honorarnoten, Rechnungen). Filter by doc_type (honorarnote, invoice), status (draft, sent, paid, overdue, cancelled), client_id, year.",
+    description="List documents (Honorarnoten, Rechnungen, Angebote). Filter by doc_type (honorarnote, invoice, angebot), status (draft, sent, paid, overdue, cancelled, accepted, declined), client_id, year.",
 )
 async def business_documents_list(
     doc_type: Optional[str] = None,
@@ -8553,6 +8564,78 @@ async def business_create_invoice(
     if notes:
         body["notes"] = notes
     return await call_business_api("POST", "/api/v1/documents/invoice", json_body=body)
+
+
+# --- Angebote (#3194, Business 16.11.2026) ---
+# business-api hat sie seit 006_angebot_support (POST /documents/angebot, /{id}/accept,
+# /decline, /convert); im MCP fehlten sie, und Agenten erreichen business-api nur hier.
+
+
+@business_mcp.tool(
+    name="create_angebot",
+    description=(
+        "Create an Angebot (quote) with line items. Required: client_id, items (list of "
+        "{description, quantity, unit_price}). valid_days (default 30) sets valid_until = issued_date "
+        "+ valid_days. vat_rate: leave empty to use the tenant default (Kleinunternehmer → 0 %). "
+        "Optional content_post_id links a Content post. Auto-generates PDF. Lifecycle: "
+        "angebot_accept / angebot_decline, then angebot_convert to an invoice or Honorarnote."
+    ),
+)
+async def business_create_angebot(
+    client_id: int,
+    items: List[Dict[str, Any]],
+    vat_rate: Optional[float] = None,
+    issued_date: Optional[str] = None,
+    valid_days: int = 30,
+    notes: Optional[str] = None,
+    content_post_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    # vat_rate nur, wenn gesetzt: ohne Wert waehlt business-api den Satz des Mandanten
+    # (_resolve_vat_rate). Ein fest mitgeschicktes 0.0 wuerde ihn ueberschreiben.
+    body: Dict[str, Any] = {"client_id": client_id, "items": items, "valid_days": valid_days}
+    if vat_rate is not None:
+        body["vat_rate"] = vat_rate
+    if issued_date:
+        body["issued_date"] = issued_date
+    if notes:
+        body["notes"] = notes
+    if content_post_id is not None:
+        body["content_post_id"] = content_post_id
+    return await call_business_api("POST", "/api/v1/documents/angebot", json_body=body)
+
+
+@business_mcp.tool(
+    name="angebot_accept",
+    description="Mark an Angebot as accepted (only from draft or sent). Then angebot_convert creates the invoice.",
+)
+async def business_angebot_accept(doc_id: int) -> Dict[str, Any]:
+    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/accept")
+
+
+@business_mcp.tool(
+    name="angebot_decline",
+    description="Mark an Angebot as declined (only from draft or sent).",
+)
+async def business_angebot_decline(doc_id: int) -> Dict[str, Any]:
+    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/decline")
+
+
+@business_mcp.tool(
+    name="angebot_convert",
+    description=(
+        "Convert an ACCEPTED Angebot into a new invoice or Honorarnote with the same items. "
+        "target_type: 'invoice' (default) or 'honorarnote'; due_days default 14. The Angebot stays accepted."
+    ),
+)
+async def business_angebot_convert(
+    doc_id: int,
+    target_type: str = "invoice",
+    due_days: int = 14,
+) -> Dict[str, Any]:
+    return await call_business_api(
+        "POST", f"/api/v1/documents/{doc_id}/convert",
+        json_body={"target_type": target_type, "due_days": due_days},
+    )
 
 
 @business_mcp.tool(

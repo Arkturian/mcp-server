@@ -555,3 +555,47 @@ class Aufgaben(unittest.IsolatedAsyncioTestCase):
     async def test_fremde_antwort_unveraendert(self):
         self.antwort = {"detail": {"grund": "kette"}}
         self.assertIn("kette", str(await self.mcp.call_tool("aufgaben_tag", {"person": "p@x.at"})))
+
+
+class Projekt(unittest.IsolatedAsyncioTestCase):
+    """Projektsicht fuer den Projektmanager (cloud-api #3122): Aufrufe und Weitergabe."""
+
+    async def asyncSetUp(self):
+        self.calls = []
+        self.antwort = {"projekt": {"id": "insecta"}, "aufgaben": [{"id": 1, "titel": "Ä", "knoten": "200"}],
+                        "schritte": [{"turn_id": "t1"}], "knoten": [], "menschenzeit": None}
+
+        async def transport(method, path, **kwargs):
+            self.calls.append((method, path, kwargs))
+            return self.antwort
+        self.mcp = FastMCP("isolated-zeit-projekt")
+        register_zeit_tools(self.mcp, transport)
+
+    async def test_projekt_ruft_die_route_kompakt(self):
+        text = _geliefert(await self.mcp.call_tool("zeit_projekt", {"von": "2026-11-09", "menschenzeit": False}))
+        self.assertEqual(self.calls, [("GET", "/api/usage/projekt",
+                                       {"params": {"von": "2026-11-09", "menschenzeit": "false"}, "timeout": 180})])
+        self.assertEqual(json.loads(text)["aufgaben"][0], {"id": 1, "titel": "Ä", "knoten": "200"})
+        self.assertNotIn(": ", text)                                    # kompakt, ohne Einrueckung
+        self.assertIn("Ä", text)
+
+    async def test_schritte_ueber_dasselbe_werkzeug(self):
+        """Die Freigabe 6162 v3 nennt nur zeit_projekt und zeit_projekt_zuordnen."""
+        namen = {t.name for t in await self.mcp.list_tools() if t.name.startswith("zeit_projekt")}
+        self.assertEqual(namen, {"zeit_projekt", "zeit_projekt_zuordnen"})
+        await self.mcp.call_tool("zeit_projekt", {"aufgabe_id": 50, "projekt": " sim "})
+        self.assertEqual(self.calls, [("GET", "/api/usage/projekt/aufgaben/50/schritte",
+                                       {"params": {"projekt": "sim"}, "timeout": 60})])
+
+    async def test_zuordnen_reicht_die_aenderungen_durch(self):
+        self.antwort = {"geaendert": 1, "ergebnisse": [{"art": "knoten", "ergebnis": "ok"}]}
+        aenderungen = [{"art": "knoten", "aufgabe": 50, "knoten": "200"},
+                       {"art": "verschieben", "schritt": "t2", "aufgabe": 51}]
+        await self.mcp.call_tool("zeit_projekt_zuordnen", {"aenderungen": aenderungen})
+        self.assertEqual(self.calls, [("POST", "/api/usage/projekt/zuordnen",
+                                       {"timeout": 120, "json_body": {"aenderungen": aenderungen}})])
+
+    async def test_fehler_der_route_kommt_unveraendert(self):
+        self.antwort = {"detail": {"grund": "agent_ohne_projekt"}}
+        text = _geliefert(await self.mcp.call_tool("zeit_projekt", {}))
+        self.assertIn("agent_ohne_projekt", text)

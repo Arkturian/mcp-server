@@ -440,3 +440,70 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
             auswahl = {"agent": agent.strip(), "datum": datum.strip()}
         return await transport("POST", "/api/aufgaben/umordnen", timeout=300,
                                json_body={"person": person.strip(), "ziel": ziel, "auswahl": auswahl})
+
+    @mcp.tool(
+        name="zeit_projekt",
+        description=(
+            "Projektsicht fuer einen Projektmanager-Agenten (#3122, Beitrag 6162): Aufgaben, Schritte "
+            "und Zeit EINES Projekts. Mit dem Recht `zeit:projekt` ist das Projekt der Portal-Ordner, "
+            "in dem du in der Registry liegst, samt Unterordnern (nie der Elternordner, nie private "
+            "Ordner); `projekt` grenzt dann nur auf einen Unterordner ein. Ohne das Recht nennt ein "
+            "Leser mit `zeit:lesen` das Projekt (`projekt` = Ordner-Id). `von`/`bis` = Kalendertage in "
+            "Wien (JJJJ-MM-TT), `bis` zaehlt mit, hoechstens 31 Tage, leer = die letzten 7. "
+            "`aufgaben`: aller Personen des Projekts, ohne Personenfeld, je mit zeit_s (Agentenzeit "
+            "im Bereich), zuege, schritte, mails, knoten (Tree-Knoten der Aufgabe, Vorgabe) und `eigen` "
+            "(Aufgabe deines Besitzers; nur dann steht der Text des letzten Schritts dabei). "
+            "`ohne_aufgabe`: Schritte im Projekt ohne Aufgabe. `knoten`: je Tree-Knoten Agentenzeit, "
+            "Zuege, Schritte und Mails, gezaehlt mit schritt.knoten ?? aufgabe.knoten (null = ohne "
+            "Knoten); `tree_projekt` = der Tree-Plan des Ordners (null: noch nicht verknuepft). "
+            "`menschenzeit`: Zeit deines Besitzers je Tag und Ordner (bildschirm_h, termine_h, "
+            "mail_annahme_h = ANGENOMMENE Minuten je Mail, gesamt_h), nie die anderer Menschen; "
+            "menschenzeit=false spart die Rechnung. `darf_zuordnen`: ob du zeit_projekt_zuordnen "
+            "nutzen darfst. `aufgabe_id`: statt der Uebersicht die Schritte EINER Aufgabe deines "
+            "Projekts, je mit turn_id, Uhrzeit, Agent, zuege, zeit_s, quelle und knoten/knoten_quelle "
+            "(Knoten des Schritts, geht vor dem der Aufgabe); Eingabe und Satz nur bei Aufgaben deines "
+            "Besitzers, eine Aufgabe ausserhalb deines Projekts ergibt 404. "
+            "Menschenzeit ist ein Personendatum: nicht an andere Projektmitglieder."
+        ),
+    )
+    async def zeit_projekt(projekt: str = "", von: str = "", bis: str = "", menschenzeit: bool = True,
+                           aufgabe_id: int = 0) -> Any:
+        # Ein Werkzeug fuer Uebersicht und Schritte: die Freigabe 6162 v3 nennt genau
+        # mcp:cloud:zeit_projekt und mcp:cloud:zeit_projekt_zuordnen.
+        if aufgabe_id:
+            params = {"projekt": projekt.strip()} if projekt.strip() else {}
+            d = await transport("GET", f"/api/usage/projekt/aufgaben/{int(aufgabe_id)}/schritte",
+                                params=params, timeout=60)
+            if not isinstance(d, dict) or "schritte" not in d:
+                return d
+            return json.dumps(d, ensure_ascii=False, separators=(",", ":"))
+        params = {k: v for k, v in (("projekt", projekt.strip()), ("von", von.strip()), ("bis", bis.strip())) if v}
+        if not menschenzeit:
+            params["menschenzeit"] = "false"
+        d = await transport("GET", "/api/usage/projekt", params=params, timeout=180)
+        if not isinstance(d, dict) or "aufgaben" not in d:
+            return d
+        return json.dumps(d, ensure_ascii=False, separators=(",", ":"))
+
+    @mcp.tool(
+        name="zeit_projekt_zuordnen",
+        description=(
+            "Zuordnung im eigenen Projekt korrigieren (#3122), nur mit dem Recht `zeit:projekt:zuordnen`. "
+            "`aenderungen` (1 bis 200), je eine von: {\"art\": \"knoten\", \"aufgabe\": <id>, \"knoten\": "
+            "<Id des Tree-Knotens (ganze Zahl) oder null>} setzt die Vorgabe einer Aufgabe; {\"art\": \"knoten\", \"schritt\": "
+            "<turn_id>, \"knoten\": …} den Knoten eines Schritts (geht vor); {\"art\": \"verschieben\", "
+            "\"schritt\": <turn_id>, \"aufgabe\": <id>} haengt einen Schritt an eine andere Aufgabe "
+            "desselben Projekts und derselben Person. Je Aenderung ein `ergebnis`: ok, unveraendert, "
+            "unbekannt (nicht in deinem Projekt), ziel_unbekannt, andere_person, mensch_hat_gesetzt "
+            "(was ein Mensch festgelegt hat, aenderst du nicht), knoten_nicht_im_plan (tree-api kennt "
+            "den Knoten nicht im Tree-Plan deines Ordners). Knoten nur, wenn der Ordner mit einem "
+            "Tree-Plan verknuepft ist (sonst 409 kein_tree_projekt). Den Status am Knoten setzt du "
+            "direkt in tree-api, nicht hier. Aus dem Projekt hinaus geht nichts: "
+            "Gehoert etwas nicht ins Projekt, frag den Menschen."
+        ),
+    )
+    async def zeit_projekt_zuordnen(aenderungen: List[Dict[str, Any]], projekt: str = "") -> Any:
+        body: Dict[str, Any] = {"aenderungen": list(aenderungen or [])}
+        if projekt.strip():
+            body["projekt"] = projekt.strip()
+        return await transport("POST", "/api/usage/projekt/zuordnen", timeout=120, json_body=body)

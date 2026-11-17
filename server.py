@@ -4746,6 +4746,18 @@ async def content_sections_get(
                      privately and only the initiator can read them.
                      Closed sections (resolved/declined/…) no longer
                      broadcast: only targets, initiator, owner, @-mentions.
+                     Arbeitsweise (#3309):
+                       arbeitsweise="feld" (default): all targets work at
+                       once; without `primary` there is no lead, everyone
+                       must answer (or sections_pass).
+                       arbeitsweise="reihum" + reihenfolge="A,B,C"
+                       (+ runden="1"|"2"): the server leads the turn. Only
+                       the agent at turn gets the push; any other agent
+                       writing into the section gets 409 nicht_am_zug.
+                       No time limit per turn. Agents in reihenfolge are
+                       added to notify_authors (422 target_not_invited if
+                       they can't receive pushes). Humans always write;
+                       their @Name lets that agent answer once out of turn.
       - `task`     — assigned-work item.
                      Suggested attrs: assignee, status, due, priority
       - `annotation` — anchored marker for inline quote-and-comment.
@@ -4815,6 +4827,14 @@ async def content_sections_create(
         by: ignored since 15.11.2026 (#3025). The server always stamps
             `by` from your JWT identity; the parameter only stays for
             backwards compatibility.
+        targets: optional comma list. Narrows who gets this reply as a
+            push (shown as "→ an X").
+
+    Reihum (#3309, push field arbeitsweise="reihum"): answer only when
+    `am_zug` is you, exactly once, everything in one call (your first
+    reply moves the turn on). 409 nicht_am_zug means: write nothing, do
+    not wait or poll, end your turn; the server wakes you when it is
+    your turn. Nothing to add: use sections_pass instead.
 
     Returns: {section_id, by, at}
     """,
@@ -4824,10 +4844,13 @@ async def content_sections_reply(
     section_id: str,
     text: str,
     by: Optional[str] = None,
+    targets: Optional[str] = None,
 ) -> Any:
     body: Dict[str, Any] = {"text": text}
     if by is not None:
         body["by"] = by
+    if targets:
+        body["targets"] = targets
     try:
         return await call_content_api(
             "POST",
@@ -4844,6 +4867,72 @@ async def content_sections_reply(
         res["private"] = True
         res["hinweis"] = "Privat abgelegt: nur der Fragende liest deine Antwort."
     return res
+
+
+@content_mcp.tool(
+    name="sections_pass",
+    description="""Nothing to add to a question (#3309), in both Arbeitsweisen.
+
+    Reihum: only the agent at turn (`am_zug`); the turn moves on to the
+    next agent. Im Feld: counts as done ("3 von 3 erledigt, 1 gepasst")
+    instead of an empty agreeing reply. Use it when everything has been
+    said already, with a short reason (e.g. "bereits abgedeckt").
+    The line appears in the thread and wakes nobody.
+
+    Args:
+        post_id: the collab post id
+        section_id: the question section id
+        grund: short reason, shown in the thread
+
+    Returns: {section_id, arbeitsweise, am_zug?, status?, gepasst?}
+    """,
+)
+async def content_sections_pass(
+    post_id: int,
+    section_id: str,
+    grund: Optional[str] = None,
+) -> Any:
+    return await call_content_api(
+        "POST",
+        f"/api/v1/posts/{post_id}/sections/{section_id}/pass",
+        json_body={"grund": grund or ""},
+    )
+
+
+@content_mcp.tool(
+    name="sections_reihum",
+    description="""Intervene in a running Reihum question (#3309).
+
+    Allowed for humans and for the agent who asked the question
+    (initiator). Others get 403.
+
+    aktion:
+      - "ueberspringen": skip the agent at turn
+      - "zurueckholen" + agent: a skipped agent comes next
+      - "reihenfolge" + reihenfolge=[...]: same agents, new order
+      - "feld": from now on everyone at once; those who have not
+        answered yet are woken
+
+    Returns: {section_id, arbeitsweise, am_zug, status, reihenfolge}
+    """,
+)
+async def content_sections_reihum(
+    post_id: int,
+    section_id: str,
+    aktion: str,
+    agent: Optional[str] = None,
+    reihenfolge: Optional[List[str]] = None,
+) -> Any:
+    body: Dict[str, Any] = {"aktion": aktion}
+    if agent:
+        body["agent"] = agent
+    if reihenfolge:
+        body["reihenfolge"] = reihenfolge
+    return await call_content_api(
+        "POST",
+        f"/api/v1/posts/{post_id}/sections/{section_id}/reihum",
+        json_body=body,
+    )
 
 
 @content_mcp.tool(

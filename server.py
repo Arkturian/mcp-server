@@ -7019,6 +7019,9 @@ async def ai_genimage(
     duration: Veo 4/6/8 · aspect_ratio: landscape | portrait
     start_image / end_image: Storage-ID oder https-Adresse (Bild-zu-Video).
     max_credits: bricht vorher ab, wenn die Schätzung höher liegt.
+    private: true = Clips vertraulich im Storage ablegen (anonym 403), an
+    dich gebunden (lesen über assets_download). Vorgabe false = öffentlich.
+    Referenzbilder gehen in jedem Fall zu useapi.net und Google.
     """,
 )
 async def ai_genvideo_flow(
@@ -7033,9 +7036,12 @@ async def ai_genvideo_flow(
     end_image: Optional[str] = None,
     max_credits: Optional[int] = None,
     link_id: Optional[str] = None,
+    private: bool = False,
 ) -> Dict[str, Any]:
-    """Google-Flow-Video abgeben (api-ai ebfe8ec)."""
+    """Google-Flow-Video abgeben (api-ai ebfe8ec, private seit 7832521)."""
     body: Dict[str, Any] = {"prompt": prompt, "confirm_api_billing": bool(confirm_api_billing)}
+    if private:
+        body["private"] = True
     for key, value in (("model", model), ("aspect_ratio", aspect_ratio), ("duration", duration),
                        ("count", count), ("resolution", resolution), ("start_image", start_image),
                        ("end_image", end_image), ("max_credits", max_credits), ("link_id", link_id)):
@@ -7077,6 +7083,10 @@ async def ai_genvideo_flow_account() -> Dict[str, Any]:
     aspect_ratio: 16:9 | 4:3 | 1:1 | 3:4 | 9:16 | auto (nur mit Referenzen)
     reference_images: bis 10 Storage-IDs oder https-Adressen (Bild-zu-Bild)
     count: 1-4 (Vorgabe 1)
+    upscale: 2k | 4k (je Bild eine weitere Captcha-Lösung; scheitert es, bleibt das 1K-Bild)
+    private: true = Bilder vertraulich im Storage ablegen (anonym 403), an
+    dich gebunden (lesen über assets_download). Vorgabe false = öffentlich.
+    Referenzbilder gehen in jedem Fall zu useapi.net und Google.
     """,
 )
 async def ai_genimage_flow(
@@ -7088,11 +7098,15 @@ async def ai_genimage_flow(
     seed: Optional[int] = None,
     reference_images: Optional[List[str]] = None,
     link_id: Optional[str] = None,
+    upscale: Optional[str] = None,
+    private: bool = False,
 ) -> Dict[str, Any]:
-    """Nano-Banana-Bild über Flow (api-ai 2b55f00)."""
+    """Nano-Banana-Bild über Flow (api-ai 2b55f00, private seit 7832521)."""
     body: Dict[str, Any] = {"prompt": prompt, "confirm_api_billing": bool(confirm_api_billing)}
+    if private:
+        body["private"] = True
     for key, value in (("model", model), ("aspect_ratio", aspect_ratio), ("count", count),
-                       ("seed", seed), ("link_id", link_id)):
+                       ("seed", seed), ("link_id", link_id), ("upscale", upscale)):
         if value not in (None, ""):
             body[key] = value
     if reference_images:

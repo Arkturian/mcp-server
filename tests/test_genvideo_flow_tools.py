@@ -37,9 +37,11 @@ class GenvideoFlowTests(unittest.TestCase):
         c = self._lauf(server.ai_genvideo_flow_status, "j1-user:3-a/../b")
         self.assertTrue(c.args[1].endswith("/ai/genvideo/flow/status/j1-user:3-a%2F..%2Fb"))
 
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_private_geht_in_den_rumpf_und_fehlt_sonst(self):
+        c = self._lauf(server.ai_genvideo_flow, "x", confirm_api_billing=True, private=True)
+        self.assertIs(c.kwargs["json_body"]["private"], True)
+        c = self._lauf(server.ai_genvideo_flow, "x", confirm_api_billing=True)
+        self.assertNotIn("private", c.kwargs["json_body"])
 
 
 class GenimageFlowTests(GenvideoFlowTests):
@@ -51,3 +53,16 @@ class GenimageFlowTests(GenvideoFlowTests):
                                                  "aspect_ratio": "16:9",
                                                  "reference_images": ["4711", "https://x/y.png"]})
         self.assertEqual(c.kwargs["headers"]["X-Agent-Name"], "Bauleiter")
+
+    def test_bild_private_und_upscale(self):
+        c = self._lauf(server.ai_genimage_flow, "Haus", confirm_api_billing=True,
+                       upscale="4k", private=True)
+        self.assertEqual(c.kwargs["json_body"], {"prompt": "Haus", "confirm_api_billing": True,
+                                                 "private": True, "upscale": "4k"})
+        c = self._lauf(server.ai_genimage_flow, "Haus", confirm_api_billing=True)
+        self.assertNotIn("private", c.kwargs["json_body"])
+        self.assertNotIn("upscale", c.kwargs["json_body"])
+
+
+if __name__ == "__main__":
+    unittest.main()

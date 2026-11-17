@@ -643,3 +643,12 @@ class Projekt(unittest.IsolatedAsyncioTestCase):
         for wort in ("hoechstens 14 Tage", "menschenzeit_zu_lang", "wiederholen", "menschenzeit=false",
                      "ausserhalb", "regeln_stand"):
             self.assertIn(wort, tool.description)
+
+    async def test_beschreibung_nennt_weitere_menschen_nur_mit_zustimmung(self):
+        """#3170, 6162 Nachtrag 3: andere Menschen je Person, nur mit Zustimmung, nie an
+        andere Projektmitglieder; "nie die anderer Menschen" gilt nicht mehr."""
+        tool = {t.name: t for t in await self.mcp.list_tools()}["zeit_projekt"]
+        for wort in ("menschenzeit.weitere", "selbst zugestimmt", "Bildschirmzeit", "nur du und dein Besitzer",
+                     "nie je Person"):
+            self.assertIn(wort, tool.description)
+        self.assertNotIn("nie die anderer Menschen", tool.description)

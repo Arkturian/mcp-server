@@ -11962,6 +11962,70 @@ async def cloud_browser_aufruf(methode: str, parameter: Optional[Dict[str, Any]]
 
 
 @cloud_mcp.tool(
+    name="geraet_sitzungen",
+    description=(
+        "Die Mac-Geraete (App 'Arkturian Zeit', Geraete-Hand Stufe 1, #3297) deines Menschen: "
+        "[{geraet_id, name, os, app_version, aktiv, schlafend, wurzeln, auto, knoten}]. Mensch = der hinter "
+        "deinem laufenden Zug, sonst dein Besitzer, nie ein anderer. Gesperrte Geraete fehlen. "
+        "`auto` ist nur ein Hinweis, die App entscheidet und fragt den Menschen."
+    ),
+)
+async def cloud_geraet_sitzungen() -> Dict[str, Any]:
+    return await call_cloud_api("GET", "/api/agents/self/geraete", timeout=40.0)
+
+
+@cloud_mcp.tool(
+    name="geraet_aufruf",
+    description=(
+        "Eine feste Methode auf dem Mac deines Menschen ausfuehren (Geraete-Hand). Wartet hoechstens 20 s, "
+        "danach status=offen und aufruf_id: spaeter mit geraet_ergebnis nachsehen. Methoden: "
+        "datei_zeigen{storage_id} bzw. {wurzel, pfad} (Stufe zeigen), datei_oeffnen (dasselbe, Stufe steuern), "
+        "ordner_zeigen{wurzel, pfad}, url_oeffnen{url} (nur https, keine Bank-/Zahlungsseiten, keine lokalen "
+        "Adressen, hoechstens 3 je Minute), mitteilung{titel<=80, text<=500}, zwischenablage_setzen{text<=10000} "
+        "(Stufe steuern; Ergebnis sofort {angeboten: true}, kopiert wird erst beim Klick des Menschen), "
+        "geraet_info{}. `wurzel` ist einer der gemeldeten logischen Namen (agentos, downloads ...), `pfad` relativ, "
+        "ohne '..'. Eine Datei aus dem Storage geht nur, wenn du sie signieren darfst (sonst 403 kein_zugriff), "
+        "hoechstens 250 MB. Bei mehreren wachen Geraeten `geraet` angeben (sonst 409 geraet_waehlen). "
+        "Fehler vom Geraet: abgelehnt, gestoppt, geraet_aus, nicht_erlaubt, wurzel_fehlt, pfad, pruefsumme, "
+        "zu_gross, zeit, intern. Fuer 'schau dir das an' ist geraet_mitteilung der Hauptweg: der Mensch klickt."
+    ),
+)
+async def cloud_geraet_aufruf(methode: str, parameter: Optional[Dict[str, Any]] = None,
+                              geraet: str = "") -> Dict[str, Any]:
+    body: Dict[str, Any] = {"methode": methode, "parameter": parameter or {}}
+    if geraet:
+        body["geraet"] = geraet
+    return await call_cloud_api("POST", "/api/agents/self/geraet-aufrufe", json_body=body, timeout=60.0)
+
+
+@cloud_mcp.tool(
+    name="geraet_ergebnis",
+    description="Ergebnis eines geraet_aufruf, der mit status=offen zurueckkam (nur dein eigener Aufruf).",
+)
+async def cloud_geraet_ergebnis(aufruf_id: str) -> Dict[str, Any]:
+    return await call_cloud_api("GET", f"/api/agents/self/geraet-aufrufe/{aufruf_id}", timeout=40.0)
+
+
+@cloud_mcp.tool(
+    name="geraet_mitteilung",
+    description=(
+        "Eine Mitteilung auf den Mac deines Menschen (Hauptweg der Geraete-Hand: du kuendigst an, der Mensch "
+        "klickt). titel<=80, text<=500, optional datei_storage_id einer Datei, die du signieren darfst; "
+        "aktionen aus oeffnen, im_finder_zeigen, spaeter (Vorgabe: alle mit Datei, sonst spaeter). Den Link "
+        "holt die App erst beim Klick. Antwort und Wegklicken kommen wie bei jeder Karte zurueck."
+    ),
+)
+async def cloud_geraet_mitteilung(titel: str, text: str, datei_storage_id: Optional[int] = None,
+                                  aktionen: Optional[List[str]] = None) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"titel": titel, "text": text}
+    if datei_storage_id is not None:
+        body["datei"] = {"storage_id": int(datei_storage_id)}
+    if aktionen:
+        body["aktionen"] = list(aktionen)
+    return await call_cloud_api("POST", "/api/agents/self/geraet-mitteilung", json_body=body, timeout=40.0)
+
+
+@cloud_mcp.tool(
     name="browser_freigabe_beenden",
     description=("Deine eigene Browser-Freigabe fuer eine Sitzung (sitzung_id, 'aktiv' oder 'agenten') "
                  "sofort beenden. Im Agenten-Chrome schliesst die Extension dabei deine Tabs."),

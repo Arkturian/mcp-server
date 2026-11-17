@@ -613,6 +613,7 @@ async def call_storage_api(
     params: Optional[Dict[str, Any]] = None,
     json_body: Optional[Dict[str, Any]] = None,
     share_scopes: Optional[List[str]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
 ) -> Any:
     if endpoint in _STORAGE_SCOPE_QUERY:
         params = _with_grant_scope(params, share_scopes)
@@ -622,7 +623,7 @@ async def call_storage_api(
     return await _fetch_json(
         method,
         f"{STORAGE_API_BASE}{endpoint}",
-        headers=_storage_headers(),
+        headers={**_storage_headers(), **(extra_headers or {})},
         params=params,
         json_body=json_body,
     )
@@ -635,7 +636,9 @@ async def call_storage_upload(
     form_fields: Optional[Dict[str, str]] = None,
     share_scopes: Optional[List[str]] = None,
 ) -> Any:
-    """Upload a file to Storage API via multipart form-data."""
+    """Upload a file to Storage API via multipart form-data. Bei `encrypted` (#3234)
+    steht weder Name noch Antworttext im Log."""
+    verschl = str((form_fields or {}).get("encrypted") or "").lower() == "true"
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
             files = {"file": (filename, file_bytes)}
@@ -649,10 +652,13 @@ async def call_storage_upload(
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as exc:
-            logger.error("Upload error: %s", exc.response.text)
+            if verschl:
+                logger.error("Upload error (verschluesselt): HTTP %s", exc.response.status_code)
+            else:
+                logger.error("Upload error: %s", exc.response.text)
             raise
         except httpx.HTTPError as exc:
-            logger.error("Upload request failed: %s", exc)
+            logger.error("Upload request failed: %s", type(exc).__name__ if verschl else exc)
             raise
 
 
@@ -1312,6 +1318,7 @@ async def storage_assets_unshare(id: int, share_with: List[str]) -> Dict[str, An
     shared_by names who shared it with you (empty if you uploaded it yourself).
     Not bound to you -> error not_granted; ask the owner agent to call assets_share.
     Public files come back with an unsigned url.
+    Encrypted objects: the real filename comes from the signed link (metadata only hold a placeholder), the link lives 5 minutes; load into $HOME/tmp and delete after use.
     """,
 )
 async def storage_assets_download(id: int) -> Dict[str, Any]:  # noqa: A002
@@ -1323,6 +1330,31 @@ async def storage_assets_download(id: int) -> Dict[str, Any]:  # noqa: A002
     # Metadaten erst nach erfolgreicher Signatur: wer nicht lesen darf, erfaehrt
     # auch Name und Groesse nicht.
     meta = await call_storage_api("GET", f"/storage/objects/{id}")
+    if meta.get("encrypted"):
+        # #3234: die Metadaten tragen nur einen Platzhalter. Den echten Namen und die Groesse des
+        # Klartexts liefert nur der signierte Abruf (HEAD, ohne Dienstschluessel). Storage fasst
+        # HEAD und das folgende GET desselben Links zu einer Protokollzeile zusammen.
+        name, groesse = meta.get("original_filename"), None
+        try:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=False) as client:
+                h = await client.head(item["url"])
+            if h.status_code == 200:
+                name = _cd_name(h.headers.get("content-disposition")) or name
+                groesse = int(h.headers.get("content-length") or 0) or None
+        except (httpx.HTTPError, ValueError):
+            pass
+        return {
+            "id": id,
+            "url": item["url"],
+            "expires_at": res.get("expires_at"),
+            "filename": name,
+            "mime_type": meta.get("mime_type"),
+            "size": groesse,
+            "encrypted": True,
+            "shared_by": item.get("shared_by"),
+            "mitteilungen": await _verschl_anmelden(id) if not item.get("shared_by") else None,
+            "hinweis": VERSCHL_HINWEIS,
+        }
     return {
         "id": id,
         "url": item["url"],
@@ -1386,6 +1418,7 @@ def _media_view_url_ok(url: str, object_id: int) -> bool:
     Videos come back as one frame, PDFs as their first page (error pdf_preview_unavailable
     where the storage instance cannot render PDFs; then use assets_download).
     Other types (audio, 3D, documents): error unsupported_type, use assets_download.
+    Encrypted objects: images only, sent as stored (no resizing); videos and PDFs give encrypted_no_preview.
     """,
 )
 async def storage_media_view(id: int, max_px: int = 1568):  # noqa: A002
@@ -1407,15 +1440,23 @@ async def storage_media_view(id: int, max_px: int = 1568):  # noqa: A002
     if not (mime.startswith("image/") or mime.startswith("video/") or is_pdf):
         return {"id": id, "error": "unsupported_type", "mime_type": mime}
 
+    verschl = bool(meta.get("encrypted"))
+    if verschl and not mime.startswith("image/"):
+        # #3234: Fuer verschluesselte Objekte rechnet Storage nichts um (409 encrypted_no_variants):
+        # kein Videobild, keine PDF-Seite.
+        return {"id": id, "error": "encrypted_no_preview", "mime_type": mime, "hint": "assets_download"}
     # Geholt wird nur der signierte Link, ohne Dienstschlüssel (Post 5782):
     # was der Aufrufer nicht lesen darf, bekommt auch das Gateway nicht.
     data = bytearray()
+    echter_name = None
     async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:
         # Anhängen, nicht ersetzen: `params=` würde exp/kid/sig aus dem Link werfen.
-        abruf = httpx.URL(url).copy_merge_params(_media_view_params(meta, max_px))
+        abruf = httpx.URL(url) if verschl else httpx.URL(url).copy_merge_params(_media_view_params(meta, max_px))
         async with client.stream("GET", abruf) as r:
             if r.status_code != 200:
                 return {"id": id, "error": f"storage_{r.status_code}"}
+            if verschl:
+                echter_name = _cd_name(r.headers.get("content-disposition"))
             ctype = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
             if not ctype.startswith("image/"):
                 return {"id": id, "error": "pdf_preview_unavailable" if is_pdf else "no_image_returned",
@@ -1425,8 +1466,12 @@ async def storage_media_view(id: int, max_px: int = 1568):  # noqa: A002
                 if len(data) > _MEDIA_VIEW_MAX_BYTES:
                     return {"id": id, "error": "too_large", "hint": "smaller max_px"}
     fmt = {"image/jpeg": "jpeg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(ctype, "jpeg")
-    beschreibung = (f"id {id} · {meta.get('original_filename') or ''} · {mime}"
+    beschreibung = (f"id {id} · {echter_name or meta.get('original_filename') or ''} · {mime}"
                     f" · original {meta.get('width') or '?'}×{meta.get('height') or '?'}")
+    if verschl:
+        beschreibung += " · verschlüsselt, Original ohne Verkleinerung"
+        if not item.get("shared_by"):
+            await _verschl_anmelden(id)
     if item.get("shared_by"):
         beschreibung += f" · shared by {item['shared_by']}"
     return [_McpImage(data=bytes(data), format=fmt), beschreibung]
@@ -1648,6 +1693,7 @@ async def storage_assets_update_embedding_text(
     to that URL (no base64, no multipart, no API key) and the PUT response is the
     created storage object. Use this whenever base64 would be impractical.
       assets_upload(file_base64="TICKET", filename="photo.jpg")
+    encrypted=true (#3230): ciphertext only, always private, no expiry, no AI; the filename stays out of URLs and logs. Not with CHUNK:; TICKET works. Result carries hinweis and encrypted: true (otherwise the upload is discarded).
     """,
 )
 async def storage_assets_upload(
@@ -1660,6 +1706,7 @@ async def storage_assets_upload(
     ai_mode: str = "safety",
     share_with: Optional[List[str]] = None,
     ttl_hours: Optional[int] = None,
+    encrypted: bool = False,
 ) -> Dict[str, Any]:
     # Escape hatch for clients whose tool catalogue is capped and therefore
     # never sees assets_upload_ticket (ChatGPT loads 9 of our 16 tools, 2026-08-04).
@@ -1670,6 +1717,8 @@ async def storage_assets_upload(
     # catalogue lags behind cannot see assets_upload_chunked either. Prefix form:
     #   file_base64 = "CHUNK:<upload_id>:<index>:<total>:<base64 piece>"
     if file_base64.startswith("CHUNK:"):
+        if encrypted:
+            raise ValueError("encrypted: stückweise geht nicht; nimm assets_upload_ticket(encrypted=true)")
         try:
             _, _uid, _idx, _tot, _payload = file_base64.split(":", 4)
             _idx_i, _tot_i = int(_idx), int(_tot)
@@ -1694,6 +1743,9 @@ async def storage_assets_upload(
         )
 
     if file_base64.strip().upper() in ("TICKET", "REQUEST_TICKET"):
+        if encrypted:
+            return await storage_assets_upload_ticket(filename=filename, context=context, collection_id=collection_id,
+                                                      share_with=share_with, encrypted=True)
         params: Dict[str, Any] = {
             "filename": filename,
             "is_public": str(is_public).lower(),
@@ -1729,7 +1781,74 @@ async def storage_assets_upload(
         form_fields["link_id"] = link_id
     if ttl_hours is not None:
         form_fields["ttl_hours"] = str(ttl_hours)
+    if encrypted:
+        res = await call_storage_upload(file_bytes, filename, form_fields=_verschl_formular(form_fields),
+                                        share_scopes=share_scopes)
+        return await _verschl_bestaetigt(res)
     return await call_storage_upload(file_bytes, filename, form_fields=form_fields, share_scopes=share_scopes)
+
+
+# -- #3234: verschluesselte Objekte (Vertrag storage-api #3230) ----------------------
+
+VERSCHL_HINWEIS = ("Verschlüsselt: Links gelten 5 Minuten. Nach $HOME/tmp laden (von der Drive-Sicherung "
+                   "ausgenommen) und nach Gebrauch löschen.")
+
+
+def _verschl_formular(form_fields: Dict[str, str]) -> Dict[str, str]:
+    """encrypted erzwingt privat, kein Ablauf, keine KI, keine Wiederverwendung (#3230)."""
+    f = {k: v for k, v in form_fields.items() if k not in ("ttl_hours", "is_public", "ai_mode", "private")}
+    f.update({"encrypted": "true", "private": "true", "is_public": "false", "ai_mode": "none",
+              "reuse_existing": "false"})
+    return f
+
+
+def _x_filename(name: str) -> Dict[str, str]:
+    """Bei verschluesselten Tickets reist der Name nur im Kopf, nie in der URL (storage-api #3230)."""
+    from urllib.parse import quote
+    return {"X-Filename": quote(name or "", safe="")}
+
+
+async def _verschl_anmelden(object_id: Any) -> bool:
+    """cloud-api merkt sich den Menschen hinter dem Agenten fuer Mitteilungen zu Lesen und
+    Freigeben (#3234). Nur eigene Objekte; Fehler sind kein Abbruch."""
+    try:
+        res = await call_cloud_api("POST", "/api/agents/self/encrypted-objects", json_body={"id": int(object_id)})
+        return bool((res or {}).get("registriert"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _verschl_bestaetigt(res: Any) -> Dict[str, Any]:
+    """Storage muss `encrypted: true` bestaetigen, sonst wird das Objekt geloescht und der Aufruf
+    scheitert (nie still unverschluesselt). Danach anmelden und den Hinweis anhaengen."""
+    if not isinstance(res, dict) or res.get("encrypted") is not True:
+        oid = res.get("id") if isinstance(res, dict) else None
+        if oid:
+            try:
+                await call_storage_api("DELETE", f"/storage/objects/{int(oid)}")
+            except Exception:  # noqa: BLE001
+                pass
+        raise RuntimeError("encryption_not_confirmed: Storage hat die Verschlüsselung nicht bestätigt, "
+                           "das Objekt wurde verworfen")
+    res = dict(res)
+    res["mitteilungen"] = await _verschl_anmelden(res.get("id"))
+    res["hinweis"] = VERSCHL_HINWEIS
+    return res
+
+
+def _cd_name(header: Optional[str]) -> Optional[str]:
+    """Dateiname aus Content-Disposition (RFC 6266: filename* vor filename)."""
+    from urllib.parse import unquote
+    import re as _re
+    h = header or ""
+    m = _re.search(r"filename\*\s*=\s*([^']*)'[^']*'([^;]+)", h, _re.I)
+    if m:
+        try:
+            return unquote(m.group(2).strip(), encoding=(m.group(1) or "utf-8"), errors="strict")
+        except (LookupError, UnicodeDecodeError):
+            pass
+    m = _re.search(r'filename\s*=\s*"((?:[^"\\]|\\.)*)"', h, _re.I) or _re.search(r"filename\s*=\s*([^;]+)", h, _re.I)
+    return m.group(1).strip() if m else None
 
 
 def _upload_wurzeln() -> List["Path"]:
@@ -1804,6 +1923,7 @@ def _upload_pfad_erlaubt(p: "Path") -> "Path":
     `share_url` (https://files.arkturian.com/<id>/<name>) is the readable link to hand to people
     outside (mail, customer, supplier). It is set only for public objects; null means the file is
     not public and must not be sent out that way.
+    encrypted=true (#3230): ciphertext only, always private, no expiry, no AI. Result carries hinweis; without Storage's confirmation the object is discarded.
     """,
 )
 async def storage_assets_upload_file(
@@ -1817,6 +1937,7 @@ async def storage_assets_upload_file(
     ai_mode: str = "none",
     share_with: Optional[List[str]] = None,
     ttl_hours: Optional[int] = None,
+    encrypted: bool = False,
 ) -> Dict[str, Any]:
     from pathlib import Path as _P
 
@@ -1864,6 +1985,10 @@ async def storage_assets_upload_file(
         form_fields["link_id"] = link_id
     if ttl_hours is not None:
         form_fields["ttl_hours"] = str(ttl_hours)
+    if encrypted:
+        res = await call_storage_upload(file_bytes, filename or p.name, form_fields=_verschl_formular(form_fields),
+                                        share_scopes=share_scopes)
+        return await _verschl_bestaetigt(res)
     return await call_storage_upload(
         file_bytes, filename or p.name, form_fields=form_fields, share_scopes=share_scopes)
 
@@ -1890,6 +2015,7 @@ async def storage_assets_upload_file(
     owner/admin only), ai_mode (none|safety|vision|full, default none because
     AI analysis costs money), ttl_hours (auto-delete after N hours),
     share_with (agent names that may also sign the file, checked in auth-api).
+    encrypted=true (#3230): the ticket stores ciphertext only; the name travels in a header, never in the URL. Check encrypted: true in the PUT response.
     """,
 )
 async def storage_assets_upload_ticket(
@@ -1901,7 +2027,24 @@ async def storage_assets_upload_ticket(
     ai_mode: str = "none",
     ttl_hours: Optional[int] = None,
     share_with: Optional[List[str]] = None,
+    encrypted: bool = False,
 ) -> Dict[str, Any]:
+    if encrypted:
+        # #3230: Name nur im Kopf X-Filename, privat, kein Ablauf, keine KI.
+        vparams: Dict[str, Any] = {"encrypted": "true", "is_public": "false", "private": "true", "ai_mode": "none"}
+        if context:
+            vparams["context"] = context
+        if collection_id:
+            vparams["collection_id"] = collection_id
+        ticket = await call_storage_api(
+            "POST", "/storage/upload-ticket", params=vparams, extra_headers=_x_filename(filename),
+            share_scopes=await _share_with_scopes(share_with))
+        if isinstance(ticket, dict):
+            ticket = dict(ticket)
+            ticket["next_step"] = ("HTTP PUT the raw file bytes to upload_url (no base64, no multipart, no API key). "
+                                   "Check `encrypted: true` in the PUT response.")
+            ticket["hinweis"] = VERSCHL_HINWEIS
+        return ticket
     params: Dict[str, Any] = {
         "filename": filename,
         "is_public": str(is_public).lower(),
@@ -2010,6 +2153,7 @@ async def storage_assets_upload_chunked(
 
     Example: Import an image from a URL
       assets_fetch(url="https://example.com/photo.jpg", context="imported", collection_id="web_imports")
+    encrypted=true is not supported yet (Storage stores URL fetches unencrypted): error encrypted_fetch_unsupported; fetch the file yourself and use assets_upload_ticket(encrypted=true).
     """,
 )
 async def storage_assets_fetch(
@@ -2021,7 +2165,13 @@ async def storage_assets_fetch(
     filename: Optional[str] = None,
     analyze: bool = True,
     share_with: Optional[List[str]] = None,
+    encrypted: bool = False,
 ) -> Dict[str, Any]:
+    if encrypted:
+        # #3234: storage-api /storage/fetch legt (Stand #3230) nur unverschluesselt ab. Nie still
+        # unverschluesselt speichern, was verschluesselt gewollt war.
+        raise ValueError("encrypted_fetch_unsupported: Storage kann Abrufe per URL noch nicht verschlüsselt "
+                         "ablegen. Datei selbst laden und mit assets_upload_ticket(encrypted=true) hochladen.")
     body: Dict[str, Any] = {"url": url, "is_public": is_public, "analyze": analyze}
     if _agent_private(is_public):
         body["private"] = True

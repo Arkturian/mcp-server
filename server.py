@@ -12457,7 +12457,10 @@ async def cloud_inbox(session_name: str) -> Dict[str, Any]:
         "receives this call. "
         "owner_email assigns ownership for RBAC visibility/quota; without it the agent belongs "
         "to the caller's owner. "
-        "Set pretty=True for JSON chat mode (queue/widget agents)."
+        "Set pretty=True for JSON chat mode (queue/widget agents). "
+        "role: leave it out for the instance default (engineering/agent-base, in a customer "
+        "tenant external/customer-agent); role='' creates the agent WITHOUT any role (no "
+        "rights); department only together with role."
     ),
 )
 async def cloud_create_session(
@@ -12466,8 +12469,8 @@ async def cloud_create_session(
     agent: str = "claude",
     node: str = "",
     owner_email: str = "",
-    department: str = "engineering",
-    role: str = "developer",
+    department: Optional[str] = None,
+    role: Optional[str] = None,
     auto_restart: bool = True,
     model: str = "",
     effort: str = "",
@@ -12507,9 +12510,14 @@ async def cloud_create_session(
         "pretty": pretty,
         "agent": agent,
         "auto_restart": auto_restart,
-        "department": department,
-        "role": role,
     }
+    # #3375 (Cloud 2b4b29f5, Fall Mia): keine Vorgabe developer/engineering mehr. Ohne
+    # role setzt cloud-api die Vorgabe des Mandanten; role="" geht als "" hinaus und heisst
+    # dort ausdruecklich „keine Rolle“. Darum None (weglassen) und "" auseinanderhalten.
+    if role is not None:
+        body["role"] = role
+    if department is not None:
+        body["department"] = department
     if node:
         body["node"] = node.lower()
     if owner_email:

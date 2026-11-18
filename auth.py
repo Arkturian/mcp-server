@@ -35,6 +35,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -68,6 +69,47 @@ _current_is_agent: contextvars.ContextVar[bool] = contextvars.ContextVar(
 _current_is_superadmin: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "current_caller_is_superadmin", default=False
 )
+
+
+# #3329 (Storage df15d25a): Mandanten des geprueften Aufrufers fuer storage-api
+# (X-Grant-Scope-Tenants), damit die Grant-Einschraenkung personal- und
+# intern-Objekte des eigenen Mandanten erkennt. Nur aus dem geprueften JWT.
+_current_tenants: contextvars.ContextVar[tuple] = contextvars.ContextVar(
+    "current_caller_tenants", default=()
+)
+MANDANT_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
+MANDANTEN_MAX = 100
+
+
+def mandanten_aus_claims(claims: dict) -> tuple:
+    """Mandanten eines geprueften JWT fuer storage-api, hoechstens MANDANTEN_MAX.
+
+    - Agent (type=agent mit agent_name): der `tenant`-Claim, sonst nichts
+      (nicht `tenant_ids`, das die Mandanten des Besitzers mitbringt).
+    - Mensch (type user/oauth_access): seine Mitgliedschaften `roles[].tid`. Ein
+      Gast-Mandant ist dort keine Mitgliedschaft (auth-api fuehrt ihn getrennt);
+      nennt ein Token ihn doch, wird er abgezogen.
+    - Alle anderen (Dienst, ohne type): keine.
+    Werte ausserhalb `[a-z0-9_-]` werden verworfen, nicht umgeformt."""
+    typ = claims.get("type")
+    if typ == "agent" and claims.get("agent_name"):
+        roh = [claims.get("tenant")]
+    elif typ in ("user", "oauth_access"):
+        roh = _rollen_mandanten(claims)
+    else:
+        return ()
+    gast = {str(claims.get(k) or "").strip() for k in ("guest_tenant", "guest_tenant_id")} - {""}
+    out: list = []
+    for t in roh:
+        t = str(t or "").strip()
+        if t and MANDANT_RE.match(t) and t not in gast and t not in out:
+            out.append(t)
+    return tuple(out[:MANDANTEN_MAX])
+
+
+def current_caller_tenants() -> tuple:
+    """Mandanten des geprueften Aufrufers (mandanten_aus_claims), sonst ()."""
+    return _current_tenants.get()
 
 
 def current_caller_jwt() -> str:
@@ -648,6 +690,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             claims.get("type") == "agent" and bool(claims.get("agent_name"))
         )
         _superadmin_token = _current_is_superadmin.set(claims.get("is_superadmin") is True)
+        _tenants_token = _current_tenants.set(mandanten_aus_claims(claims))
 
         # Permission check: server-level + tool-level
         mcp_server = _extract_mcp_server_from_path(request.url.path)
@@ -764,6 +807,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                 _current_agent_name.reset(_name_token)
                 _current_is_agent.reset(_is_agent_token)
                 _current_is_superadmin.reset(_superadmin_token)
+                _current_tenants.reset(_tenants_token)
             except (LookupError, NameError):
                 pass
 

@@ -1245,9 +1245,10 @@ async def storage_assets_list(
     
     Returns comprehensive data including:
     - Basic info: id, title, file_url, share_url, mime_type, dimensions
-    `share_url` (https://files.arkturian.com/<id>/<name>) is the readable link to hand to people
-    outside (mail, customer, supplier). It is set only for public objects; null means the file is
-    not public and must not be sent out that way.
+    `share_url` (https://files.arkturian.com/<id>/<name>) is set only for public objects; null means
+    the file is not public. Public objects can be found by counting up the id, so for anything you
+    send outside (mail, customer, supplier) keep the file private and create a link with
+    assets_share_link instead. Never make a file public just to share it (#3329).
     - AI fields: ai_title, ai_tags, ai_safety_rating, ai_collections
     - ai_context_metadata: Full structured analysis (product_analysis, visual_analysis, layout_intelligence, semantic_properties)
     
@@ -1305,6 +1306,59 @@ async def storage_assets_unshare(id: int, share_with: List[str]) -> Dict[str, An
         "POST", "/api/agents/self/media-unshare",
         json_body={"object_id": id, "share_with": share_with},
     )
+
+
+@storage_mcp.tool(
+    name="assets_share_link",
+    description="""Create a share link for one of YOUR private files, to send outside (#3329).
+
+    The file stays private. The link carries an unguessable token, unlike a public file, which
+    anyone can find by counting up its id. Use this for anything that goes to people outside
+    (mail, customer, supplier, Telegram) instead of making the file public.
+    - id: storage object id. Only files you uploaded yourself; a file someone shared with you
+      returns not_own_file. Encrypted files: encrypted_share_link_not_allowed.
+    - gueltig_bis (optional): ISO time within 30 days, e.g. "2026-12-01T12:00:00Z".
+      Default: 30 days.
+    Returns url, id (the link id), token_prefix, gueltig_bis, aktiv. The url is shown only
+    once, in this answer: pass it on as it is, do not write it into logs, posts or issues.
+    Opening the link redirects to a short-lived signed download.
+    See your links with assets_share_links(id), revoke with assets_unshare_link(id, link_id).
+    """,
+)
+async def storage_assets_share_link(id: int, gueltig_bis: Optional[str] = None) -> Dict[str, Any]:  # noqa: A002
+    _require_agent("assets_share_link")
+    body: Dict[str, Any] = {"object_id": id}
+    if gueltig_bis:
+        body["gueltig_bis"] = gueltig_bis
+    return await call_cloud_api("POST", "/api/agents/self/share-link", json_body=body)
+
+
+@storage_mcp.tool(
+    name="assets_share_links",
+    description="""List the share links YOU created for a file (#3329), without tokens or urls.
+
+    Each entry: id (link id), token_prefix, created_at, gueltig_bis, revoked_at, aktiv.
+    Use the id with assets_unshare_link to revoke one.
+    """,
+)
+async def storage_assets_share_links(id: int) -> Dict[str, Any]:  # noqa: A002
+    _require_agent("assets_share_links")
+    return await call_cloud_api("GET", "/api/agents/self/share-links", params={"object_id": id})
+
+
+@storage_mcp.tool(
+    name="assets_unshare_link",
+    description="""Revoke a share link you created with assets_share_link (#3329).
+
+    - id: storage object id
+    - link_id: the link's id (from assets_share_link or assets_share_links)
+    The link stops working within 120 s. Returns revoked and already (was revoked before).
+    """,
+)
+async def storage_assets_unshare_link(id: int, link_id: int) -> Dict[str, Any]:  # noqa: A002
+    _require_agent("assets_unshare_link")
+    return await call_cloud_api("POST", "/api/agents/self/share-link-revoke",
+                                json_body={"object_id": id, "link_id": link_id})
 
 
 @storage_mcp.tool(
@@ -1676,9 +1730,10 @@ async def storage_assets_update_embedding_text(
       (direct, CHUNK:, TICKET)
 
     Returns the created storage object with id, file_url, thumbnail_url, ai_title, etc.
-    `share_url` (https://files.arkturian.com/<id>/<name>) is the readable link to hand to people
-    outside (mail, customer, supplier). It is set only for public objects; null means the file is
-    not public and must not be sent out that way.
+    `share_url` (https://files.arkturian.com/<id>/<name>) is set only for public objects; null means
+    the file is not public. Public objects can be found by counting up the id, so for anything you
+    send outside (mail, customer, supplier) keep the file private and create a link with
+    assets_share_link instead. Never make a file public just to share it (#3329).
 
     Example: Upload a small file
       assets_upload(file_base64="iVBORw0KGgo...", filename="logo.png", context="branding")
@@ -1920,9 +1975,10 @@ def _upload_pfad_erlaubt(p: "Path") -> "Path":
       throwaway copies a TTL, e.g. is_public=True, ttl_hours=24.
 
     Returns the created storage object with id, file_url, thumbnail_url, etc.
-    `share_url` (https://files.arkturian.com/<id>/<name>) is the readable link to hand to people
-    outside (mail, customer, supplier). It is set only for public objects; null means the file is
-    not public and must not be sent out that way.
+    `share_url` (https://files.arkturian.com/<id>/<name>) is set only for public objects; null means
+    the file is not public. Public objects can be found by counting up the id, so for anything you
+    send outside (mail, customer, supplier) keep the file private and create a link with
+    assets_share_link instead. Never make a file public just to share it (#3329).
     encrypted=true (#3230): ciphertext only, always private, no expiry, no AI. Result carries hinweis; without Storage's confirmation the object is discarded.
     """,
 )
@@ -2147,9 +2203,10 @@ async def storage_assets_upload_chunked(
       is stored. Only works for agent callers.
 
     Returns the created storage object with id, file_url, thumbnail_url, etc.
-    `share_url` (https://files.arkturian.com/<id>/<name>) is the readable link to hand to people
-    outside (mail, customer, supplier). It is set only for public objects; null means the file is
-    not public and must not be sent out that way.
+    `share_url` (https://files.arkturian.com/<id>/<name>) is set only for public objects; null means
+    the file is not public. Public objects can be found by counting up the id, so for anything you
+    send outside (mail, customer, supplier) keep the file private and create a link with
+    assets_share_link instead. Never make a file public just to share it (#3329).
 
     Example: Import an image from a URL
       assets_fetch(url="https://example.com/photo.jpg", context="imported", collection_id="web_imports")

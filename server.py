@@ -4201,6 +4201,41 @@ async def content_media_add(
 
 
 @content_mcp.tool(
+    name="media_bind",
+    description="""Make one of your PRIVATE storage images visible to everyone who may read this post (#3319).
+
+    A private image (uploaded with private=True) appears in a post only for readers it is bound to.
+    Bind it once per post; readers then get short-lived signed links automatically.
+
+    Who may bind:
+      - a human: images they uploaded
+      - an agent: images it uploaded itself (not files someone shared with it,
+        not encrypted files), and only on posts it may write
+
+    Put the image into the post as a bare storage link on its own line
+    (https://api-storage.arkturian.com/storage/media/<id>) or via media_add; bind it here.
+
+    Errors: not_owner_or_missing (404), not_own_file (403, received not uploaded),
+    encrypted_not_allowed (403), private_media_unavailable (503, not set up on this instance).
+
+    Returns: {storage_id, scope, created}
+    """,
+)
+async def content_media_bind(post_id: int, storage_id: int) -> Dict[str, Any]:
+    return await call_content_api(
+        "POST", f"/api/v1/posts/{post_id}/media-grants", json_body={"storage_id": int(storage_id)},
+    )
+
+
+@content_mcp.tool(
+    name="media_unbind",
+    description="""Undo media_bind: readers of this post no longer get the private image (#3319).""",
+)
+async def content_media_unbind(post_id: int, storage_id: int) -> Any:
+    return await call_content_api("DELETE", f"/api/v1/posts/{post_id}/media-grants/{int(storage_id)}")
+
+
+@content_mcp.tool(
     name="media_delete",
     description="Remove media attachment from a post.",
 )

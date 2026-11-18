@@ -33,7 +33,9 @@ class HealthMountedOnlyTests(unittest.TestCase):
         self.assertEqual(out["status"], "healthy")
         mocks["oneal_storage_kg_stats"].assert_not_awaited()
         mocks["artrack_service_health"].assert_not_awaited()
-        self.assertEqual(set(out) - {"status"}, {"storage_arkturian", "content", "tree"})
+        self.assertEqual(set(out) - {"status"}, {"storage", "content", "tree"})
+        # Kundeninstanz: kein Betreibername in den Pruefungen (Cloud 18.11., P3 hielt es fuer ein Leck)
+        self.assertFalse([k for k in out if "arkturian" in k])
 
     def test_runtime_error_wird_degraded_statt_500(self):
         mocks = _alle_gruen()
@@ -41,7 +43,7 @@ class HealthMountedOnlyTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             self._lauf({"storage", "content"}, mocks)
         self.assertEqual(ctx.exception.status_code, 207)
-        self.assertIn("Invalid API key", ctx.exception.detail["storage_arkturian_error"])
+        self.assertIn("Invalid API key", ctx.exception.detail["storage_error"])
 
     def test_ohne_filter_wird_alles_geprobt(self):
         mocks = _alle_gruen()

@@ -128,14 +128,14 @@ def test_health_ohne_fehlertext_und_zwischengespeichert(monkeypatch):
         rufe.append(1)
         raise HTTPException(status_code=207, detail={
             "status": "degraded", "content": {"ok": 1},
-            "storage_arkturian_error": "Upstream 401 from GET http://intern:8001/x: Invalid API key"})
+            "storage_error": "Upstream 401 from GET http://intern:8001/x: Invalid API key"})
     monkeypatch.setattr(server, "health", details)
     monkeypatch.setattr(server, "_HEALTH_CACHE", {"bis": 0.0, "wert": None})
     r1 = asyncio.run(server.health_route())
     r2 = asyncio.run(server.health_route())
     assert r1.status_code == 207 and rufe == [1]                     # zweiter Abruf aus dem Speicher
     body = json.loads(r1.body)
-    assert body == {"status": "degraded", "checks": {"content": "ok", "storage_arkturian": "fehler"}}
+    assert body == {"status": "degraded", "checks": {"content": "ok", "storage": "fehler"}}
     assert "intern" not in r1.body.decode() and "API key" not in r2.body.decode()
 
 

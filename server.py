@@ -14270,7 +14270,9 @@ def _health_probes() -> List[tuple]:
     `except httpx.HTTPError` nicht fing -> 500 auf jeder Kundeninstanz.
     """
     probes = [
-        ("storage_arkturian", "storage", storage_kg_stats),
+        # Neutral "storage" (Cloud 18.11.): auf Kundeninstanzen ist es deren eigene Storage;
+        # "storage_arkturian" las P3 dort als Leck.
+        ("storage", "storage", storage_kg_stats),
         ("oneal_products", "oneal", oneal_service_ping),
         ("storage_oneal", "oneal-storage", oneal_storage_kg_stats),
         ("artrack", "artrack", artrack_service_health),

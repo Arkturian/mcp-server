@@ -10659,6 +10659,40 @@ async def comm_message_status(message_id: str) -> Dict[str, Any]:
 
 
 @comm_mcp.tool(
+    name="scheduled_list",
+    description=(
+        "Geplante Versände auflisten (#3357), z.B. aus send_message mit "
+        "`not_before` oder eine Entwurfs-Freigabe außerhalb des "
+        "Zustellfensters. Sichtbar sind die eigenen (sendender Agent), die "
+        "des eigenen Postfachs bzw. alle bei Vollzugriff. Vorgabe: nur offene "
+        "(pending/running); `include_terminal=true` zeigt auch sent, failed "
+        "und canceled. Je Eintrag: id, status, channel, to (WhatsApp-Nummern "
+        "maskiert), subject, scheduled_at_utc, draft_card_id, grund, error."
+    ),
+)
+async def comm_scheduled_list(include_terminal: bool = False, limit: int = 50) -> Dict[str, Any]:
+    return await call_comm_api(
+        "GET", "/api/scheduled",
+        params={"include_terminal": str(bool(include_terminal)).lower(), "limit": int(limit)},
+    )
+
+
+@comm_mcp.tool(
+    name="scheduled_cancel",
+    description=(
+        "Einen geplanten Versand absagen (#3357), solange er noch nicht läuft. "
+        "Darf der sendende Agent, der Postfach-Besitzer oder Vollzugriff. "
+        "War es eine eingefrorene Entwurfs-Freigabe, bleibt die Karte "
+        "verbraucht: Ein neuer Versand braucht eine neue Karte und einen "
+        "neuen Klick des Menschen. "
+        "409 already_terminal bzw. race_lost: schon gesendet oder gerade dabei."
+    ),
+)
+async def comm_scheduled_cancel(scheduled_id: str) -> Dict[str, Any]:
+    return await call_comm_api("DELETE", f"/api/scheduled/{scheduled_id}")
+
+
+@comm_mcp.tool(
     name="service_health",
     description="Health check for Comm API.",
 )

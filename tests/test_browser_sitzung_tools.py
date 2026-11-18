@@ -45,6 +45,20 @@ class BrowserSitzungToolTests(unittest.TestCase):
                      "anzahl? 1..20", "werte (Liste bis 50)"):
             self.assertIn(wort, beschr)
 
+    def test_beschreibung_nennt_ausfuellen_und_snapshot_danach(self):
+        """#3323: ein Formular in einem Aufruf, snapshot: true nach dem Schritt, zeiten_ms."""
+        tools = asyncio.run(server.cloud_mcp.list_tools())
+        beschr = {t.name: t.description for t in tools}["browser_aufruf"]
+        for wort in ("ausfuellen{felder", "absenden?{ref | selector}", "(1..50", "snapshot: true",
+                     "click, type, ausfuellen,", "zeiten_ms"):
+            self.assertIn(wort, beschr)
+
+    def test_aufruf_reicht_ausfuellen_durch(self):
+        p = {"felder": [{"ref": 3, "wert": "Erika"}, {"selector": "#ok", "wert": True}],
+             "absenden": {"ref": 9}, "snapshot": True}
+        a = self._ruf(lambda: server.cloud_browser_aufruf("ausfuellen", p, "agenten"))
+        self.assertEqual(a.kwargs["json_body"], {"methode": "ausfuellen", "parameter": p, "sitzung": "agenten"})
+
     def test_aufruf_reicht_ref_und_leeren_durch(self):
         a = self._ruf(lambda: server.cloud_browser_aufruf("type", {"ref": 12, "text": "x", "leeren": False}))
         self.assertEqual(a.kwargs["json_body"]["parameter"], {"ref": 12, "text": "x", "leeren": False})

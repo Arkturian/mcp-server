@@ -4786,7 +4786,7 @@ async def content_sections_get(
                        once; without `primary` there is no lead, everyone
                        must answer (or sections_pass).
                        arbeitsweise="reihum" + reihenfolge="A,B,C"
-                       (+ runden="1"|"2"): the server leads the turn. Only
+                       (+ runden="1".."5"): the server leads the turn. Only
                        the agent at turn gets the push; any other agent
                        writing into the section gets 409 nicht_am_zug.
                        No time limit per turn. Agents in reihenfolge are
@@ -4947,6 +4947,12 @@ async def content_sections_pass(
       - "reihenfolge" + reihenfolge=[...]: same agents, new order
       - "feld": from now on everyone at once; those who have not
         answered yet are woken
+      - "weitere_runde" (+ optional text): only after the round has
+        ended. One more round in the same question, starting again with
+        the first agent; `text` is posted as your reply first, so the
+        agents read it. A resolved question opens again. At most 10
+        rounds per question (409 reihum_runden_ende); while running
+        409 reihum_laeuft_noch. A plain reply never starts a round.
 
     Returns: {section_id, arbeitsweise, am_zug, status, reihenfolge}
     """,
@@ -4957,12 +4963,15 @@ async def content_sections_reihum(
     aktion: str,
     agent: Optional[str] = None,
     reihenfolge: Optional[List[str]] = None,
+    text: Optional[str] = None,
 ) -> Any:
     body: Dict[str, Any] = {"aktion": aktion}
     if agent:
         body["agent"] = agent
     if reihenfolge:
         body["reihenfolge"] = reihenfolge
+    if text:
+        body["text"] = text
     return await call_content_api(
         "POST",
         f"/api/v1/posts/{post_id}/sections/{section_id}/reihum",

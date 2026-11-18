@@ -38,6 +38,17 @@ def test_reihum_eingriff(monkeypatch):
     assert calls[1][2] == {"aktion": "zurueckholen", "agent": "C"}
 
 
+def test_reihum_weitere_runde(monkeypatch):
+    import server
+    calls = []
+    monkeypatch.setattr(server, "_fetch_json", _fake(calls, {"am_zug": "A"}))
+    asyncio.run(server.content_sections_reihum(post_id=5, section_id="q-1", aktion="weitere_runde",
+                                               text="Bitte knapper."))
+    asyncio.run(server.content_sections_reihum(post_id=5, section_id="q-1", aktion="weitere_runde"))
+    assert calls[0][2] == {"aktion": "weitere_runde", "text": "Bitte knapper."}
+    assert calls[1][2] == {"aktion": "weitere_runde"}
+
+
 def test_reply_mit_targets(monkeypatch):
     import server
     calls = []

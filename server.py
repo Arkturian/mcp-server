@@ -9873,6 +9873,15 @@ async def comm_kanal_antworten(
               „queued ist keine Zustellung". `delivered`/`read` kommt
               asynchron via message.status-Webhook, abfragbar via
               message_status-Tool.
+            — **Telegram**: bis 10 Dateien, je ein Dokument nach dem Text;
+              alle werden vorher geprüft. Teilerfolg ergibt Status `partial`.
+        not_before: Optional frühester Versandzeitpunkt, ISO-8601 MIT
+            Zeitzone (z.B. "2026-11-19T08:00:00+01:00"). Liegt er in der
+            Zukunft, hält Comm die Nachricht zurück und antwortet mit
+            `status: "scheduled"`, `id` (geplanter Versand) und
+            `scheduled_at` (UTC). Für email, whatsapp, telegram, höchstens
+            30 Tage. Nimm das für Kunden außerhalb ihrer Arbeitszeit
+            (#3351): Mo–Fr 08–17 Uhr Wien, manche bis 19 Uhr.
     """,
 )
 async def comm_send_message(
@@ -9885,6 +9894,7 @@ async def comm_send_message(
     template_data: Optional[Dict[str, Any]] = None,
     bot: Optional[str] = None,
     attachments: Optional[List[Dict[str, Any]]] = None,
+    not_before: Optional[str] = None,
 ) -> Dict[str, Any]:
     json_body: Dict[str, Any] = {
         "channel": channel,
@@ -9892,6 +9902,8 @@ async def comm_send_message(
         "to": to,
         "body": body,
     }
+    if not_before:
+        json_body["not_before"] = not_before
     if subject:
         json_body["subject"] = subject
     if template:

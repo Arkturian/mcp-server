@@ -9699,7 +9699,11 @@ async def comm_escalate(message: str) -> Dict[str, Any]:
     name="send_telegram_document",
     description=(
         "Send a document (PDF, invoice, any file) via Telegram. "
-        "Pass EXACTLY ONE of `url` or `data_base64`:\n"
+        "Pass EXACTLY ONE of `storage_id`, `url` or `data_base64`:\n"
+        "\n"
+        "  storage_id: Preferred for files in our own Storage (#3330). Comm "
+        "loads the file with YOUR scope (only files you may read) and uploads "
+        "it to Telegram, max 20 MiB. No public link needed.\n"
         "\n"
         "  url: A REAL, PUBLICLY REACHABLE HTTPS URL that returns the "
         "document directly (no auth, no HTML page). Telegram's servers fetch "
@@ -9729,14 +9733,16 @@ async def comm_send_telegram_document(
     data_base64: Optional[str] = None,
     bot: Optional[str] = None,
     origin_agent: Optional[str] = None,
+    storage_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Additional param: origin_agent — see send_telegram for semantics.
     Bridge/notifier forwarding another agent's document sets this to the
     original author's session so Telegram-replies land at them."""
-    if not url and not data_base64:
-        return {"error": "Either url or data_base64 must be provided"}
-    if url and data_base64:
-        return {"error": "Provide only one of url or data_base64, not both"}
+    quellen = [n for n, v in (("storage_id", storage_id), ("url", url), ("data_base64", data_base64)) if v]
+    if not quellen:
+        return {"error": "One of storage_id, url or data_base64 must be provided"}
+    if len(quellen) > 1:
+        return {"error": f"Provide only one of storage_id, url or data_base64, got {quellen}"}
 
     json_body: Dict[str, Any] = {"filename": filename}
     if to:
@@ -9749,6 +9755,8 @@ async def comm_send_telegram_document(
         json_body["url"] = url
     if data_base64:
         json_body["data"] = data_base64
+    if storage_id:
+        json_body["storage_id"] = int(storage_id)
     if bot:
         json_body["bot"] = bot
     if origin_agent:

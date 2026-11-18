@@ -505,21 +505,35 @@ def _storage_restrict_scope() -> str:
     return STORAGE_RESTRICT_OHNE_SCOPE
 
 
+_STORAGE_IDENTITAETS_KOEPFE = ("x-api-key", "x-grant-scope-restrict", "x-grant-scope-tenants")
+
+
 def _storage_headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-    """X-API-KEY plus X-Grant-Scope-Restrict (#3030, #3138).
+    """X-API-KEY plus X-Grant-Scope-Restrict (#3030, #3138) und X-Grant-Scope-Tenants (#3329).
 
     The gateway authenticates as one shared account that owns every agent's
     attachments, so without the header any caller read any agent's private
     files. With it, storage-api shows non-public objects only when they are
     bound to the restricting scope. The scope comes from the verified gateway
     identity, never from tool arguments (_storage_restrict_scope). Only a
-    superadmin goes unrestricted."""
-    headers = {"X-API-KEY": STORAGE_API_KEY}
+    superadmin goes unrestricted.
+
+    #3329: Mit der Einschraenkung gehen die Mandanten des geprueften Aufrufers mit
+    (auth.current_caller_tenants), damit storage-api personal- und intern-Objekte
+    des eigenen Mandanten erkennt. storage-api glaubt den Kopf nur vom
+    Gateway-Schluessel. Die Identitaetskoepfe setzt nur diese Funktion: `extra`
+    kann sie nicht ueberschreiben, in keiner Schreibweise."""
+    from auth import current_caller_tenants
+
+    headers = {k: v for k, v in (extra or {}).items()
+               if str(k).lower() not in _STORAGE_IDENTITAETS_KOEPFE}
+    headers["X-API-KEY"] = STORAGE_API_KEY
     scope = _storage_restrict_scope()
     if scope:
         headers["X-Grant-Scope-Restrict"] = scope
-    if extra:
-        headers.update(extra)
+        mandanten = current_caller_tenants()
+        if mandanten:
+            headers["X-Grant-Scope-Tenants"] = ",".join(mandanten)
     return headers
 
 
@@ -623,7 +637,7 @@ async def call_storage_api(
     return await _fetch_json(
         method,
         f"{STORAGE_API_BASE}{endpoint}",
-        headers={**_storage_headers(), **(extra_headers or {})},
+        headers=_storage_headers(extra_headers),
         params=params,
         json_body=json_body,
     )

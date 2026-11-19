@@ -35,8 +35,12 @@ def test_no_outlook_send_tools():
     erlaubt (Entwurf != Send, steiner #60) — der Blacklist-Check prueft
     jetzt gezielt die wirkenden Verben, nicht pauschal 'draft'."""
     names = {n for n in _tool_names() if n.startswith("outlook_")}
+    # #3403 (Steiner fakturace@, Freigabe Alex über Cloud): genau ein
+    # benanntes Werkzeug darf „mark“ tragen. Es setzt nur
+    # flag.flagStatus=complete; comm-api prüft Quelle und Agent.
+    erlaubt = {"outlook_mark_complete"}
     forbidden = {
-        n for n in names
+        n for n in names - erlaubt
         if any(k in n for k in ("send", "mark", "delete", "move"))
     }
     assert forbidden == set(), forbidden
@@ -97,3 +101,20 @@ def test_sections_patch_registered_and_shaped():
     sig = inspect.signature(server.content_sections_patch)
     assert set(sig.parameters) == {"post_id", "section_id", "attrs", "status"}
     assert sig.parameters["attrs"].default is None and sig.parameters["status"].default is None
+
+
+def test_outlook_mark_complete_ruft_nur_die_eine_route(monkeypatch):
+    """#3403: Der Wrapper ruft genau POST …/mark-complete/{id}, nichts sonst."""
+    import server
+    calls = []
+
+    async def _fake(method, endpoint, **kw):
+        calls.append((method, endpoint, kw))
+        return {"success": True}
+
+    monkeypatch.setattr(server, "call_comm_api", _fake)
+    out = asyncio.run(server.comm_outlook_mark_complete("steiner_fakturace", "AAMk-1"))
+    assert out == {"success": True}
+    assert calls == [("POST", "/api/v1/outlook/steiner_fakturace/mark-complete/AAMk-1", {})]
+    import inspect
+    assert list(inspect.signature(server.comm_outlook_mark_complete).parameters) == ["source", "message_id"]

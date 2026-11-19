@@ -8957,6 +8957,24 @@ async def comm_outlook_get_message(source: str, message_id: str) -> Dict[str, An
 
 
 @comm_mcp.tool(
+    name="outlook_mark_complete",
+    description=(
+        "Mark an Outlook message as done: sets the Outlook flag to "
+        "'complete' (flag.flagStatus=complete). This is NOT 'mark as read' "
+        "and changes nothing else. Only for sources that allow it, e.g. a "
+        "mailbox limited to read + mark-complete (ms_scope_mode=mail_flag); "
+        "comm-api checks access per source and agent and returns 403 "
+        "otherwise. Use only after the message is fully processed."
+    ),
+)
+async def comm_outlook_mark_complete(source: str, message_id: str) -> Dict[str, Any]:
+    """#3403 (Steiner fakturace@): dünner Wrapper, Rechte prüft comm-api."""
+    return await call_comm_api(
+        "POST", f"/api/v1/outlook/{source}/mark-complete/{message_id}",
+    )
+
+
+@comm_mcp.tool(
     name="gmail_get_attachment",
     description=(
         "Download an email attachment as base64. "

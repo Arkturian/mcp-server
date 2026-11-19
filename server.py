@@ -27,7 +27,7 @@ import os
 import time
 import base64
 from contextlib import AsyncExitStack
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 import httpx
 import uvicorn
@@ -9030,8 +9030,10 @@ async def business_documents_mark_paid(
         "it sets a draft document to 'sent' and stores a delivery record as proof. Use it after the "
         "document went out e.g. via Comm (WhatsApp/Telegram), was handed over in person, or posted. "
         "To actually send by e-mail use documents_send instead. "
-        "channel: whatsapp | telegram | persoenlich | post. comm_message_id: the Comm message id, "
-        "required for whatsapp and telegram. sent_at: ISO timestamp, default now, never in the future. "
+        "channel (required): exactly one of whatsapp, telegram, persoenlich, post. "
+        "comm_message_id: the id of the Comm message that carried the document -- REQUIRED when "
+        "channel is whatsapp or telegram (otherwise 422 comm_id_required), not needed for "
+        "persoenlich/post. sent_at: ISO timestamp, default now, never in the future. "
         "recipient_label: name or pseudonym of the recipient, NEVER a phone number. "
         "Errors from business-api: 409 not_a_draft; 422 comm_id_required, bad_channel, "
         "sent_at_in_future, no_phone_numbers."
@@ -9039,7 +9041,7 @@ async def business_documents_mark_paid(
 )
 async def business_documents_mark_sent(
     doc_id: int,
-    channel: str,
+    channel: Literal["whatsapp", "telegram", "persoenlich", "post"],
     comm_message_id: Optional[str] = None,
     sent_at: Optional[str] = None,
     recipient_label: Optional[str] = None,

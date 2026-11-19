@@ -44,12 +44,12 @@ def _rufen(**kw):
 def test_whatsapp_mit_comm_id(business):
     gesehen, _ = business
     erg = _rufen(doc_id=38, channel="whatsapp", comm_message_id="wamid.X1", sent_at="2026-11-19T14:15:00+01:00",
-                 recipient_label="Praxis")
+                 recipient_label="Empfaenger A")
     assert erg == {"id": 38, "status": "sent"}
     [r] = gesehen
     assert r.method == "POST" and str(r.url) == "https://business.invalid/api/v1/documents/38/mark-sent"
     assert json.loads(r.content) == {"channel": "whatsapp", "comm_message_id": "wamid.X1",
-                                     "sent_at": "2026-11-19T14:15:00+01:00", "recipient_label": "Praxis"}
+                                     "sent_at": "2026-11-19T14:15:00+01:00", "recipient_label": "Empfaenger A"}
     assert r.headers["X-API-Key"] == "gateway-schluessel"
 
 
@@ -81,3 +81,14 @@ def test_beschreibung_sagt_verschickt_nichts():
     props = t.inputSchema["properties"]
     assert set(props) == {"doc_id", "channel", "comm_message_id", "sent_at", "recipient_label"}
     assert set(t.inputSchema.get("required") or []) == {"doc_id", "channel"}
+    # Business 947f0f1d: Kanalwerte im Schema, Pflicht der Comm-ID in der Beschreibung
+    assert props["channel"].get("enum") == ["whatsapp", "telegram", "persoenlich", "post"]
+    assert "REQUIRED when channel is whatsapp or telegram" in t.description
+
+
+def test_unbekannter_kanal_vor_dem_aufruf_abgewiesen(business):
+    """Ueber den echten Werkzeugaufruf: FastMCP prueft das Schema, business-api sieht nichts."""
+    gesehen, _ = business
+    with pytest.raises(Exception):
+        asyncio.run(server.business_mcp.call_tool("documents_mark_sent", {"doc_id": 38, "channel": "fax"}))
+    assert gesehen == []

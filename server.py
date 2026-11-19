@@ -27,7 +27,7 @@ import os
 import time
 import base64
 from contextlib import AsyncExitStack
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 import httpx
 import uvicorn
@@ -8665,6 +8665,9 @@ draft  →  sent (via documents_send)  →  paid (via documents_mark_paid)
   ↓                                        ↓
 cancelled                              creates income transaction
 ```
+Sent another way (WhatsApp/Telegram via Comm, in person, by post)? Record it with
+documents_mark_sent(doc_id, channel, comm_message_id?, …) — it sends nothing, it only books
+the delivery (draft → sent) with the Comm message id as proof.
 
 ## Common Clients (frequently used)
 Use clients_list() to get current list with IDs.
@@ -9018,6 +9021,40 @@ async def business_documents_mark_paid(
     if paid_date:
         body["paid_date"] = paid_date
     return await call_business_api("POST", f"/api/v1/documents/{doc_id}/mark-paid", json_body=body)
+
+
+@business_mcp.tool(
+    name="documents_mark_sent",
+    description=(
+        "Record a delivery that ALREADY happened outside business-api. This tool SENDS NOTHING: "
+        "it sets a draft document to 'sent' and stores a delivery record as proof. Use it after the "
+        "document went out e.g. via Comm (WhatsApp/Telegram), was handed over in person, or posted. "
+        "To actually send by e-mail use documents_send instead. "
+        "channel (required): exactly one of whatsapp, telegram, persoenlich, post. "
+        "comm_message_id: the id of the Comm message that carried the document -- REQUIRED when "
+        "channel is whatsapp or telegram (otherwise 422 comm_id_required), not needed for "
+        "persoenlich/post. sent_at: ISO timestamp, default now, never in the future. "
+        "recipient_label: name or pseudonym of the recipient, NEVER a phone number. "
+        "Errors from business-api: 409 not_a_draft; 422 comm_id_required, bad_channel, "
+        "sent_at_in_future, no_phone_numbers."
+    ),
+)
+async def business_documents_mark_sent(
+    doc_id: int,
+    channel: Literal["whatsapp", "telegram", "persoenlich", "post"],
+    comm_message_id: Optional[str] = None,
+    sent_at: Optional[str] = None,
+    recipient_label: Optional[str] = None,
+) -> Dict[str, Any]:
+    # #3434: duenner Wrapper; Kanal, Pflichtfelder, Zeit und Telefonnummern prueft business-api.
+    body: Dict[str, Any] = {"channel": channel}
+    if comm_message_id:
+        body["comm_message_id"] = comm_message_id
+    if sent_at:
+        body["sent_at"] = sent_at
+    if recipient_label:
+        body["recipient_label"] = recipient_label
+    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/mark-sent", json_body=body)
 
 
 @business_mcp.tool(

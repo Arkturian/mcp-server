@@ -11876,6 +11876,9 @@ async def cloud_send_to_human(to: str, text: str, message_id: Optional[str] = No
         "comm send_email_from_draft(draft_card_id=<id>) without asking again — recipients, "
         "subject and body come from card and post, never from you. `to` = the human's e-mail, "
         "`empfaenger` = the mail recipients (max 20), `text` = one short line for the card. "
+        "`antwort_auf` (optional): Gmail message id or RFC Message-ID (<...@...>) of the mail "
+        "this one answers -- it then goes out as a reply in that thread; the card shows it and "
+        "the click releases it too. Omit it on an update to keep the stored one. "
         "Returns {id, ...}; keep the id."
     ),
 )
@@ -11887,6 +11890,7 @@ async def cloud_send_draft_for_review(
     betreff: str,
     text: str = "",
     aenderung: Optional[str] = None,
+    antwort_auf: Optional[str] = None,
 ) -> Dict[str, Any]:
     draft: Dict[str, Any] = {
         "post_id": str(post_id),
@@ -11897,6 +11901,9 @@ async def cloud_send_draft_for_review(
     }
     if aenderung:
         draft["aenderung"] = aenderung
+    if antwort_auf:
+        # #3378: cloud-api prueft die Form (Gmail-ID oder <…@…>, ohne Leer-/Steuerzeichen).
+        draft["antwort_auf"] = antwort_auf.strip()
     body: Dict[str, Any] = {
         "to": (to or "").strip(),
         "text": text or f"Entwurf prüfen: {betreff}",

@@ -57,7 +57,20 @@ class SendDraftForReviewToolTests(unittest.TestCase):
             asyncio.run(server.cloud_send_draft_for_review("a@b.at", 1, 0, ["x@y.at"], "B", text="Bitte prüfen"))
         body = call.call_args.kwargs["json_body"]
         self.assertNotIn("aenderung", body["draft"])
+        self.assertNotIn("antwort_auf", body["draft"])     # #3378: ohne Angabe bleibt der gespeicherte
         self.assertEqual(body["text"], "Bitte prüfen")
+
+    def test_antwort_auf_wird_durchgereicht(self):
+        """#3378: Antwort im bestehenden Faden; die Form prueft cloud-api."""
+        with patch.object(server, "call_cloud_api", new=AsyncMock(return_value={})) as call:
+            asyncio.run(server.cloud_send_draft_for_review("a@b.at", 1, 0, ["x@y.at"], "B",
+                                                           antwort_auf=" <CAF7x.1@mail.gmail.com> "))
+        self.assertEqual(call.call_args.kwargs["json_body"]["draft"]["antwort_auf"], "<CAF7x.1@mail.gmail.com>")
+
+    def test_antwort_auf_im_schema(self):
+        [t] = [t for t in asyncio.run(server.cloud_mcp.list_tools()) if t.name == "send_draft_for_review"]
+        self.assertIn("antwort_auf", t.inputSchema["properties"])
+        self.assertNotIn("antwort_auf", t.inputSchema.get("required", []))
 
     def test_werkzeug_ist_registriert(self):
         namen = {t.name for t in asyncio.run(server.cloud_mcp.list_tools())}

@@ -316,6 +316,7 @@ class ImServer(unittest.TestCase):
         namen = {t.name for t in asyncio.run(server.cloud_mcp.list_tools())}
         self.assertIn("zeit_tag", namen)
         self.assertIn("token_lage", namen)
+        self.assertIn("aufgabe", namen)
 
 
 if __name__ == "__main__":
@@ -592,6 +593,87 @@ class Aufgaben(unittest.IsolatedAsyncioTestCase):
     async def test_fremde_antwort_unveraendert(self):
         self.antwort = {"detail": {"grund": "kette"}}
         self.assertIn("kette", str(await self.mcp.call_tool("aufgaben_tag", {"person": "p@x.at"})))
+
+
+def _aufgabe_schritte(n: int = 3):
+    """Form von GET /api/aufgaben/{id}/schritte (cloud-api, 19.11.2026), erfundene Werte; neueste zuerst."""
+    pf = {"id": "kern", "name": "Kern-Dienste", "pfad": ["AgentOS", "Kern-Dienste"], "art": "ordner"}
+    beginn = datetime(2026, 11, 19, 11, 59, tzinfo=timezone.utc)
+    schritte = [{"turn_id": f"t{i}", "ts": _iso(beginn + timedelta(minutes=5 * i)), "agent": "Cloud",
+                 "eingabe_kurz": f"Eingabe {i} " + "x" * 280, "satz": f"Satz {i} " + "y" * 180,
+                 "quelle": "luna" if i == 0 else "folge", "sicherheit": None, "korrigiert_von": None,
+                 "knoten": None, "knoten_quelle": None, "zuege": 2, "zeit_s": 300} for i in range(n)]
+    return {"aufgabe": {"id": 308, "titel": "Parser-Darstellungsfehler korrigieren", "projekt": pf,
+                        "zustand": "laeuft", "zustand_grund": None, "agenten": ["Cloud"],
+                        "agenten_letzter_schritt": [], "issue": None, "zeit_s": {"heute": 1800, "woche": 1800},
+                        "konversation": None, "mails": {"heute": 0, "woche": 0}, "letzter_schritt": None,
+                        "erledigt_am": None, "angelegt_durch": "luna", "projekt_quelle": "luna",
+                        "kurz": "Parser-Darstellung", "satz": "agy-Darstellung im Parser korrigieren.",
+                        "kurz_am": None, "kurz_quelle": "minihirn", "mehrere_ziele": ["Parser", "lesser2-Agent"]},
+            "schritte": list(reversed(schritte))}
+
+
+class EineAufgabe(unittest.IsolatedAsyncioTestCase):
+    """aufgabe(id) (#3430, Alex 19.11.2026): der Agent liest die Aufgabe aus der Marke nach."""
+
+    async def asyncSetUp(self):
+        self.calls = []
+        self.antwort = _aufgabe_schritte()
+
+        async def transport(method, path, **kwargs):
+            self.calls.append((method, path, kwargs))
+            return self.antwort
+        self.mcp = FastMCP("isolated-aufgabe")
+        register_zeit_tools(self.mcp, transport)
+
+    async def test_kopf_und_schritte_aelteste_zuerst_mit_texten(self):
+        d = json.loads(_geliefert(await self.mcp.call_tool("aufgabe", {"id": 308})))
+        self.assertEqual(self.calls, [("GET", "/api/aufgaben/308/schritte", {"params": None, "timeout": 60})])
+        self.assertEqual(d["aufgabe"], {"id": 308, "titel": "Parser-Darstellungsfehler korrigieren",
+                                        "kurz": "Parser-Darstellung", "satz": "agy-Darstellung im Parser korrigieren.",
+                                        "mehrere_ziele": ["Parser", "lesser2-Agent"],
+                                        "projekt": "AgentOS › Kern-Dienste", "projekt_quelle": "luna",
+                                        "zustand": "laeuft", "agenten": ["Cloud"], "angelegt_durch": "luna",
+                                        "min_heute": 30, "min_woche": 30})
+        self.assertEqual([s["turn_id"] for s in d["schritte"]], ["t0", "t1", "t2"])
+        s0 = d["schritte"][0]
+        self.assertEqual((s0["wann"], s0["agent"], s0["quelle"], s0["min"], s0["zuege"]),
+                         ("19.11. 12:59", "Cloud", "luna", 5.0, 2))
+        self.assertTrue(s0["eingabe"].startswith("Eingabe 0") and s0["satz"].startswith("Satz 0"))
+        self.assertEqual(d["schritte_gesamt"], 3)
+        self.assertNotIn("schritte_hinweis", d)
+
+    async def test_ohne_texte_und_mit_tokens(self):
+        self.antwort["schritte"][0]["tokens"] = {"anfragen": 2, "input": 5, "output": 90, "cache_read": 0}
+        d = json.loads(_geliefert(await self.mcp.call_tool("aufgabe", {"id": 308, "texte": False, "tokens": True})))
+        self.assertEqual(self.calls[-1][2]["params"], {"tokens": "true"})
+        self.assertTrue(all("eingabe" not in s and "satz" not in s for s in d["schritte"]))
+        self.assertEqual(d["schritte"][-1]["tokens"], {"anfragen": 2, "input": 5, "output": 90})
+
+    async def test_lange_aufgabe_gekappt_unter_der_grenze(self):
+        self.antwort = _aufgabe_schritte(200)
+        text = _geliefert(await self.mcp.call_tool("aufgabe", {"id": 308}))
+        self.assertLess(len(text.encode("utf-8")), ZIEL_BYTES)
+        d = json.loads(text)
+        self.assertEqual(len(d["schritte"]), 30)
+        self.assertEqual((d["schritte"][0]["turn_id"], d["schritte"][-1]["turn_id"]), ("t170", "t199"))
+        self.assertIn("30 von 200", d["schritte_hinweis"])
+
+    async def test_ohne_texte_von_der_cloud_api_kein_feld(self):
+        for s in self.antwort["schritte"]:
+            s["eingabe_kurz"] = s["satz"] = None              # Leser ohne Texte (_texte_erlaubt)
+        d = json.loads(_geliefert(await self.mcp.call_tool("aufgabe", {"id": 308})))
+        self.assertTrue(all("eingabe" not in s for s in d["schritte"]))
+
+    async def test_fremde_antwort_unveraendert(self):
+        self.antwort = {"detail": "nur die eigene Zeit, sonst Recht zeit:lesen"}
+        self.assertIn("zeit:lesen", str(await self.mcp.call_tool("aufgabe", {"id": 308})))
+
+    async def test_beschreibung_nennt_marke_tor_und_personendaten(self):
+        tool = {t.name: t for t in await self.mcp.list_tools()}["aufgabe"]
+        for wort in ("[Aufgabe 308 ·", "Details: aufgabe(308)", "zeit:lesen", "eigenen Zug", "Personendaten",
+                     "bevor du antwortest"):
+            self.assertIn(wort, tool.description)
 
 
 class Projekt(unittest.IsolatedAsyncioTestCase):

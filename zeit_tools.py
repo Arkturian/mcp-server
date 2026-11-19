@@ -1,6 +1,6 @@
 """Zeit-Werkzeuge: der Tag einer Person in Summen (cloud-api GET /api/usage/tag), dazu die
 Aufgaben des Mini-Hirns lesen und umordnen (GET /api/aufgaben/tag, POST /api/aufgaben/umordnen,
-Alex ueber CloudV2-time 13.11.2026).
+Alex ueber CloudV2-time 13.11.2026), und eine Aufgabe nach ID (GET /api/aufgaben/{id}/schritte, #3430).
 
 Vertrag: Post #5880 (Uebersicht „Zeit heute“), cloud-api ad399af (Lesen durch
 benannte Agenten, Alex 11.11.2026). Wer lesen darf, entscheidet cloud-api: die
@@ -29,6 +29,7 @@ MAX_AGENTEN = 25            # danach eine Zeile „+N weitere“ mit Summen (Clo
 TOP_ORDNER = 10
 ZIEL_BYTES = 20_000
 MAX_SCHRITTE = 150          # aufgaben_tag: so viele Schritte einzeln, der Rest nur in den Summen
+MAX_AUFGABE_SCHRITTE = 30   # aufgabe: die juengsten so vielen Schritte, mit Texten unter ZIEL_BYTES
 TOKEN_FELDER = ("anfragen", "input", "output", "cache_read", "cache_write", "reasoning")
 ZEILEN_FELDER = ("hinzu", "geaendert", "entfernt")
 
@@ -300,6 +301,46 @@ def aufgaben_zusammenfassen(d: Dict[str, Any], texte: bool = False) -> Dict[str,
     return out
 
 
+def _datum_uhr(iso: Optional[str], tz: ZoneInfo) -> Optional[str]:
+    if not iso:
+        return None
+    return _zeitpunkt(iso).astimezone(tz).strftime("%d.%m. %H:%M")
+
+
+def aufgabe_zusammenfassen(d: Dict[str, Any], texte: bool = True) -> Dict[str, Any]:
+    """Eine Aufgabe (GET /api/aufgaben/{id}/schritte) kompakt: Kopf wie im Aufgaben-Ueberblick des
+    Portals und die juengsten MAX_AUFGABE_SCHRITTE Schritte, aelteste zuerst. Texte nur, soweit
+    die cloud-api sie liefert (#3430). Rein."""
+    tz = ZoneInfo("Europe/Vienna")
+    a = d.get("aufgabe") or {}
+    zeit = a.get("zeit_s") or {}
+    kopf = {k: v for k, v in {
+        "id": a.get("id"), "titel": a.get("titel"), "kurz": a.get("kurz"), "satz": a.get("satz"),
+        "mehrere_ziele": a.get("mehrere_ziele"), "projekt": _pfad_text(a.get("projekt")),
+        "projekt_quelle": a.get("projekt_quelle"), "zustand": a.get("zustand"),
+        "zustand_grund": a.get("zustand_grund"), "agenten": a.get("agenten") or None,
+        "issue": a.get("issue"), "angelegt_durch": a.get("angelegt_durch"),
+        "erledigt_am": _datum_uhr(a.get("erledigt_am"), tz),
+        "min_heute": round(float(zeit.get("heute") or 0) / 60) or None,
+        "min_woche": round(float(zeit.get("woche") or 0) / 60) or None}.items() if v not in (None, "", [])}
+    alle = sorted(d.get("schritte") or [], key=lambda s: s.get("ts") or "")
+    zeilen = []
+    for s in alle[-MAX_AUFGABE_SCHRITTE:]:
+        tok = s.get("tokens") if isinstance(s.get("tokens"), dict) else None
+        zeilen.append({k: v for k, v in {
+            "turn_id": s.get("turn_id"), "wann": _datum_uhr(s.get("ts"), tz), "agent": s.get("agent"),
+            "quelle": s.get("quelle"), "korrigiert_von": s.get("korrigiert_von"),
+            "min": round(float(s.get("zeit_s") or 0) / 60, 1), "zuege": s.get("zuege") or None,
+            "tokens": {k: v for k, v in tok.items() if v} if tok is not None else None,
+            "eingabe": s.get("eingabe_kurz") if texte else None,
+            "satz": s.get("satz") if texte else None}.items() if v not in (None, "")})
+    out: Dict[str, Any] = {"aufgabe": kopf, "schritte_gesamt": len(alle), "schritte": zeilen}
+    if len(alle) > MAX_AUFGABE_SCHRITTE:
+        out["schritte_hinweis"] = (f"die juengsten {MAX_AUFGABE_SCHRITTE} von {len(alle)} Schritten; "
+                                   "aeltere im Portal oder mit aufgaben_tag je Tag")
+    return out
+
+
 def register_zeit_tools(mcp, transport: Transport) -> None:
     """``transport(method, path, params=?, timeout=?)`` ruft cloud-api mit dem JWT des Aufrufers."""
 
@@ -440,6 +481,29 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
         if not isinstance(d, dict) or "schritte" not in d:
             return d
         return json.dumps(aufgaben_zusammenfassen(d, texte=texte), ensure_ascii=False, separators=(",", ":"))
+
+    @mcp.tool(
+        name="aufgabe",
+        description=(
+            "Mini-Hirn (#3430): eine Aufgabe nach ihrer ID lesen, so wie der Mensch sie im "
+            "Aufgaben-Ueberblick des Portals sieht. Schreibt dir ein Mensch aus einer Aufgabe heraus, "
+            "steht vorne in seiner Nachricht eine Marke wie `[Aufgabe 308 · <Name> · <Projekt> · "
+            "<Zustand> · … · Details: aufgabe(308)]`; dann rufst du dieses Werkzeug mit der ID, bevor "
+            "du antwortest. Liefert den Kopf (titel, kurz, satz, mehrere_ziele, Projektpfad, zustand, "
+            "agenten, issue, Minuten heute und in der Woche) und die juengsten 30 Schritte, aelteste "
+            "zuerst: `wann`, Agent, `quelle` (mensch, luna, folge, regel), Minuten und mit texte=true "
+            "(Vorgabe) die Eingabe des Menschen und den Schlusssatz des Agenten. Die Texte liefert die "
+            "cloud-api nur, wenn die Person dein Besitzer ist oder deinen laufenden Zug selbst begonnen "
+            "hat. Lesen darf, wer `zeit:lesen` hat, oder ein Agent im eigenen Zug der Person; sonst "
+            "403. Personendaten: nur dem Menschen selbst zeigen. `tokens=true`: je Schritt auch Tokens."
+        ),
+    )
+    async def aufgabe(id: int, texte: bool = True, tokens: bool = False) -> Any:  # noqa: A002 - Name aus der Marke
+        params = {"tokens": "true"} if tokens else None
+        d = await transport("GET", f"/api/aufgaben/{int(id)}/schritte", params=params, timeout=60)
+        if not isinstance(d, dict) or "aufgabe" not in d:
+            return d
+        return json.dumps(aufgabe_zusammenfassen(d, texte=texte), ensure_ascii=False, separators=(",", ":"))
 
     @mcp.tool(
         name="aufgaben_umordnen",

@@ -12474,6 +12474,10 @@ async def cloud_token_lage(agent: str = "") -> Dict[str, Any]:
 from zeit_tools import register_zeit_tools  # noqa: E402
 register_zeit_tools(cloud_mcp, call_cloud_api)
 
+# Token-Verbrauch und Auslastung fuer Agenten (#3532, Post 6351): siehe token_tools.
+from token_tools import register_token_tools  # noqa: E402
+register_token_tools(cloud_mcp, call_cloud_api)
+
 
 @cloud_mcp.tool(
     name="bridge_message_status",

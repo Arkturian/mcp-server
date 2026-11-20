@@ -8885,7 +8885,7 @@ async def business_documents_get(doc_id: int) -> Dict[str, Any]:
 
 @business_mcp.tool(
     name="create_honorarnote",
-    description="Create a new Honorarnote. Required: client_id, hours, rate, description. Auto-generates PDF. Returns document with items.",
+    description="Create a new Honorarnote. Required: client_id, hours, rate, description. Auto-generates PDF. Returns document with items. brand: arkturian (AgentOS, Arkturian-Logo) or spreadyourwings (Werbeagentur, Vogel); empty = Spread Your Wings (#3528).",
 )
 async def business_create_honorarnote(
     client_id: int,
@@ -8896,6 +8896,7 @@ async def business_create_honorarnote(
     issued_date: Optional[str] = None,
     due_days: int = 14,
     notes: Optional[str] = None,
+    brand: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {
         "client_id": client_id,
@@ -8909,12 +8910,14 @@ async def business_create_honorarnote(
         body["issued_date"] = issued_date
     if notes:
         body["notes"] = notes
+    if brand:
+        body["brand"] = brand
     return await call_business_api("POST", "/api/v1/documents/honorarnote", json_body=body)
 
 
 @business_mcp.tool(
     name="create_invoice",
-    description="Create a new invoice with line items. Required: client_id, items (list of {description, quantity, unit_price}). Auto-generates PDF.",
+    description="Create a new invoice with line items. Required: client_id, items (list of {description, quantity, unit_price}). Auto-generates PDF. brand: arkturian (AgentOS, Arkturian-Logo) or spreadyourwings (Werbeagentur, Vogel); empty = Spread Your Wings (#3528).",
 )
 async def business_create_invoice(
     client_id: int,
@@ -8923,6 +8926,7 @@ async def business_create_invoice(
     issued_date: Optional[str] = None,
     due_days: int = 14,
     notes: Optional[str] = None,
+    brand: Optional[str] = None,
 ) -> Dict[str, Any]:
     body = {
         "client_id": client_id,
@@ -8934,6 +8938,8 @@ async def business_create_invoice(
         body["issued_date"] = issued_date
     if notes:
         body["notes"] = notes
+    if brand:
+        body["brand"] = brand
     return await call_business_api("POST", "/api/v1/documents/invoice", json_body=body)
 
 
@@ -8950,6 +8956,7 @@ async def business_create_invoice(
         "+ valid_days. vat_rate: leave empty to use the tenant default (Kleinunternehmer → 0 %). "
         "Optional content_post_id links a Content post. Auto-generates PDF. Lifecycle: "
         "angebot_accept / angebot_decline, then angebot_convert to an invoice or Honorarnote."
+        " brand: arkturian (AgentOS, Arkturian-Logo) or spreadyourwings (Werbeagentur, Vogel); empty = Spread Your Wings (#3528)."
     ),
 )
 async def business_create_angebot(
@@ -8960,6 +8967,7 @@ async def business_create_angebot(
     valid_days: int = 30,
     notes: Optional[str] = None,
     content_post_id: Optional[int] = None,
+    brand: Optional[str] = None,
 ) -> Dict[str, Any]:
     # vat_rate nur, wenn gesetzt: ohne Wert waehlt business-api den Satz des Mandanten
     # (_resolve_vat_rate). Ein fest mitgeschicktes 0.0 wuerde ihn ueberschreiben.
@@ -8972,6 +8980,8 @@ async def business_create_angebot(
         body["notes"] = notes
     if content_post_id is not None:
         body["content_post_id"] = content_post_id
+    if brand:
+        body["brand"] = brand
     return await call_business_api("POST", "/api/v1/documents/angebot", json_body=body)
 
 

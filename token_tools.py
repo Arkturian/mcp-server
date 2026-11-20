@@ -23,8 +23,8 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 Transport = Callable[..., Awaitable[Any]]
 
 ZIEL_BYTES = 20_000
-GRUPPEN_BERICHT = ("agent", "konto", "node", "model", "quelle")
-GRUPPEN = GRUPPEN_BERICHT + ("tag", "projekt")
+GRUPPEN_BERICHT = ("agent", "konto", "node", "model", "quelle")      # auch kombiniert: agent,model
+GRUPPEN = GRUPPEN_BERICHT + ("tag", "projekt", "aufgabe")
 MASSE = ("output", "eingabe", "alle", "zeilen", "aktiv")
 TOKENARTEN = ("input", "output", "cache_read", "cache_write")
 HINWEIS_KUERZEN = ("Antwort gekuerzt (hoechstens 20 KB). Eingrenzen: kuerzerer Zeitraum (von/bis), "
@@ -88,8 +88,19 @@ def _kopf(d: Dict[str, Any], gruppe: str, mass: str) -> Dict[str, Any]:
             "gefiltert": bool(d.get("gefiltert")), "lieferungen": d.get("lieferungen") or {}}
 
 
+def gruppe_pruefen(gruppe: str) -> Optional[str]:
+    """Normierte Gruppe oder None. Berichtsgruppen auch kombiniert wie im Portal (agent,model)."""
+    g = (gruppe or "agent").strip().lower().replace(" ", "")
+    if g in GRUPPEN:
+        return g
+    teile = [t for t in g.split(",") if t]
+    if len(teile) > 1 and len(set(teile)) == len(teile) and all(t in GRUPPEN_BERICHT for t in teile):
+        return ",".join(teile)
+    return None
+
+
 def verbrauch_zusammenfassen(d: Dict[str, Any], gruppe: str, mass: str, limit: int = 200) -> Dict[str, Any]:
-    """Bericht mit `verdichtung` (gruppe agent|konto|node|model|quelle) bzw. Tage (gruppe tag)."""
+    """Bericht mit `verdichtung` (Berichtsgruppen, auch kombiniert) bzw. Tage (gruppe tag)."""
     out = _kopf(d, gruppe, mass)
     limit = max(1, min(int(limit or 200), 1000))
     if gruppe == "tag":
@@ -109,6 +120,7 @@ def verbrauch_zusammenfassen(d: Dict[str, Any], gruppe: str, mass: str, limit: i
     out["gefiltert"] = bool(v.get("gefiltert", out["gefiltert"]))
     out["gesamt"] = v.get("gesamt", 0)
     out["schluessel_gesamt"] = len(v.get("rang") or [])
+    out["serien"] = v.get("serien") or []
     out["rang"] = [{k: _r(x) for k, x in r.items()} for r in (v.get("rang") or [])[:limit]]
     out["verlauf"] = [{"t": s["t"], "summe": s["summe"]} for s in reversed(v.get("stapel") or [])]
     if mass == "zeilen" and v.get("zeilen_rang") is not None:
@@ -120,25 +132,33 @@ def verbrauch_zusammenfassen(d: Dict[str, Any], gruppe: str, mass: str, limit: i
     return _kuerzen(out, ["verlauf", "zeilen_rang", "aktiv_rang", "rang"])
 
 
-def projekte_zusammenfassen(d: Dict[str, Any], mass: str, limit: int = 200) -> Dict[str, Any]:
-    """gruppe=aufgabe des Berichts je Projekt summiert (pp = Prozentpunkte des 7-Tage-Fensters)."""
-    out = _kopf(d, "projekt", mass)
-    je: Dict[str, Dict[str, Any]] = {}
+def projekte_zusammenfassen(d: Dict[str, Any], mass: str, limit: int = 200,
+                            je: str = "projekt") -> Dict[str, Any]:
+    """gruppe=aufgabe des Berichts je Projekt bzw. je Aufgabe summiert (pp = Prozentpunkte des
+    7-Tage-Fensters). Zeilenform: usage_aufgaben.zusammenstellen + fuer_leser (`anfragen`
+    oben in der Zeile, die vier Tokenarten in `tokens`)."""
+    out = _kopf(d, je, mass)
+    summe: Dict[str, Dict[str, Any]] = {}
     for z in d.get("zeilen") or []:
         p = z.get("projekt") or {}
-        name = p.get("name") or ("ohne Aufgabe" if z.get("art") == "ohne" else "ohne Projekt")
-        r = je.setdefault(name, {"projekt": name, "projekt_id": p.get("id"), "anfragen": 0, "pp": 0.0,
-                                 **{a: 0 for a in TOKENARTEN}})
+        art = z.get("art")
+        if je == "aufgabe":
+            schl = str(z.get("aufgabe_id")) if art == "aufgabe" else str(art or "ohne")
+            kopf = {"aufgabe": schl, "art": art, "projekt": p.get("name")}
+        else:
+            schl = p.get("name") or ("ohne Aufgabe" if art == "ohne" else "ohne Projekt")
+            kopf = {"projekt": schl, "projekt_id": p.get("id")}
+        r = summe.setdefault(schl, {**kopf, "anfragen": 0, "pp": 0.0, **{a: 0 for a in TOKENARTEN}})
         tok = z.get("tokens") or {}
-        r["anfragen"] += tok.get("anfragen") or 0
+        r["anfragen"] += z.get("anfragen") or 0
         r["pp"] += z.get("pp") or 0.0
         for a in TOKENARTEN:
             r[a] += tok.get(a) or 0
-    rang = list(je.values())
+    rang = list(summe.values())
     for r in rang:
         r["menge"] = _menge(r, mass if mass in ("output", "eingabe", "alle") else "output")
         r["pp"] = round(r["pp"], 3)
-    rang.sort(key=lambda r: (-r["menge"], r["projekt"].casefold()))
+    rang.sort(key=lambda r: (-r["menge"], str(r.get(je) or "").casefold()))
     gesamt = sum(r["menge"] for r in rang)
     for r in rang:
         r["anteil"] = round(r["menge"] / gesamt, 4) if gesamt else 0.0
@@ -198,7 +218,8 @@ def register_token_tools(mcp, transport: Transport) -> None:
         name="token_verbrauch",
         description=(
             "Token-Verbrauch mit denselben Zahlen wie die Sicht Token-Verbrauch im Portal (#3532). "
-            "`gruppe`: agent | konto | node | model | quelle | tag | projekt. `mass` bestimmt die "
+            "`gruppe`: agent | konto | node | model | quelle, auch kombiniert wie agent,model; dazu "
+            "tag (je Wiener Tag), aufgabe und projekt (mit pp = Punkte des 7-Tage-Fensters). `mass` bestimmt die "
             "Reihenfolge (`menge`): output (Vorgabe), eingabe (input + cache_read + cache_write), alle, "
             "zeilen (geaenderte Dateizeilen, nur agent/node), aktiv (aktive Sekunden, nur agent/node). "
             "Tokens stehen immer getrennt (input, output, cache_read, cache_write); reasoning steckt bei "
@@ -209,11 +230,13 @@ def register_token_tools(mcp, transport: Transport) -> None:
         ),
     )
     async def token_verbrauch(von: str = "", bis: str = "", gruppe: str = "agent", mass: str = "output",
-                              agent: str = "", konto: str = "", takt: str = "", limit: int = 200) -> Any:
-        gruppe = (gruppe or "agent").strip().lower()
+                              agent: str = "", konto: str = "", takt: str = "", max_reihen: int = 8,
+                              limit: int = 200) -> Any:
+        g = gruppe_pruefen(gruppe)
         mass = (mass or "output").strip().lower()
-        if gruppe not in GRUPPEN:
-            return {"fehler": f"gruppe: eine von {', '.join(GRUPPEN)}"}
+        if g is None:
+            return {"fehler": f"gruppe: eine von {', '.join(GRUPPEN)}, Berichtsgruppen auch kombiniert (agent,model)"}
+        gruppe = g
         if mass not in MASSE:
             return {"fehler": f"mass: eine von {', '.join(MASSE)}"}
         try:
@@ -224,15 +247,16 @@ def register_token_tools(mcp, transport: Transport) -> None:
         for k, v in (("agent", agent), ("konto", konto)):
             if v.strip():
                 params[k] = v.strip()
-        if gruppe == "projekt":
+        if gruppe in ("projekt", "aufgabe"):
             params.update(gruppe="aufgabe", takt="stunde" if (t_bis - t_von) <= timedelta(days=14) else "tag")
             d = await transport("GET", "/api/usage/report", params=params, timeout=120)
             if not isinstance(d, dict) or "zeilen" not in d:
                 return d
-            erg = projekte_zusammenfassen(d, mass, limit)
+            erg = projekte_zusammenfassen(d, mass, limit, je=gruppe)
         else:
             params.update(gruppe="quelle" if gruppe == "tag" else gruppe, mass=mass, tagesgrenze="wien",
-                          takt="tag" if gruppe == "tag" else _takt(takt, t_von, t_bis))
+                          takt="tag" if gruppe == "tag" else _takt(takt, t_von, t_bis),
+                          max_reihen=max(2, min(int(max_reihen or 8), 50)))
             d = await transport("GET", "/api/usage/report", params=params, timeout=120)
             if not isinstance(d, dict) or "zeilen" not in d:
                 return d

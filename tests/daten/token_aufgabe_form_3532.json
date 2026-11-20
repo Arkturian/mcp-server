@@ -1,0 +1,117 @@
+{
+ "gruppe": [
+  "aufgabe"
+ ],
+ "takt": "stunde",
+ "fenster": null,
+ "von": "2026-11-20T08:00:00+00:00",
+ "bis": "2026-11-20T09:00:00+00:00",
+ "nur_agent": null,
+ "zeilen": [
+  {
+   "id": "k@x.at|Cloud|1|2026-11-20T08:00:00+00:00",
+   "konto": "k@x.at",
+   "agent": "Cloud",
+   "art": "aufgabe",
+   "aufgabe_id": 1,
+   "titel": null,
+   "t": "2026-11-20T08:00:00+00:00",
+   "anfragen": 4,
+   "tokens": {
+    "input": 9000000,
+    "output": 400000,
+    "cache_read": 80000000,
+    "cache_write": 0
+   },
+   "pp": 19.0,
+   "projekt": {
+    "id": "p1",
+    "name": "Portal",
+    "pfad": [
+     "Portal"
+    ],
+    "art": "ordner"
+   }
+  },
+  {
+   "id": "k@x.at|Cloud|2|2026-11-20T09:00:00+00:00",
+   "konto": "k@x.at",
+   "agent": "Cloud",
+   "art": "aufgabe",
+   "aufgabe_id": 2,
+   "titel": null,
+   "t": "2026-11-20T09:00:00+00:00",
+   "anfragen": 3,
+   "tokens": {
+    "input": 5000000,
+    "output": 300000,
+    "cache_read": 40000000,
+    "cache_write": 0
+   },
+   "pp": 10.5,
+   "projekt": {
+    "id": "p2",
+    "name": "Cloud",
+    "pfad": [
+     "Cloud"
+    ],
+    "art": "ordner"
+   }
+  },
+  {
+   "id": "k@x.at|Cloud|ohne|2026-11-20T08:00:00+00:00",
+   "konto": "k@x.at",
+   "agent": "Cloud",
+   "art": "ohne",
+   "aufgabe_id": null,
+   "titel": null,
+   "t": "2026-11-20T08:00:00+00:00",
+   "anfragen": 1,
+   "tokens": {
+    "input": 1000000,
+    "output": 100000,
+    "cache_read": 10000000,
+    "cache_write": 0
+   },
+   "pp": 2.5,
+   "projekt": null
+  },
+  {
+   "id": "k@x.at|Cloud-worker|2|2026-11-20T08:00:00+00:00",
+   "konto": "k@x.at",
+   "agent": "Cloud-worker",
+   "art": "aufgabe",
+   "aufgabe_id": 2,
+   "titel": null,
+   "t": "2026-11-20T08:00:00+00:00",
+   "anfragen": 4,
+   "tokens": {
+    "input": 8000000,
+    "output": 700000,
+    "cache_read": 70000000,
+    "cache_write": 0
+   },
+   "pp": 18.5,
+   "projekt": {
+    "id": "p2",
+    "name": "Cloud",
+    "pfad": [
+     "Cloud"
+    ],
+    "art": "ordner"
+   }
+  }
+ ],
+ "konten": [],
+ "zusammenfassung": {
+  "kleinst_pp": 0.05,
+  "max_zeilen": 3000,
+  "aufgaben": 3,
+  "in_sonstige": 0,
+  "zeilen": 4,
+  "ueber_obergrenze": false
+ },
+ "lieferungen": {},
+ "gefiltert": true,
+ "_herkunft": "erzeugt mit cloud-api usage_aufgaben.zusammenstellen + fuer_leser (cw/3532), erfundene Daten"
+}

@@ -321,6 +321,10 @@ def aufgabe_zusammenfassen(d: Dict[str, Any], texte: bool = True) -> Dict[str, A
         "zustand_grund": a.get("zustand_grund"), "agenten": a.get("agenten") or None,
         "issue": a.get("issue"), "angelegt_durch": a.get("angelegt_durch"),
         "erledigt_am": _datum_uhr(a.get("erledigt_am"), tz),
+        # Phase mit Quelle und Zeit, Systeme als owner/repo (#3503, Beitrag 6262)
+        "phase": a.get("phase"), "phase_quelle": a.get("phase_quelle") if a.get("phase") else None,
+        "phase_seit": _datum_uhr(a.get("phase_am"), tz) if a.get("phase") else None,
+        "systeme": [s.get("repo") for s in (a.get("systeme") or []) if isinstance(s, dict)] or None,
         "min_heute": round(float(zeit.get("heute") or 0) / 60) or None,
         "min_woche": round(float(zeit.get("woche") or 0) / 60) or None}.items() if v not in (None, "", [])}
     alle = sorted(d.get("schritte") or [], key=lambda s: s.get("ts") or "")
@@ -339,6 +343,27 @@ def aufgabe_zusammenfassen(d: Dict[str, Any], texte: bool = True) -> Dict[str, A
         out["schritte_hinweis"] = (f"die juengsten {MAX_AUFGABE_SCHRITTE} von {len(alle)} Schritten; "
                                    "aeltere im Portal oder mit aufgaben_tag je Tag")
     return out
+
+
+PHASEN = ("analyse", "design", "umsetzung", "test", "review", "ausgeliefert")
+PHASE_KEINE = ("keine", "null", "none")
+
+
+def aufgabe_setzen_body(phase: str = "", beleg: str = "", hinzu: Optional[List[str]] = None,
+                        weg: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Body fuer PATCH /api/aufgaben/{id} (#3503). `phase` leer: unveraendert; „keine“: entfernen.
+    `beleg` nur zusammen mit einer Phase. Leerer Body: nichts zu setzen. Rein."""
+    body: Dict[str, Any] = {}
+    p = (phase or "").strip().lower()
+    if p:
+        body["phase"] = None if p in PHASE_KEINE else p
+        if (beleg or "").strip():
+            body["beleg"] = beleg.strip()
+    systeme = {k: [str(r).strip() for r in v if str(r).strip()] for k, v in (("hinzu", hinzu), ("weg", weg)) if v}
+    systeme = {k: v for k, v in systeme.items() if v}
+    if systeme:
+        body["systeme"] = systeme
+    return body
 
 
 def register_zeit_tools(mcp, transport: Transport) -> None:
@@ -504,6 +529,31 @@ def register_zeit_tools(mcp, transport: Transport) -> None:
         if not isinstance(d, dict) or "aufgabe" not in d:
             return d
         return json.dumps(aufgabe_zusammenfassen(d, texte=texte), ensure_ascii=False, separators=(",", ":"))
+
+    @mcp.tool(
+        name="aufgabe_setzen",
+        description=(
+            "Mini-Hirn (#3503, Beitrag 6262): Phase und Systeme einer Aufgabe setzen, in der du einen "
+            "Zug hast (sonst 403). Phasen: analyse, design, umsetzung, test, review, ausgeliefert; "
+            "`phase=\"keine\"` entfernt sie. Setz die Phase, wenn du sie sicher weisst, etwa `review`, wenn "
+            "du zur Pruefung uebergibst, oder `test`, wenn getestet wird; `beleg` ist ein Satz dazu (Commit, "
+            "Issue, Beitrag). `umsetzung` setzt die Automatik selbst aus geaenderten Zeilen. Sie geht nie "
+            "zurueck, und dein Eintrag gilt, bis ein spaeteres Signal eine spaetere Phase belegt. "
+            "`systeme_hinzu`/`systeme_weg`: Repos als owner/repo; ein entferntes kommt nicht von selbst "
+            "zurueck. Titel und Projekt aendert nur der Mensch. Jede Aenderung steht im Verlauf der "
+            "Aufgabe (wer, wann, alt, neu, Beleg). Die ID steht in der Marke `[Aufgabe <id> · …]`."
+        ),
+    )
+    async def aufgabe_setzen(id: int, phase: str = "", beleg: str = "",  # noqa: A002 - Name aus der Marke
+                             systeme_hinzu: Optional[List[str]] = None,
+                             systeme_weg: Optional[List[str]] = None) -> Any:
+        p = (phase or "").strip().lower()
+        if p and p not in PHASEN and p not in PHASE_KEINE:
+            return {"fehler": "phase: " + ", ".join(PHASEN) + " oder keine"}
+        body = aufgabe_setzen_body(phase, beleg, systeme_hinzu, systeme_weg)
+        if not body:
+            return {"fehler": "nichts zu setzen: phase oder systeme_hinzu/systeme_weg angeben"}
+        return await transport("PATCH", f"/api/aufgaben/{int(id)}", json_body=body, timeout=60)
 
     @mcp.tool(
         name="aufgaben_umordnen",

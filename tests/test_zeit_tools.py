@@ -17,8 +17,8 @@ from datetime import datetime, timedelta, timezone
 
 from mcp.server.fastmcp import FastMCP
 
-from zeit_tools import (MAX_AGENTEN, MAX_ZUEGE, TOP_ORDNER, ZIEL_BYTES, register_zeit_tools,
-                        tag_zusammenfassen)
+from zeit_tools import (MAX_AGENTEN, MAX_ZUEGE, TOP_ORDNER, ZIEL_BYTES, aufgabe_setzen_body,
+                        register_zeit_tools, tag_zusammenfassen)
 
 TAG_BEGINN = datetime(2026, 11, 10, 23, 0, tzinfo=timezone.utc)      # 11.11. 00:00 in Wien
 ARTEN = (("agent", 619), ("mensch", 521), ("direkt", 487), (None, 136), ("system", 95), ("queue", 24))
@@ -642,6 +642,37 @@ class EineAufgabe(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(s0["eingabe"].startswith("Eingabe 0") and s0["satz"].startswith("Satz 0"))
         self.assertEqual(d["schritte_gesamt"], 3)
         self.assertNotIn("schritte_hinweis", d)
+
+    async def test_phase_und_systeme_im_kopf(self):
+        # #3503: Phase mit Quelle und Zeit (Wien), Systeme als owner/repo
+        self.antwort["aufgabe"].update({"phase": "review", "phase_quelle": "agent:Cloud",
+                                        "phase_am": "2026-11-20T09:15:00+00:00",
+                                        "systeme": [{"repo": "apopovic77/cloud-api", "quelle": "zeilen", "zeilen": 40}]})
+        k = json.loads(_geliefert(await self.mcp.call_tool("aufgabe", {"id": 308})))["aufgabe"]
+        self.assertEqual((k["phase"], k["phase_quelle"], k["phase_seit"], k["systeme"]),
+                         ("review", "agent:Cloud", "20.11. 10:15", ["apopovic77/cloud-api"]))
+        self.antwort = _aufgabe_schritte()                   # ohne Phase: kein Feld, keine leere Liste
+        k = json.loads(_geliefert(await self.mcp.call_tool("aufgabe", {"id": 308})))["aufgabe"]
+        self.assertFalse({"phase", "phase_quelle", "phase_seit", "systeme"} & set(k))
+
+    async def test_aufgabe_setzen_schickt_patch(self):
+        self.antwort = {"id": 308, "phase": "review"}
+        await self.mcp.call_tool("aufgabe_setzen", {"id": 308, "phase": "Review", "beleg": "an Cloud, Commit 9c72e495",
+                                                    "systeme_hinzu": ["apopovic77/cloud-api"]})
+        self.assertEqual(self.calls, [("PATCH", "/api/aufgaben/308", {
+            "json_body": {"phase": "review", "beleg": "an Cloud, Commit 9c72e495",
+                          "systeme": {"hinzu": ["apopovic77/cloud-api"]}}, "timeout": 60})])
+
+    async def test_aufgabe_setzen_prueft_vor_dem_aufruf(self):
+        for args in ({"id": 1, "phase": "fertig"}, {"id": 1}, {"id": 1, "beleg": "nur ein Beleg"}):
+            d = _geliefert(await self.mcp.call_tool("aufgabe_setzen", args))
+            self.assertIn("fehler", d)
+        self.assertEqual(self.calls, [])
+
+    def test_body_phase_keine_und_systeme(self):
+        self.assertEqual(aufgabe_setzen_body("keine"), {"phase": None})
+        self.assertEqual(aufgabe_setzen_body("", "Beleg ohne Phase", None, ["a/b", " "]), {"systeme": {"weg": ["a/b"]}})
+        self.assertEqual(aufgabe_setzen_body(), {})
 
     async def test_ohne_texte_und_mit_tokens(self):
         self.antwort["schritte"][0]["tokens"] = {"anfragen": 2, "input": 5, "output": 90, "cache_read": 0}

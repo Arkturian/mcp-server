@@ -9571,7 +9571,7 @@ Used by Business API for document delivery, and directly for notifications.
 ### Gmail
 - gmail_list_messages(source, query, max_results) — List emails
 - outlook_list_accounts() / outlook_list_messages(source, query, max_results, folder) / outlook_get_message(source, message_id) / outlook_get_attachment(source, message_id, attachment_id) — Microsoft 365 mailboxes, read + draft creation (no send)
-- outlook_create_draft(source, body, to, idempotency_key, subject?, cc?, bcc?, reply_to_message_id?, attachments?, html?) — create a draft in the Drafts folder; the human sends it from Outlook, this tool NEVER sends
+- outlook_create_draft(source, body, idempotency_key, to?, subject?, cc?, bcc?, reply_to_message_id?, attachments?, html?) — create a draft in the Drafts folder; the human sends it from Outlook, this tool NEVER sends
 - gmail_get_message(source, message_id) — Get full email
 - gmail_latest(source, query) — Most recent email
 - gmail_send(source, to, subject, body) — Send email via Gmail
@@ -10970,7 +10970,7 @@ async def comm_outlook_list_messages(
         params["since"] = since
     if until:
         params["until"] = until
-    return await call_comm_api("GET", f"/api/v1/outlook/{source}/messages", params=params)
+    return await call_comm_api("GET", f"/api/v1/outlook/{_seg(source)}/messages", params=params)
 
 
 @comm_mcp.tool(
@@ -10981,7 +10981,25 @@ async def comm_outlook_list_messages(
     ),
 )
 async def comm_outlook_get_message(source: str, message_id: str) -> Dict[str, Any]:
-    return await call_comm_api("GET", f"/api/v1/outlook/{source}/messages/{message_id}")
+    return await call_comm_api("GET", f"/api/v1/outlook/{_seg(source)}/messages/{_seg(message_id)}")
+
+
+@comm_mcp.tool(
+    name="outlook_mark_complete",
+    description=(
+        "Mark an Outlook message as done: sets the Outlook flag to "
+        "'complete' (flag.flagStatus=complete). This is NOT 'mark as read' "
+        "and changes nothing else. Only for sources that allow it, e.g. a "
+        "mailbox limited to read + mark-complete (ms_scope_mode=mail_flag); "
+        "comm-api checks access per source and agent and returns 403 "
+        "otherwise. Use only after the message is fully processed."
+    ),
+)
+async def comm_outlook_mark_complete(source: str, message_id: str) -> Dict[str, Any]:
+    """#3403 (Steiner fakturace@): dünner Wrapper, Rechte prüft comm-api."""
+    return await call_comm_api(
+        "POST", f"/api/v1/outlook/{_seg(source)}/mark-complete/{_seg(message_id)}",
+    )
 
 
 @comm_mcp.tool(
@@ -11038,7 +11056,7 @@ async def comm_outlook_get_attachment(
     if deliver not in ("storage", "base64"):
         return {"error": "deliver_invalid", "allowed": ["storage", "base64"]}
 
-    msg = await call_comm_api("GET", f"/api/v1/outlook/{source}/messages/{message_id}")
+    msg = await call_comm_api("GET", f"/api/v1/outlook/{_seg(source)}/messages/{_seg(message_id)}")
     _m = msg or {}
     # comm-api liefert {"account","email","message":{…,"attachments":[…]}};
     # aeltere/andere Formen liefern die Nachricht unverpackt. Beides lesen.
@@ -11072,7 +11090,7 @@ async def comm_outlook_get_attachment(
     # laufen die Bytes gar nicht erst durch das Gateway. Aeltere comm-api
     # ignorieren den Parameter und liefern `data` (Base64); dafuer bleibt der
     # Gateway-Upload unten als Rueckfall.
-    att_path = f"/api/v1/outlook/{source}/messages/{message_id}/attachments/{attachment_id}"
+    att_path = f"/api/v1/outlook/{_seg(source)}/messages/{_seg(message_id)}/attachments/{_seg(want)}"
     if deliver == "storage":
         payload = await call_comm_api("GET", att_path, params={"mode": "storage"})
         if isinstance(payload, dict) and payload.get("storage_url"):
@@ -11146,25 +11164,31 @@ async def comm_outlook_get_attachment(
         "subject may be omitted — Graph pre-fills 'Re: ...'.\n"
         "reply_to_message_id: Graph message-id to reply to. Sets up the draft "
         "in the same conversation. Omit for a brand-new mail.\n"
-        "attachments: list of {filename, content_type, url?, data?}. Either "
-        "`url` (comm-api fetches server-side; preferred for Storage-hosted "
-        "files) or `data` (base64 inline).\n"
-        "idempotency_key: MANDATORY string. A retry with the same (source, "
-        "idempotency_key) returns the first call's readback — a timeout + "
-        "retry will NOT create a duplicate draft. Reusing the key with a "
-        "different payload returns 409 `idempotency_key_reused`.\n"
-        "Returns {success, id, is_draft, parent_folder_id, thread_id, "
-        "subject, to, cc, bcc, body_preview, has_attachments, "
-        "idempotent_replay}. Access is enforced per source by comm-api "
-        "against the caller's identity — 403 means this agent is not an "
-        "owner of that mailbox."
+        "attachments: list of {filename, content_type, data}. `data` is "
+        "base64-encoded bytes, up to 3 MB per attachment and 10 MB total. "
+        "URL attachments are off by default; unless this instance enabled "
+        "them, passing `url` returns 422 `attachment_url_disabled`. The "
+        "idempotency hash covers the raw bytes.\n"
+        "idempotency_key: REQUIRED. A unique string per intended draft. "
+        "A retry with the same (source, idempotency_key) returns the first "
+        "call's readback — a timeout + retry will NOT create a duplicate "
+        "draft. Reusing the key with a different payload returns 409 "
+        "`idempotency_key_reused`.\n"
+        "Returns {success, id, is_draft, parent_folder_id, in_drafts_folder, "
+        "thread_id, subject, to, cc, bcc, body, body_content_type, "
+        "body_preview, has_attachments, attachments, idempotent_replay}. "
+        "`in_drafts_folder` is the authoritative proof (parent_folder_id "
+        "compared against /me/mailFolders/drafts). `attachments` is the "
+        "Graph attachment metadata list (no contentBytes). Access is "
+        "enforced per source by comm-api against the caller's identity — "
+        "403 means this agent is not an owner of that mailbox."
     ),
 )
 async def comm_outlook_create_draft(
     source: str,
     body: str,
+    idempotency_key: str,
     to: Optional[List[str]] = None,
-    idempotency_key: str = "",
     subject: Optional[str] = None,
     cc: Optional[List[str]] = None,
     bcc: Optional[List[str]] = None,
@@ -11173,9 +11197,14 @@ async def comm_outlook_create_draft(
     html: bool = False,
 ) -> Dict[str, Any]:
     # steiner Issue #60 (David) — Cloud 2026-10-21. comm-api legt den
-    # Entwurf an und liefert isDraft + parentFolderId im Readback. Der
-    # Weg hier reicht die Payload 1:1 weiter; Owner-Check, Scope-Guard
-    # und das No-Send-Invariant sitzen in comm-api, nicht hier.
+    # Entwurf an und liefert isDraft + parentFolderId + in_drafts_folder
+    # im Readback. Der Weg hier reicht die Payload 1:1 weiter; Owner-
+    # Check, Scope-Guard, No-Send-Invariant und Bytes-basierter
+    # Idempotenz-Hash sitzen in comm-api, nicht hier.
+    #
+    # Kein Default auf `idempotency_key` (Steiner-Nachforderung 4baee9ff
+    # §2): Sonst zeigt das MCP-Schema das Pflichtfeld als optional. Die
+    # Leer-Prüfung bleibt für Clients, die einen leeren String schicken.
     if not (idempotency_key or "").strip():
         return {
             "error": "idempotency_key_required",
@@ -11202,7 +11231,7 @@ async def comm_outlook_create_draft(
         payload["attachments"] = list(attachments)
     return await call_comm_api(
         "POST",
-        f"/api/v1/outlook/{source}/drafts",
+        f"/api/v1/outlook/{_seg(source)}/drafts",
         json_body=payload,
     )
 

@@ -12,6 +12,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 for _k in ("ARKTURIAN_API_KEY", "ONEAL_STORAGE_API_KEY", "JWT_PUBLIC_KEY", "COMM_API_KEY"):
     os.environ.setdefault(_k, "test-only")
@@ -118,3 +120,57 @@ def test_outlook_mark_complete_ruft_nur_die_eine_route(monkeypatch):
     assert calls == [("POST", "/api/v1/outlook/steiner_fakturace/mark-complete/AAMk-1", {})]
     import inspect
     assert list(inspect.signature(server.comm_outlook_mark_complete).parameters) == ["source", "message_id"]
+
+
+def test_outlook_create_draft_idempotency_key_required_in_schema():
+    """Steiner-Nachforderung `4baee9ff` §2: Ohne Default weist das MCP-Schema
+    `idempotency_key` als Pflichtfeld aus."""
+    import inspect
+    import server
+    sig = inspect.signature(server.comm_outlook_create_draft)
+    assert sig.parameters["idempotency_key"].default is inspect.Parameter.empty
+
+
+def test_outlook_create_draft_signature_order_body_before_idempotency():
+    import inspect
+    import server
+    sig = inspect.signature(server.comm_outlook_create_draft)
+    names = list(sig.parameters.keys())
+    assert names[:3] == ["source", "body", "idempotency_key"]
+    for name in names[3:]:
+        assert sig.parameters[name].default is not inspect.Parameter.empty, name
+
+
+@pytest.mark.parametrize("source,message_id", [
+    ("steiner/mark-read/AAMk123#", "x"),
+    ("steiner", "AAMk123/../../mark-read/y"),
+    ("steiner", "AAMk123?x=1#"),
+])
+def test_outlook_mark_complete_cannot_leave_its_route(monkeypatch, source, message_id):
+    """Cloud-Security 236faa34: `/`, `?`, `#` bleiben im Segment, der Aufruf
+    wird nie zu mark-read oder mark-unread."""
+    import urllib.parse
+    import server
+    calls = []
+
+    async def _fake(method, endpoint, **kw):
+        calls.append((method, endpoint))
+        return {"success": True}
+
+    monkeypatch.setattr(server, "call_comm_api", _fake)
+    asyncio.run(server.comm_outlook_mark_complete(source, message_id))
+    q, m = urllib.parse.quote(source, safe=""), urllib.parse.quote(message_id, safe="")
+    assert calls == [("POST", f"/api/v1/outlook/{q}/mark-complete/{m}")]
+    assert "#" not in calls[0][1] and "?" not in calls[0][1]
+
+
+@pytest.mark.parametrize("wert", ["", ".", ".."])
+def test_outlook_mark_complete_rejects_empty_and_dot_segments(monkeypatch, wert):
+    import server
+
+    async def _fake(*a, **k):
+        raise AssertionError("darf nicht aufgerufen werden")
+
+    monkeypatch.setattr(server, "call_comm_api", _fake)
+    with pytest.raises(ValueError):
+        asyncio.run(server.comm_outlook_mark_complete("steiner", wert))

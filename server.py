@@ -1135,7 +1135,8 @@ def _business_agent_token_header() -> Dict[str, str]:
     nie das eines Menschen; andere business-Werkzeuge bekommen es nicht."""
     from auth import current_caller_jwt, current_caller_verified_agent
 
-    if not current_caller_verified_agent():
+    # Ohne konfigurierten Schluessel darf ein Vorgabe-Ziel nie ein Token sehen.
+    if not BUSINESS_API_KEY or not current_caller_verified_agent():
         return {}
     jwt_str = current_caller_jwt()
     return {"X-Agent-Token": jwt_str} if jwt_str else {}

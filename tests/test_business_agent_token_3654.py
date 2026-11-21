@@ -51,3 +51,10 @@ def test_andere_business_werkzeuge_bekommen_es_nicht(anfragen, monkeypatch):
     _rufer(monkeypatch, "Business", "a.b.c")
     asyncio.run(server.business_mcp.call_tool("documents_cancel", {"doc_id": 7}))
     assert "X-Agent-Token" not in anfragen[0]["headers"]
+
+
+def test_ohne_gateway_schluessel_kein_token(anfragen, monkeypatch):
+    _rufer(monkeypatch, "Business", "a.b.c")
+    monkeypatch.setattr(server, "BUSINESS_API_KEY", "")
+    _sende()
+    assert "X-Agent-Token" not in anfragen[0]["headers"]

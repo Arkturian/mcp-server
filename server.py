@@ -13248,6 +13248,34 @@ async def cloud_session_restart(session_name: str) -> Dict[str, Any]:
 
 
 @cloud_mcp.tool(
+    name="session_delete",
+    description=(
+        "DELETE an agent for good (federation-aware): stops its CLI, removes its registry row, "
+        "its bot home (history, memory, config) and its identity in auth-api. Cannot be undone. "
+        "Only when a human has asked for exactly this agent to be deleted; never on your own "
+        "initiative, never to fix a fault (use session_restart). Owner, admin or sessions:manage "
+        "in the same tenant only, cloud-api decides from your JWT; a foreign agent answers 404. "
+        "purge=false only stops the CLI and removes the registry row, the bot home and auth-api "
+        "stay. Returns `status` and `actions` (e.g. tmux_killed, registry_purged, "
+        "bot_home_removed, auth_api_deleted); errors come back with status and reason."
+    ),
+)
+async def cloud_session_delete(session_name: str, purge: bool = True) -> Dict[str, Any]:
+    # #3695: Der Name wird ein Pfadsegment. Kodiert, damit "X/restart" oder "../x" nie einen
+    # anderen Weg der cloud-api trifft. Die Rechte prueft allein cloud-api am JWT des Aufrufers.
+    pfad = "/api/sessions/" + urllib.parse.quote(str(session_name), safe="")
+    try:
+        return await call_cloud_api("DELETE", pfad, params={"purge": "true" if purge else "false"})
+    except httpx.HTTPStatusError as e:
+        try:
+            detail = e.response.json()
+        except Exception:
+            detail = {"error": e.response.text[:300]}
+        return {"status": e.response.status_code,
+                **(detail if isinstance(detail, dict) else {"detail": detail})}
+
+
+@cloud_mcp.tool(
     name="system_memory",
     description=(
         "Get system memory info: total/used/free RAM, swap, bot RAM usage, "

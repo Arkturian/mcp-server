@@ -201,7 +201,6 @@ CONVERSATION_API_BASE = os.getenv(
     "CONVERSATION_API_BASE",
     "https://conversation-api.arkserver.arkturian.com",
 )
-CONVERSATION_API_KEY = os.getenv("CONVERSATION_API_KEY", "").strip()
 CLOUD_PATH = "/cloud"
 CONVERSATION_PATH = "/conversation"
 
@@ -898,15 +897,15 @@ async def call_conversation_api(
 ) -> Any:
     """Call Conversation API for cross-channel thread tracking + agent dispatch.
 
-    Sends X-API-KEY header if CONVERSATION_API_KEY env var is set.
+    Reicht das JWT des Aufrufers weiter (#3621), damit conversation-api die echte Identitaet
+    sieht und ihre eigenen Rechte- und Besitzpruefungen anwendet. Sie liest nur
+    `Authorization: Bearer` oder ihr Session-Cookie. Bewusst kein Dienstschluessel und kein
+    Dienst-Token als Rueckfall: sonst laese jeder Agent mit den Rechten des Gateways.
     """
-    headers: Dict[str, str] = {}
-    if CONVERSATION_API_KEY:
-        headers["X-API-KEY"] = CONVERSATION_API_KEY
     return await _fetch_json(
         method,
         f"{CONVERSATION_API_BASE}{endpoint}",
-        headers=headers,
+        headers=_caller_auth_headers(),
         params=params,
         json_body=json_body,
     )

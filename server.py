@@ -7172,6 +7172,51 @@ async def ai_gemini_text(
     return await call_ai_api("POST", "/ai/gemini", json_body=body)
 
 
+# #3658 (Vertrag AiApi 11327, 11330, 11331): Text ueber die Abo-Kette in api-ai. Die
+# Reihenfolge der Wege kommt allein aus KI_KETTE in api-ai; `wege` nennt nur Modell und
+# Staerke je Weg. Antwort und feste Fehlercodes reicht das Werkzeug unveraendert weiter.
+KETTE_BUDGET_VORGABE_S = 30.0
+KETTE_BUDGET_HOECHSTENS_S = 120.0
+KETTE_ZUSCHLAG_S = 10.0
+
+
+@ai_mcp.tool(
+    name="kette_text",
+    description=("Call AI API /ai/kette (#3658): Text ueber die Abos, Reihenfolge aus KI_KETTE in api-ai "
+                 "(Google, dann ChatGPT, dann Claude Haiku). Params: prompt, system?, "
+                 "wege? (Liste von {weg: agy|codex|claude, model?, effort?}, nur Modell und Staerke je Weg, "
+                 "nicht die Reihenfolge), budget_s? (ganze Kette, 5-120, Vorgabe 30), nur_erster_weg?, "
+                 "max_tokens?, temperature? (angenommen, auf den Abo-Wegen nicht angewendet). "
+                 "Antwort wie gemini_text plus routed_to, model, versucht, nicht_angewendet. Fehler mit "
+                 "festem Code: 429 kontingent (resets_at), 503 wege_fehler | cli_fehlt | kette_aus, 504 budget."),
+)
+async def ai_kette_text(
+    prompt: str,
+    system: Optional[str] = None,
+    wege: Optional[List[Dict[str, Any]]] = None,
+    budget_s: Optional[float] = None,
+    nur_erster_weg: Optional[bool] = None,
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"prompt": prompt}
+    for feld, wert in (("system", system), ("wege", wege), ("budget_s", budget_s),
+                       ("nur_erster_weg", nur_erster_weg), ("max_tokens", max_tokens),
+                       ("temperature", temperature)):
+        if wert is not None:
+            body[feld] = wert
+    # Zeitgrenze = Budget der Kette + Zuschlag (AiApi 11330), nie die 300 s des Gateways.
+    # Ein ungueltiges Budget weist api-ai mit 422 ab; hier zaehlt nur eine endliche Frist.
+    try:
+        budget = float(budget_s) if budget_s is not None else KETTE_BUDGET_VORGABE_S
+    except (TypeError, ValueError):
+        budget = KETTE_BUDGET_VORGABE_S
+    if not budget == budget or budget <= 0:          # NaN oder nicht positiv
+        budget = KETTE_BUDGET_VORGABE_S
+    frist = min(budget, KETTE_BUDGET_HOECHSTENS_S) + KETTE_ZUSCHLAG_S
+    return await call_ai_api("POST", "/ai/kette", json_body=body, timeout=frist)
+
+
 # Ein Dienst liest private Dateien nur im Auftrag eines gebundenen Aufrufers
 # (Post 5782). Die Adresse gilt 10 Minuten fuer jeden, der sie hat: Sie geht nur
 # an AiApi und nie zurueck in das Werkzeug-Ergebnis.

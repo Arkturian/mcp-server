@@ -1110,6 +1110,7 @@ async def call_business_api(
     *,
     params: Optional[Dict[str, Any]] = None,
     json_body: Optional[Dict[str, Any]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
 ) -> Any:
     """Call Business API for invoicing, clients, transactions, and documents.
 
@@ -1120,10 +1121,25 @@ async def call_business_api(
     return await _fetch_json(
         method,
         f"{BUSINESS_API_BASE}{endpoint}",
-        headers={"X-API-Key": effective_key},
+        headers={**(extra_headers or {}), "X-API-Key": effective_key},
         params=params,
         json_body=json_body,
     )
+
+
+def _business_agent_token_header() -> Dict[str, str]:
+    """JWT des aufrufenden Agenten für den Belegversand (#3654, Vertrag #3657).
+
+    business-api reicht es als ``X-Agent-Token`` an comm weiter. Nur so legt comm
+    Herkunft und Gesprächs-Abo für den Agenten an. Nur ein geprüftes Agenten-Token,
+    nie das eines Menschen; andere business-Werkzeuge bekommen es nicht."""
+    from auth import current_caller_jwt, current_caller_verified_agent
+
+    # Ohne konfigurierten Schluessel darf ein Vorgabe-Ziel nie ein Token sehen.
+    if not BUSINESS_API_KEY or not current_caller_verified_agent():
+        return {}
+    jwt_str = current_caller_jwt()
+    return {"X-Agent-Token": jwt_str} if jwt_str else {}
 
 
 async def call_comm_api(
@@ -9086,7 +9102,12 @@ async def business_documents_send(
     body = {}
     if recipient_email:
         body["recipient_email"] = recipient_email
-    return await call_business_api("POST", f"/api/v1/documents/{doc_id}/send", json_body=body)
+    return await call_business_api(
+        "POST",
+        f"/api/v1/documents/{doc_id}/send",
+        json_body=body,
+        extra_headers=_business_agent_token_header(),
+    )
 
 
 @business_mcp.tool(

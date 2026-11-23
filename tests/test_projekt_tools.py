@@ -25,13 +25,14 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(names, {
             "vorgaben_liste", "vorgabe", "vorgabe_anlegen", "projekt_starten", "plan_ueberarbeiten",
             "vorgabe_ablehnen", "projekt_stand", "plan_absegnen", "projektleitung_schalten",
-            "projektleitung_antworten", "tor_oeffnen", "meine_aufgaben",
+            "projektleitung_antworten", "tor_oeffnen", "meine_aufgaben", "vorgabe_loeschen",
         })
 
     async def test_freigeber_tools_carry_the_rule(self):
         tools = {t.name: t for t in await self.mcp.list_tools()}
         for name in ("vorgabe_anlegen", "projekt_starten", "plan_ueberarbeiten", "vorgabe_ablehnen",
-                     "plan_absegnen", "projektleitung_schalten", "projektleitung_antworten", "tor_oeffnen"):
+                     "plan_absegnen", "projektleitung_schalten", "projektleitung_antworten", "tor_oeffnen",
+                     "vorgabe_loeschen"):
             self.assertIn(RECHT, tools[name].description, name)
 
     async def test_vorgabe_mit_analyse(self):
@@ -57,6 +58,10 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
                                                          "projekt_post_id": None}
         await self.rufe("projekt_starten", {"vorgabe_id": 3})
         self.assertEqual([c[0] for c in self.calls], ["GET"])
+
+    async def test_vorgabe_loeschen(self):
+        await self.rufe("vorgabe_loeschen", {"vorgabe_id": 9})
+        self.assertEqual(self.calls, [("DELETE", "/api/v1/vorgaben/9", {})])
 
     async def test_tor_oeffnen_findet_das_paket(self):
         self.antworten[("GET", "/api/v1/vorgaben/7")] = {"projekt_post_id": 500}

@@ -138,6 +138,15 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         return await transport("POST", f"{API}/vorgaben/{_seg(vorgabe_id)}/ablehnen", json_body={"grund": grund})
 
     @mcp.tool(
+        name="vorgabe_loeschen",
+        description=f"""Löscht eine Vorgabe samt Projekt aus der Liste, wie „Löschen“ im Canvas: Die
+        Projektleitung geht aus, niemand wird mehr geweckt, und wer schon an einem Paket arbeitet,
+        bekommt Bescheid. Daten und Beiträge in Content bleiben stehen. {RECHT}""",
+    )
+    async def vorgabe_loeschen(vorgabe_id: int) -> Any:
+        return await transport("DELETE", f"{API}/vorgaben/{_seg(vorgabe_id)}")
+
+    @mcp.tool(
         name="projekt_stand",
         description="""Stand eines Projekts auf einen Blick: Phase, Pakete mit Zuständigen und Phase
         (wartet, bereit, aktiv, blockiert, tor, fertig), Analyse (Antworten je Gesprächspartner),

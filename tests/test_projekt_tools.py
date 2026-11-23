@@ -27,7 +27,7 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
             "vorgabe_ablehnen", "projekt_stand", "plan_absegnen", "projektleitung_schalten",
             "projektleitung_antworten", "tor_oeffnen", "meine_aufgaben", "vorgabe_loeschen",
             "paket_fragen", "paket_verlauf", "deliverable", "deliverable_nachtragen", "deliverable_abnehmen",
-            "projekt_entscheidung", "projekt_entscheidungen",
+            "projekt_entscheidung", "projekt_entscheidungen", "projektleitung_absichten",
         })
 
     async def test_freigeber_tools_carry_the_rule(self):
@@ -113,3 +113,11 @@ class DeliverableToolsTests(ProjektToolsTests):
             "text": "Martin sieht nur seine Konten", "quelle": {"art": "portal", "ref": "Cloud 15:34 UTC"}}}))
         await self.rufe("projekt_entscheidungen", {"vorgabe_id": 10})
         self.assertEqual(self.calls[-1][:2], ("GET", "/api/v1/vorgaben/10/entscheidungen"))
+
+
+class AbsichtenToolTests(ProjektToolsTests):
+    async def test_absichten_gehen_an_den_projektbeitrag(self):
+        self.antworten[("GET", "/api/v1/vorgaben/10")] = {"projekt_post_id": 6417}
+        await self.rufe("projektleitung_absichten", {"vorgabe_id": 10, "absichten": [{"art": "logbuch", "text": "x"}]})
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/projekt/projekte/6417/absichten", {"json_body": {
+            "absichten": [{"art": "logbuch", "text": "x"}], "lage": "", "notiz": ""}}))

@@ -310,3 +310,19 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
     )
     async def projekt_entscheidungen(vorgabe_id: int) -> Any:
         return await transport("GET", f"{API}/vorgaben/{_seg(vorgabe_id)}/entscheidungen")
+
+    @mcp.tool(
+        name="projektleitung_absichten",
+        description="""Nur für den Projektleiter eines Projekts (Kennung `Projektleitung-v<id>`): reicht seine
+        Absichten ein, im selben JSON wie eine Runde der zustandslosen Leitung. Die project-api prüft jede
+        Absicht wie in einer Runde (Phase, Katalog, Tore, geprüfte Entscheidung, Höchstzahl neuer Aufgaben) und
+        führt sie aus; Verworfenes steht in der Antwort und im Logbuch.
+
+        Absichten (Liste von Objekten mit `art`): aufgabe_vergeben, erinnern, antworten, annehmen, zurueckgeben,
+        abnahme_aendern, plan_aendern, frage_stellen, alex_fragen, logbuch. `lage` (ein, zwei Sätze) und `notiz`
+        (Arbeitsnotiz, höchstens 2000 Zeichen) sind freiwillig. Andere Agenten bekommen 403.""",
+    )
+    async def projektleitung_absichten(vorgabe_id: int, absichten: List[dict], lage: str = "", notiz: str = "") -> Any:
+        _, post = await projekt_von(vorgabe_id)
+        return await transport("POST", f"{API}/projekt/projekte/{_seg(post)}/absichten",
+                               json_body={"absichten": list(absichten), "lage": lage, "notiz": notiz})

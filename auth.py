@@ -80,6 +80,25 @@ _current_tenants: contextvars.ContextVar[tuple] = contextvars.ContextVar(
 MANDANT_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
 MANDANTEN_MAX = 100
 
+# #3811: Heimat-Mandant des geprueften Aufrufers, genau der `tenant`-Claim
+# (bei Agenten agents.tenant_id, laut AuthAPI immer ein einzelner Wert). Geht
+# als X-Caller-Tenant an storage-api, die damit Uploads nach Herkunft markiert.
+# Nie `tenant_ids` (die bringt die Mandanten des Besitzers mit).
+_current_home_tenant: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "current_caller_home_tenant", default=""
+)
+
+
+def heimat_mandant_aus_claims(claims: dict) -> str:
+    """Der `tenant`-Claim, wenn er wie ein Mandant aussieht, sonst ""."""
+    t = str(claims.get("tenant") or "").strip()
+    return t if MANDANT_RE.match(t) else ""
+
+
+def current_caller_home_tenant() -> str:
+    """Heimat-Mandant des geprueften Aufrufers (heimat_mandant_aus_claims), sonst ""."""
+    return _current_home_tenant.get()
+
 
 def mandanten_aus_claims(claims: dict) -> tuple:
     """Mandanten eines geprueften JWT fuer storage-api, hoechstens MANDANTEN_MAX.
@@ -691,6 +710,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         )
         _superadmin_token = _current_is_superadmin.set(claims.get("is_superadmin") is True)
         _tenants_token = _current_tenants.set(mandanten_aus_claims(claims))
+        _home_tenant_token = _current_home_tenant.set(heimat_mandant_aus_claims(claims))
 
         # Permission check: server-level + tool-level
         mcp_server = _extract_mcp_server_from_path(request.url.path)
@@ -808,6 +828,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                 _current_is_agent.reset(_is_agent_token)
                 _current_is_superadmin.reset(_superadmin_token)
                 _current_tenants.reset(_tenants_token)
+                _current_home_tenant.reset(_home_tenant_token)
             except (LookupError, NameError):
                 pass
 

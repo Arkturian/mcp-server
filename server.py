@@ -504,7 +504,7 @@ def _storage_restrict_scope() -> str:
     return STORAGE_RESTRICT_OHNE_SCOPE
 
 
-_STORAGE_IDENTITAETS_KOEPFE = ("x-api-key", "x-grant-scope-restrict", "x-grant-scope-tenants")
+_STORAGE_IDENTITAETS_KOEPFE = ("x-api-key", "x-grant-scope-restrict", "x-grant-scope-tenants", "x-caller-tenant")
 
 
 def _storage_headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -521,12 +521,19 @@ def _storage_headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     (auth.current_caller_tenants), damit storage-api personal- und intern-Objekte
     des eigenen Mandanten erkennt. storage-api glaubt den Kopf nur vom
     Gateway-Schluessel. Die Identitaetskoepfe setzt nur diese Funktion: `extra`
-    kann sie nicht ueberschreiben, in keiner Schreibweise."""
-    from auth import current_caller_tenants
+    kann sie nicht ueberschreiben, in keiner Schreibweise.
+
+    #3811: X-Caller-Tenant traegt den Heimat-Mandanten (`tenant`-Claim) des
+    geprueften Aufrufers. storage-api markiert damit neue Uploads nach Herkunft
+    und glaubt ihn ebenfalls nur vom Gateway-Schluessel."""
+    from auth import current_caller_home_tenant, current_caller_tenants
 
     headers = {k: v for k, v in (extra or {}).items()
                if str(k).lower() not in _STORAGE_IDENTITAETS_KOEPFE}
     headers["X-API-KEY"] = STORAGE_API_KEY
+    heimat = current_caller_home_tenant()
+    if heimat:
+        headers["X-Caller-Tenant"] = heimat
     scope = _storage_restrict_scope()
     if scope:
         headers["X-Grant-Scope-Restrict"] = scope

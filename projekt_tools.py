@@ -42,6 +42,14 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
     async def vorgabe_holen(vorgabe_id: int) -> dict:
         return await transport("GET", f"{API}/vorgaben/{_seg(vorgabe_id)}")
 
+    async def paket_schluessel(vorgabe_id: int, paket: str) -> str:
+        _, post = await projekt_von(vorgabe_id)
+        graph = await transport("GET", f"{API}/projekt/projekte/{_seg(post)}")
+        treffer = [a for a in graph.get("aufgaben", []) if str(a.get("plan")) == str(paket)]
+        if not treffer:
+            raise ValueError(f"Paket {paket} gibt es in diesem Projekt nicht.")
+        return str(treffer[0]["schluessel"])
+
     async def projekt_von(vorgabe_id: int) -> tuple[dict, int]:
         v = await vorgabe_holen(vorgabe_id)
         post = v.get("projekt_post_id")
@@ -139,11 +147,19 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
 
     @mcp.tool(
         name="vorgabe_loeschen",
-        description=f"""Löscht eine Vorgabe samt Projekt aus der Liste, wie „Löschen“ im Canvas: Die
-        Projektleitung geht aus, niemand wird mehr geweckt, und wer schon an einem Paket arbeitet,
-        bekommt Bescheid. Daten und Beiträge in Content bleiben stehen. {RECHT}""",
+        description=f"""Löscht eine Vorgabe samt Projekt, wie „Löschen“ im Canvas: Die Projektleitung
+        geht aus, niemand wird mehr geweckt, und wer schon an einem Paket arbeitet, bekommt Bescheid.
+
+        - Ohne `endgueltig` („Aus der Liste nehmen“) bleiben Daten und Beiträge in Content stehen.
+        - Mit `endgueltig=true` („Endgültig löschen“) entfernt die project-api auch den Projekt- und den
+          Leitungsbeitrag in Content, eine eigene Projektleitungs-Sitzung und alle Daten der Vorgabe.
+          Das lässt sich nicht rückgängig machen: nur, wenn der Mensch ausdrücklich „endgültig“ oder
+          „alles löschen“ gesagt hat. Hochgeladene Dateien bleiben privat im Storage.
+        {RECHT}""",
     )
-    async def vorgabe_loeschen(vorgabe_id: int) -> Any:
+    async def vorgabe_loeschen(vorgabe_id: int, endgueltig: bool = False) -> Any:
+        if endgueltig:
+            return await transport("DELETE", f"{API}/vorgaben/{_seg(vorgabe_id)}", params={"endgueltig": "true"})
         return await transport("DELETE", f"{API}/vorgaben/{_seg(vorgabe_id)}")
 
     @mcp.tool(
@@ -160,7 +176,8 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         return {
             "vorgabe_id": vorgabe_id, "titel": v.get("titel"), "projekt_post_id": post,
             "phase": leitung.get("phase") or v.get("phase"),
-            "pakete": [{k: a.get(k) for k in ("plan", "titel", "agent", "phase", "status", "tor", "schluessel")}
+            "pakete": [{k: a.get(k) for k in ("plan", "titel", "agent", "phase", "status", "tor", "schluessel",
+                                              "angenommen", "wartet_auf", "wartet_was")}
                        for a in graph.get("aufgaben", [])],
             "phasen": leitung.get("phasen"),
             "projektleitung": {"modus": leitung.get("modus"), "gehirn": leitung.get("gehirn"),
@@ -203,12 +220,27 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         Kundendaten); das Paket startet sofort. `paket` ist der Planschlüssel, etwa I2. {RECHT}""",
     )
     async def tor_oeffnen(vorgabe_id: int, paket: str) -> Any:
-        _, post = await projekt_von(vorgabe_id)
-        graph = await transport("GET", f"{API}/projekt/projekte/{_seg(post)}")
-        treffer = [a for a in graph.get("aufgaben", []) if str(a.get("plan")) == str(paket)]
-        if not treffer:
-            raise ValueError(f"Paket {paket} gibt es in diesem Projekt nicht.")
-        return await transport("POST", f"{API}/projekt/aufgaben/{treffer[0]['schluessel']}/tor", json_body={})
+        schluessel = await paket_schluessel(vorgabe_id, paket)
+        return await transport("POST", f"{API}/projekt/aufgaben/{schluessel}/tor", json_body={})
+
+    @mcp.tool(
+        name="paket_fragen",
+        description=f"""Frage an den Zuständigen eines Pakets, wie „Frage an <Agent>“ im Canvas. Die Frage
+        steht im Abschnitt der Aufgabe und weckt nur ihn; die Antwort liest du mit `paket_verlauf`.
+        `paket` ist der Planschlüssel, etwa I2. {RECHT}""",
+    )
+    async def paket_fragen(vorgabe_id: int, paket: str, text: str) -> Any:
+        schluessel = await paket_schluessel(vorgabe_id, paket)
+        return await transport("POST", f"{API}/projekt/aufgaben/{schluessel}/frage", json_body={"text": text})
+
+    @mcp.tool(
+        name="paket_verlauf",
+        description="""Meldungen, Fragen und Antworten zu einem Paket, ohne den Weckruf. `paket` ist der
+        Planschlüssel, etwa I2.""",
+    )
+    async def paket_verlauf(vorgabe_id: int, paket: str) -> Any:
+        schluessel = await paket_schluessel(vorgabe_id, paket)
+        return await transport("GET", f"{API}/projekt/aufgaben/{schluessel}/verlauf")
 
     @mcp.tool(
         name="meine_aufgaben",

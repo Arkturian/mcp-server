@@ -26,13 +26,14 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
             "vorgaben_liste", "vorgabe", "vorgabe_anlegen", "projekt_starten", "plan_ueberarbeiten",
             "vorgabe_ablehnen", "projekt_stand", "plan_absegnen", "projektleitung_schalten",
             "projektleitung_antworten", "tor_oeffnen", "meine_aufgaben", "vorgabe_loeschen",
+            "paket_fragen", "paket_verlauf",
         })
 
     async def test_freigeber_tools_carry_the_rule(self):
         tools = {t.name: t for t in await self.mcp.list_tools()}
         for name in ("vorgabe_anlegen", "projekt_starten", "plan_ueberarbeiten", "vorgabe_ablehnen",
                      "plan_absegnen", "projektleitung_schalten", "projektleitung_antworten", "tor_oeffnen",
-                     "vorgabe_loeschen"):
+                     "vorgabe_loeschen", "paket_fragen"):
             self.assertIn(RECHT, tools[name].description, name)
 
     async def test_vorgabe_mit_analyse(self):
@@ -62,6 +63,20 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
     async def test_vorgabe_loeschen(self):
         await self.rufe("vorgabe_loeschen", {"vorgabe_id": 9})
         self.assertEqual(self.calls, [("DELETE", "/api/v1/vorgaben/9", {})])
+
+    async def test_vorgabe_endgueltig_loeschen(self):
+        await self.rufe("vorgabe_loeschen", {"vorgabe_id": 9, "endgueltig": True})
+        self.assertEqual(self.calls, [("DELETE", "/api/v1/vorgaben/9", {"params": {"endgueltig": "true"}})])
+
+    async def test_paket_fragen_und_verlauf(self):
+        self.antworten[("GET", "/api/v1/vorgaben/7")] = {"projekt_post_id": 500}
+        self.antworten[("GET", "/api/v1/projekt/projekte/500")] = {"aufgaben": [
+            {"plan": "I2", "schluessel": "500/t-2"}]}
+        await self.rufe("paket_fragen", {"vorgabe_id": 7, "paket": "I2", "text": "Was soll ich klicken?"})
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/projekt/aufgaben/500/t-2/frage",
+                                          {"json_body": {"text": "Was soll ich klicken?"}}))
+        await self.rufe("paket_verlauf", {"vorgabe_id": 7, "paket": "I2"})
+        self.assertEqual(self.calls[-1], ("GET", "/api/v1/projekt/aufgaben/500/t-2/verlauf", {}))
 
     async def test_tor_oeffnen_findet_das_paket(self):
         self.antworten[("GET", "/api/v1/vorgaben/7")] = {"projekt_post_id": 500}

@@ -529,7 +529,16 @@ def _entfernte_argumente(mcp_server: str, body_json) -> str:
     return ""
 
 
-def _offen(mcp_server: str) -> bool:
+# Rollen, fuer die offene Server nicht gelten: Es zaehlen nur ihre eigenen Rechte (#3857, Entwurf 6426
+# Abschnitt 4). Ein Projektleiter darf ueber `projekt` nur seine fuenf Werkzeuge rufen, auch wenn er in einem
+# Zug arbeitet, den Alex begonnen hat; sonst ginge eine Freigeber-Handlung "im Auftrag" ueber ihn (#3809).
+# Merkmal ist der Rollen-Claim, nicht der Name (wie #3710).
+ROLLEN_OHNE_OFFENE_SERVER: frozenset = frozenset({"projektleitung"})
+
+
+def _offen(mcp_server: str, rolle: str = "") -> bool:
+    if str(rolle or "").strip().lower() in ROLLEN_OHNE_OFFENE_SERVER:
+        return False
     return mcp_server in OFFENE_SERVER and mcp_server not in EXPLICIT_ONLY_SERVERS
 
 
@@ -541,13 +550,13 @@ def _permissions_for_server(permissions: list[str], mcp_server: str) -> list[str
     return permissions
 
 
-def gegriffenes_recht(permissions: list[str], mcp_server: str, tool_name: str) -> str:
+def gegriffenes_recht(permissions: list[str], mcp_server: str, tool_name: str, rolle: str = "") -> str:
     """Das GENAUESTE Recht, das diesen Aufruf erlaubt (#2806): mcp:<s>:<tool> bzw.
     die Stufe vor mcp:<s>:* vor mcp:*:* / mcp:* vor *. Steht hier ein Platzhalter,
     war er fuer den Aufruf noetig. "offen" fuer offene Server; dieselbe Pruefung
     wie im Tor (_permissions_for_server, _match_permission, WERKZEUG_STUFEN)."""
     import aufruf_protokoll as _ap
-    if mcp_server and _offen(mcp_server):
+    if mcp_server and _offen(mcp_server, rolle):
         return "offen"
     perms = _permissions_for_server(permissions, mcp_server)
     ziele = [f"mcp:{mcp_server}:{tool_name}"] + [f"mcp:{mcp_server}:{s}" for s in _stufen_fuer(mcp_server, tool_name)]
@@ -569,7 +578,7 @@ def _aufrufe_vermerken(agent: "AgentContext", mcp_server: str, body_bytes) -> No
         werkzeuge = _aufgerufene_werkzeuge(_json.loads(body_bytes)) if body_bytes else []
         for werkzeug in werkzeuge or [""]:
             _ap.protokoll().vermerken(agent.name, agent.role, mcp_server, werkzeug,
-                                      gegriffenes_recht(agent.permissions, mcp_server, werkzeug))
+                                      gegriffenes_recht(agent.permissions, mcp_server, werkzeug, agent.role))
     except Exception:
         logger.debug("aufruf-protokoll: vermerken gescheitert", exc_info=True)
 
@@ -732,8 +741,8 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                 },
                 status_code=403,
             )
-        if mcp_server and _offen(mcp_server):
-            pass  # offener Server: jedes gueltige Agenten-JWT genuegt
+        if mcp_server and _offen(mcp_server, claims.get("role") or agent.role):
+            pass  # offener Server: jedes gueltige Agenten-JWT genuegt (nicht fuer Projektleiter, #3857)
         elif mcp_server:
             # 1. Server-level: does agent have ANY permission on this MCP?
             # Recognized claims:

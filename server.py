@@ -235,6 +235,12 @@ EVENT_PATH = "/event"
 # Rechte und Besitzer-Regel je Aufrufer. Server ist EXPLICIT_ONLY (unten).
 PERSON_API_URL = os.getenv("PERSON_API_URL", "https://person-api.arkserver.arkturian.com").rstrip("/")
 PERSON_PATH = "/person"
+
+# project-api (Owner: Project Manager). Das JWT des Agenten geht an den Agenten-Zugang
+# auf project.arkturian.com (ohne Google-Gate); Freigeber-Handlungen prüft die project-api
+# am Menschen hinter dem Zug (cloud-api /initiator), Lesen darf jeder Agent.
+PROJEKT_API_BASE = os.getenv("PROJEKT_API_BASE", "https://project.arkturian.com/agenten").rstrip("/")
+PROJEKT_PATH = "/projekt"
 # Shared secret for cross-node IACP role addressing. Must match IACP_TOKEN
 # env on every cloud-api in the federation. Used by send_to_role().
 IACP_TOKEN = os.getenv("IACP_TOKEN", "").strip()
@@ -1002,6 +1008,31 @@ def _person_headers() -> Dict[str, str]:
         raise ValueError("person_requires_caller: person-api braucht den Ausweis des aufrufenden "
                          "Agenten; ohne Aufrufer-Kontext gibt es keinen Aufruf (kein Dienstschluessel)")
     return headers
+
+
+def _projekt_headers() -> Dict[str, str]:
+    """Bearer des aufrufenden Agenten, sonst kein Aufruf: die project-api kennt keinen Dienstschluessel."""
+    headers = _caller_auth_headers()
+    if "Authorization" not in headers:
+        raise ValueError("projekt_requires_caller: die project-api braucht den Ausweis des aufrufenden Agenten")
+    return headers
+
+
+async def call_projekt_api(
+    method: str,
+    endpoint: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Any = None,
+) -> Any:
+    """Call the project-api (see projekt_tools)."""
+    return await _fetch_json(
+        method,
+        f"{PROJEKT_API_BASE}{endpoint}",
+        headers=_projekt_headers(),
+        params=params,
+        json_body=json_body,
+    )
 
 
 async def call_person_api(
@@ -14203,6 +14234,22 @@ register_person_tools(person_mcp, call_person_api)
 
 person_app = person_mcp.streamable_http_app()
 mount_mcp("person", PERSON_PATH, person_app)
+
+
+# project-api MCP (Owner: Project Manager) -------------------------------------
+projekt_mcp = FastMCP(
+    name="projekt",
+    streamable_http_path="/",
+    stateless_http=True,
+    auth=None,
+    log_level="INFO",
+)
+
+from projekt_tools import register_projekt_tools  # noqa: E402
+register_projekt_tools(projekt_mcp, call_projekt_api)
+
+projekt_app = projekt_mcp.streamable_http_app()
+mount_mcp("projekt", PROJEKT_PATH, projekt_app)
 # Personendaten: kein offener Server, Platzhalter (*, mcp:*) zaehlen nicht; frei
 # nur mit mcp:person:<stufe> (read/write/admin, je Werkzeug) oder mcp:person:*.
 _event_auth.EXPLICIT_ONLY_SERVERS.add("person")
@@ -14244,6 +14291,7 @@ _llmtime_stack = AsyncExitStack()
 _newsletter_stack = AsyncExitStack()
 _event_stack = AsyncExitStack()
 _person_stack = AsyncExitStack()
+_projekt_stack = AsyncExitStack()
 
 
 # Track which MCP sessions were started (for shutdown ordering)
@@ -14274,6 +14322,7 @@ def _all_mcps():
         ("newsletter", _newsletter_stack, newsletter_mcp),
         ("event", _event_stack, event_mcp),
         ("person", _person_stack, person_mcp),
+        ("projekt", _projekt_stack, projekt_mcp),
     ]
 
 
@@ -14448,6 +14497,12 @@ async def root() -> Dict[str, Any]:
                 "tools": [tool.name for tool in person_mcp._tool_manager.list_tools()],
                 "upstream": PERSON_API_URL,
                 "description": "person-api: Personen, Kennungen, Zusammenfuehrungen je Mandant (nur mit mcp:person:read/write/admin)",
+            },
+            "projekt": {
+                "path": PROJEKT_PATH,
+                "tools": [tool.name for tool in projekt_mcp._tool_manager.list_tools()],
+                "upstream": PROJEKT_API_BASE,
+                "description": "Projektmanagement: Vorgaben, Projekte starten, Plan absegnen, Projektleitung steuern; Freigeber-Handlungen nur im Auftrag eines Freigebers",
             },
         },
     }

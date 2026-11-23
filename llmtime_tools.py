@@ -251,7 +251,13 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         allgemeine Erfahrung eingeflossen ist. tokens und aktiv_stunden kommen
         aus den Turns der Agenten (zentrale Turn-Ablage der cloud-api), verteilt
         auf die Pakete, die zur Zeit des Turns liefen; bei `item_finish`
-        gemeldete Tokens haben Vorrang. zeilen nur mit `zeilen` am Paket.""",
+        gemeldete Tokens haben Vorrang. zeilen nur mit `zeilen` am Paket.
+        `einheit`: commit (Vorgabe, ein Paket = ein Commit) | aufgabe (ein Paket
+        = eine ganze Aufgabe: alle Commits mit derselben #Nummer im Betreff;
+        `agent` ist dann der mit den meisten Commits). Für die Frage „wie viel
+        braucht diese Aufgabe?“ nimm aufgabe; gib dann `einheit_hinweis` mit aus.
+        `ziehungen=true`: zusätzlich die Summe jedes Laufs (höchstens 10 000
+        Stichproben), um einen ganzen Plan selbst zu simulieren.""",
     )
     async def forecast_aufwand(
         projekt: Optional[str] = None,
@@ -263,10 +269,13 @@ def register_llmtime_tools(mcp, transport: Transport) -> None:
         seed: Optional[int] = None,
         stichproben: Optional[int] = None,
         plattform: Optional[str] = None,
+        einheit: Optional[str] = None,
+        ziehungen: Optional[bool] = None,
     ) -> Any:
         params = _drop_none({
             "projekt": projekt, "agent": agent, "typ": typ, "bereich": bereich, "plattform": plattform,
             "groesse": groesse, "anzahl": anzahl, "seed": seed, "stichproben": stichproben,
+            "einheit": einheit, "ziehungen": None if ziehungen is None else str(ziehungen).lower(),
         })
         return await transport("GET", f"{API}/forecast/aufwand", params=params)
 

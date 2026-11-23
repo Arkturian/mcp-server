@@ -13132,7 +13132,10 @@ async def cloud_session_lifecycle(session_name: str) -> Dict[str, Any]:
         "wipe_on_cleanup (bool, delete history on cleanup), "
         "max_idle_minutes (int, 0=never), auto_restart (bool), "
         "effort (str: low/medium/high/xhigh/max/auto), model (str), "
-        "parent (str: name of the parent agent, one level only; \"\" removes it). "
+        "parent (str: name of the parent agent, one level only; \"\" removes it), "
+        "pinned_resume_session_id (str: conversation the agent resumes at its next start; "
+        "\"\" clears the pin, e.g. when it points to a blocked Codex thread; the answer names "
+        "the old and new value, effective at the next start). "
         "Changing another agent needs its owner, an admin, or sessions:manage within the same tenant. "
         "model/effort only: with sessions:config:model_effort you may change agents of your own "
         "tenant directly; without it the call answers 202 'freigabe_angefragt' and the owner gets "
@@ -13151,6 +13154,7 @@ async def cloud_session_config(
     effort: str | None = None,
     model: str | None = None,
     parent: str | None = None,
+    pinned_resume_session_id: str | None = None,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {}
     if ephemeral is not None:
@@ -13169,7 +13173,19 @@ async def cloud_session_config(
         body["model"] = model
     if parent is not None:
         body["parent"] = parent   # cloud-api prueft: eine Ebene, keine Zyklen, Eltern existiert
-    return await call_cloud_api("PATCH", f"/api/sessions/{session_name}/config", json_body=body)
+    if pinned_resume_session_id is not None:
+        # #3786: "" leert den Pin (das Werkzeug kann null nicht von "nicht angegeben" trennen).
+        # cloud-api prueft die Faden-ID (422 invalid_resume_id) und das Recht (Besitzer, Admin,
+        # sessions:manage im Mandanten). Der Tag gehoert zum alten Faden und faellt mit, auch
+        # auf einer cloud-api vor #3786, die ihn nicht selbst leert.
+        body["pinned_resume_session_id"] = pinned_resume_session_id
+        body["pinned_resume_tag"] = ""
+    antwort = await call_cloud_api("PATCH", f"/api/sessions/{session_name}/config", json_body=body)
+    if (pinned_resume_session_id is not None and isinstance(antwort, dict)
+            and antwort.get("action") == "updated" and "pinned_resume_session_id" not in antwort):
+        antwort["hinweis"] = ("Pin gesetzt; den alten Wert meldet erst cloud-api ab #3786. "
+                              "Wirkt beim naechsten Start.")
+    return antwort
 
 
 @cloud_mcp.tool(

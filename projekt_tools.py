@@ -402,7 +402,7 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
 
     @mcp.tool(
         name="spaces_liste",
-        description="""Die Project Spaces im Projektmanagement: Whiteboards je Thema mit Ideen und Projekten.
+        description="""Die Project Spaces im Projektmanagement: Whiteboards je Thema mit Statements und Projekten.
         id, name und Zahl der Karten; „Allgemein“ (id 0) für Karten ohne Space.""",
     )
     async def spaces_liste() -> Any:
@@ -410,9 +410,9 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
 
     @mcp.tool(
         name="space_posten",
-        description="""Legt eine Karte in einen Project Space, so wie sie ist: eine Idee, an der nichts läuft
-        (kein Planer, keine Analyse, keine Projektleitung). Aus ihr wird erst ein Projekt, wenn der Mensch im
-        Canvas „Daraus ein Projekt machen“ wählt.
+        description="""Legt eine Karte in einen Project Space, so wie sie ist: ein Statement, an dem nichts läuft
+        (kein Planer, keine Analyse, keine Projektleitung). Daraus wird erst ein Projekt, wenn der Mensch im
+        Canvas „Daraus ein Projekt machen“ wählt. Nenn es dem Menschen gegenüber „Statement“, nicht „Idee“.
 
         - Nur, wenn dein Mensch es dir ausdrücklich sagt, etwa „hau das in den Project Space“. Nie von dir aus.
         - `text`: genau das, was er meint, wörtlich übernommen, ohne Umformulieren oder Ergänzen. `titel` nur,

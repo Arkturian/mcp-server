@@ -71,3 +71,47 @@ def test_vorgabe_ist_leer():
         if alt is not None:
             os.environ["MCP_OFFENE_SERVER"] = alt
         importlib.reload(auth)
+
+
+
+# #3857: Fuer Projektleiter (Rolle projektleitung) gelten offene Server nicht, nur ihre eigenen Rechte.
+
+def _projektleiter_aufruf(monkeypatch, werkzeug, server="projekt", rolle="projektleitung"):
+    monkeypatch.setattr(auth, "OFFENE_SERVER", {"llmtime", "projekt"})
+    monkeypatch.setattr(auth, "EXPLICIT_ONLY_SERVERS", set())
+    rechte = ["mcp:projekt:projekt_stand", "mcp:projekt:projekt_entscheidungen", "mcp:projekt:deliverable",
+              "mcp:projekt:projekt_entscheidung", "mcp:projekt:projektleitung_absichten"]
+    monkeypatch.setattr(auth, "_pruefen", claims_fest(lambda token: {
+        "type": "agent", "agent_name": "Projektleitung-v10", "role": rolle,
+        "permissions": rechte if rolle == "projektleitung" else ["mcp:issue:*"]}))
+    aufruf = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                         "params": {"name": werkzeug, "arguments": {"vorgabe_id": 0}}})
+
+    async def go():
+        h = {"Content-Type": "application/json", "Authorization": "Bearer t"}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app()), base_url="http://gw") as c:
+            return await c.post(f"/{server}/", content=aufruf, headers=h)
+    return asyncio.run(go()).status_code
+
+
+def test_projektleiter_ruft_nur_seine_werkzeuge(monkeypatch):
+    assert _projektleiter_aufruf(monkeypatch, "projekt_stand") == 200
+    assert _projektleiter_aufruf(monkeypatch, "projektleitung_absichten") == 200
+    for werkzeug in ("plan_absegnen", "tor_oeffnen", "vorgabe_loeschen", "deliverable_abnehmen"):
+        assert _projektleiter_aufruf(monkeypatch, werkzeug) == 403, werkzeug
+
+
+def test_projektleiter_hat_keinen_offenen_llmtime(monkeypatch):
+    assert _projektleiter_aufruf(monkeypatch, "forecast_when", server="llmtime") == 403
+
+
+def test_andere_agenten_bleiben_offen(monkeypatch):
+    assert _projektleiter_aufruf(monkeypatch, "plan_absegnen", rolle="developer") == 200
+
+
+def test_gegriffenes_recht_nennt_fuer_projektleiter_das_eigene_recht(monkeypatch):
+    monkeypatch.setattr(auth, "OFFENE_SERVER", {"projekt"})
+    monkeypatch.setattr(auth, "EXPLICIT_ONLY_SERVERS", set())
+    assert auth.gegriffenes_recht(["mcp:projekt:projekt_stand"], "projekt", "projekt_stand") == "offen"
+    assert auth.gegriffenes_recht(["mcp:projekt:projekt_stand"], "projekt", "projekt_stand",
+                                  "projektleitung") == "mcp:projekt:projekt_stand"

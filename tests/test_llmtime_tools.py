@@ -121,6 +121,15 @@ class LlmtimeToolsTests(unittest.IsolatedAsyncioTestCase):
         for word in ("Mengen, kein Wert", "je_typ", "unbekannt"):
             self.assertIn(word, tools["vergleich_plattform"].description)
 
+    async def test_aufwand_per_task_and_raw_draws(self):
+        await self.mcp.call_tool("forecast_aufwand", {"agent": "Cloud-worker", "einheit": "aufgabe",
+                                                      "ziehungen": True, "stichproben": 1000})
+        self.assertEqual(self.calls[-1], ("GET", "/api/v1/forecast/aufwand", {"params": {
+            "agent": "Cloud-worker", "einheit": "aufgabe", "ziehungen": "true", "stichproben": 1000}}))
+        tools = {t.name: t for t in await self.mcp.list_tools()}
+        for word in ("einheit", "aufgabe", "ziehungen", "einheit_hinweis"):
+            self.assertIn(word, tools["forecast_aufwand"].description)
+
     async def test_how_many_requires_bis(self):
         await self.mcp.call_tool("forecast_how_many", {"projekt": "demo", "bis": "2026-11-21"})
         self.assertEqual(self.calls[0][2]["params"], {"projekt": "demo", "bis": "2026-11-21"})

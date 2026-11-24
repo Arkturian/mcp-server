@@ -235,6 +235,12 @@ EVENT_PATH = "/event"
 # Rechte und Besitzer-Regel je Aufrufer. Server ist EXPLICIT_ONLY (unten).
 PERSON_API_URL = os.getenv("PERSON_API_URL", "https://person-api.arkserver.arkturian.com").rstrip("/")
 PERSON_PATH = "/person"
+
+# project-api (Owner: Project Manager). Das JWT des Agenten geht an den Agenten-Zugang
+# auf project.arkturian.com (ohne Google-Gate); Freigeber-Handlungen prüft die project-api
+# am Menschen hinter dem Zug (cloud-api /initiator), Lesen darf jeder Agent.
+PROJEKT_API_BASE = os.getenv("PROJEKT_API_BASE", "https://project.arkturian.com/agenten").rstrip("/")
+PROJEKT_PATH = "/projekt"
 # Shared secret for cross-node IACP role addressing. Must match IACP_TOKEN
 # env on every cloud-api in the federation. Used by send_to_role().
 IACP_TOKEN = os.getenv("IACP_TOKEN", "").strip()
@@ -504,7 +510,7 @@ def _storage_restrict_scope() -> str:
     return STORAGE_RESTRICT_OHNE_SCOPE
 
 
-_STORAGE_IDENTITAETS_KOEPFE = ("x-api-key", "x-grant-scope-restrict", "x-grant-scope-tenants")
+_STORAGE_IDENTITAETS_KOEPFE = ("x-api-key", "x-grant-scope-restrict", "x-grant-scope-tenants", "x-caller-tenant")
 
 
 def _storage_headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -521,12 +527,19 @@ def _storage_headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     (auth.current_caller_tenants), damit storage-api personal- und intern-Objekte
     des eigenen Mandanten erkennt. storage-api glaubt den Kopf nur vom
     Gateway-Schluessel. Die Identitaetskoepfe setzt nur diese Funktion: `extra`
-    kann sie nicht ueberschreiben, in keiner Schreibweise."""
-    from auth import current_caller_tenants
+    kann sie nicht ueberschreiben, in keiner Schreibweise.
+
+    #3811: X-Caller-Tenant traegt den Heimat-Mandanten (`tenant`-Claim) des
+    geprueften Aufrufers. storage-api markiert damit neue Uploads nach Herkunft
+    und glaubt ihn ebenfalls nur vom Gateway-Schluessel."""
+    from auth import current_caller_home_tenant, current_caller_tenants
 
     headers = {k: v for k, v in (extra or {}).items()
                if str(k).lower() not in _STORAGE_IDENTITAETS_KOEPFE}
     headers["X-API-KEY"] = STORAGE_API_KEY
+    heimat = current_caller_home_tenant()
+    if heimat:
+        headers["X-Caller-Tenant"] = heimat
     scope = _storage_restrict_scope()
     if scope:
         headers["X-Grant-Scope-Restrict"] = scope
@@ -1002,6 +1015,31 @@ def _person_headers() -> Dict[str, str]:
         raise ValueError("person_requires_caller: person-api braucht den Ausweis des aufrufenden "
                          "Agenten; ohne Aufrufer-Kontext gibt es keinen Aufruf (kein Dienstschluessel)")
     return headers
+
+
+def _projekt_headers() -> Dict[str, str]:
+    """Bearer des aufrufenden Agenten, sonst kein Aufruf: die project-api kennt keinen Dienstschluessel."""
+    headers = _caller_auth_headers()
+    if "Authorization" not in headers:
+        raise ValueError("projekt_requires_caller: die project-api braucht den Ausweis des aufrufenden Agenten")
+    return headers
+
+
+async def call_projekt_api(
+    method: str,
+    endpoint: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Any = None,
+) -> Any:
+    """Call the project-api (see projekt_tools)."""
+    return await _fetch_json(
+        method,
+        f"{PROJEKT_API_BASE}{endpoint}",
+        headers=_projekt_headers(),
+        params=params,
+        json_body=json_body,
+    )
 
 
 async def call_person_api(
@@ -13147,7 +13185,10 @@ async def cloud_session_lifecycle(session_name: str) -> Dict[str, Any]:
         "wipe_on_cleanup (bool, delete history on cleanup), "
         "max_idle_minutes (int, 0=never), auto_restart (bool), "
         "effort (str: low/medium/high/xhigh/max/auto), model (str), "
-        "parent (str: name of the parent agent, one level only; \"\" removes it). "
+        "parent (str: name of the parent agent, one level only; \"\" removes it), "
+        "pinned_resume_session_id (str: conversation the agent resumes at its next start; "
+        "\"\" clears the pin, e.g. when it points to a blocked Codex thread; the answer names "
+        "the old and new value, effective at the next start). "
         "Changing another agent needs its owner, an admin, or sessions:manage within the same tenant. "
         "model/effort only: with sessions:config:model_effort you may change agents of your own "
         "tenant directly; without it the call answers 202 'freigabe_angefragt' and the owner gets "
@@ -13166,6 +13207,7 @@ async def cloud_session_config(
     effort: str | None = None,
     model: str | None = None,
     parent: str | None = None,
+    pinned_resume_session_id: str | None = None,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {}
     if ephemeral is not None:
@@ -13184,7 +13226,19 @@ async def cloud_session_config(
         body["model"] = model
     if parent is not None:
         body["parent"] = parent   # cloud-api prueft: eine Ebene, keine Zyklen, Eltern existiert
-    return await call_cloud_api("PATCH", f"/api/sessions/{session_name}/config", json_body=body)
+    if pinned_resume_session_id is not None:
+        # #3786: "" leert den Pin (das Werkzeug kann null nicht von "nicht angegeben" trennen).
+        # cloud-api prueft die Faden-ID (422 invalid_resume_id) und das Recht (Besitzer, Admin,
+        # sessions:manage im Mandanten). Der Tag gehoert zum alten Faden und faellt mit, auch
+        # auf einer cloud-api vor #3786, die ihn nicht selbst leert.
+        body["pinned_resume_session_id"] = pinned_resume_session_id
+        body["pinned_resume_tag"] = ""
+    antwort = await call_cloud_api("PATCH", f"/api/sessions/{session_name}/config", json_body=body)
+    if (pinned_resume_session_id is not None and isinstance(antwort, dict)
+            and antwort.get("action") == "updated" and "pinned_resume_session_id" not in antwort):
+        antwort["hinweis"] = ("Pin gesetzt; den alten Wert meldet erst cloud-api ab #3786. "
+                              "Wirkt beim naechsten Start.")
+    return antwort
 
 
 @cloud_mcp.tool(
@@ -14218,6 +14272,22 @@ register_person_tools(person_mcp, call_person_api)
 
 person_app = person_mcp.streamable_http_app()
 mount_mcp("person", PERSON_PATH, person_app)
+
+
+# project-api MCP (Owner: Project Manager) -------------------------------------
+projekt_mcp = FastMCP(
+    name="projekt",
+    streamable_http_path="/",
+    stateless_http=True,
+    auth=None,
+    log_level="INFO",
+)
+
+from projekt_tools import register_projekt_tools  # noqa: E402
+register_projekt_tools(projekt_mcp, call_projekt_api)
+
+projekt_app = projekt_mcp.streamable_http_app()
+mount_mcp("projekt", PROJEKT_PATH, projekt_app)
 # Personendaten: kein offener Server, Platzhalter (*, mcp:*) zaehlen nicht; frei
 # nur mit mcp:person:<stufe> (read/write/admin, je Werkzeug) oder mcp:person:*.
 _event_auth.EXPLICIT_ONLY_SERVERS.add("person")
@@ -14259,6 +14329,7 @@ _llmtime_stack = AsyncExitStack()
 _newsletter_stack = AsyncExitStack()
 _event_stack = AsyncExitStack()
 _person_stack = AsyncExitStack()
+_projekt_stack = AsyncExitStack()
 
 
 # Track which MCP sessions were started (for shutdown ordering)
@@ -14289,6 +14360,7 @@ def _all_mcps():
         ("newsletter", _newsletter_stack, newsletter_mcp),
         ("event", _event_stack, event_mcp),
         ("person", _person_stack, person_mcp),
+        ("projekt", _projekt_stack, projekt_mcp),
     ]
 
 
@@ -14463,6 +14535,12 @@ async def root() -> Dict[str, Any]:
                 "tools": [tool.name for tool in person_mcp._tool_manager.list_tools()],
                 "upstream": PERSON_API_URL,
                 "description": "person-api: Personen, Kennungen, Zusammenfuehrungen je Mandant (nur mit mcp:person:read/write/admin)",
+            },
+            "projekt": {
+                "path": PROJEKT_PATH,
+                "tools": [tool.name for tool in projekt_mcp._tool_manager.list_tools()],
+                "upstream": PROJEKT_API_BASE,
+                "description": "Projektmanagement: Vorgaben, Projekte starten, Plan absegnen, Projektleitung steuern; Freigeber-Handlungen nur im Auftrag eines Freigebers",
             },
         },
     }

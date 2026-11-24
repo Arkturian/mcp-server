@@ -10900,13 +10900,16 @@ async def comm_gmail_list_accounts() -> Dict[str, Any]:
         "On pdrei: 'jascha' (jascha.popovic@bellevue-living.net). "
         "Use gmail_list_accounts to see what's currently configured on the instance. "
         "Query examples: 'is:unread', 'from:someone@email.com', 'subject:Rechnung', "
-        "'newer_than:1d', 'in:sent', 'label:DIHA'."
+        "'newer_than:1d', 'in:sent', 'label:DIHA'. "
+        "nur_kopf=true: nur Datum, Absender, Empfänger, Betreff, Kurztext und "
+        "Anhang-Namen, ohne Mailtext (für Übersichten; den Text dann mit gmail_get_message)."
     ),
 )
 async def comm_gmail_list_messages(
     source: str,
     query: str = "",
     max_results: int = 10,
+    nur_kopf: bool = False,
 ) -> Dict[str, Any]:
     # Build params dict instead of concatenating into the URL — httpx
     # handles URL-encoding (colons in `from:`, @-signs in emails, etc.)
@@ -10916,6 +10919,8 @@ async def comm_gmail_list_messages(
     params: Dict[str, Any] = {"max_results": max_results}
     if query:
         params["query"] = query
+    if nur_kopf:
+        params["nur_kopf"] = "true"
     return await call_comm_api("GET", f"/api/v1/gmail/{source}/messages", params=params)
 
 

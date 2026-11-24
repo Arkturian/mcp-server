@@ -92,6 +92,8 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         - Ein Projekt dreht sich um ein Deliverable: was der Mensch am Ende hat. `typ` (frage, funktion,
           fehler, dokument, inhalt, betrieb) und `deliverable` (in seinen Worten, woran er erkennt, dass es
           fertig ist, etwa „Screenshot der neuen Ansicht“) sind freiwillig; sonst erkennt sie der Planer.
+        - Mit `skizzieren=true` plant niemand: Der Mensch skizziert die Pakete selbst, danach formuliert der
+          Planer sie aus (`plan_skizzieren`).
         {RECHT}""",
     )
     async def vorgabe_anlegen(
@@ -101,8 +103,11 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         analyse_fragen: Optional[List[str]] = None,
         typ: Optional[str] = None,
         deliverable: Optional[str] = None,
+        skizzieren: bool = False,
     ) -> Any:
         rumpf: Dict[str, Any] = _drop_none({"text": text, "titel": titel, "typ": typ, "deliverable": deliverable})
+        if skizzieren:
+            rumpf["planen"] = False
         if analyse_partner:
             rumpf["analyse"] = {"partner": list(analyse_partner), "fragen": list(analyse_fragen or [])}
         return await transport("POST", f"{API}/vorgaben", json_body=rumpf)
@@ -143,6 +148,60 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         v = await vorgabe_holen(vorgabe_id)
         return await transport("POST", f"{API}/vorgaben/{_seg(vorgabe_id)}/ueberarbeiten",
                                json_body={"version": v.get("aktuelle_version"), "anmerkung": anmerkung})
+
+    @mcp.tool(
+        name="plan_zeichnen",
+        description=f"""Speichert einen umgezeichneten Plan als neue Fassung, wie „Als Fassung speichern“ im Canvas
+        (Alex, 24.11.2026: Projektmanager als Designtool). Geht, solange der Plan zur Prüfung steht, mit Phasen in
+        Abstimmung oder Absegnen (dann stimmen die Beteiligten neu ab).
+
+        `pakete`: die vollständige Liste, jedes mit schluessel, ziel, titel, beschreibung, agent, groesse (S, M, L),
+        abhaengig_von, abnahme, optional tor, wofuer, lieferung, folgearbeit, nachweis und `leitung` (leer =
+        Projektleitung, "eigen" = eigene zustandslose Leitung, sonst ein Agent aus dem Katalog). Alles Übrige
+        (Deliverable, Verständnis, Risiken) bleibt aus der Fassung davor. `ziele` nur, wenn sie sich ändern.
+        Prüffehler (Kreise, unbekannte Bezüge oder Agenten) kommen als 422 und werden nicht gespeichert. {RECHT}""",
+    )
+    async def plan_zeichnen(vorgabe_id: int, pakete: List[dict], ziele: Optional[List[dict]] = None,
+                            anmerkung: str = "") -> Any:
+        v = await vorgabe_holen(vorgabe_id)
+        rumpf: Dict[str, Any] = {"version": v.get("aktuelle_version"), "issues": list(pakete), "anmerkung": anmerkung}
+        if ziele:
+            rumpf["ziele"] = list(ziele)
+        return await transport("PUT", f"{API}/vorgaben/{_seg(vorgabe_id)}/plan", json_body=rumpf)
+
+    @mcp.tool(
+        name="plan_skizzieren",
+        description=f"""Der Mensch skizziert die Pakete, der Planer formuliert sie aus (24.11.2026). Geht ohne Plan
+        (Vorgabe mit `skizzieren=true` angelegt oder nach einem Planungsfehler), auf einem Plan zur Prüfung und mit
+        Phasen in der Abstimmung.
+
+        `schritte`: je Paket schluessel (I1, I2 …), titel, abhaengig_von (Schlüssel), optional agent, ziel und
+        leitung. Schlüssel, Titel, Pfeile und angegebene Zuständige bleiben; der Planer ergänzt Auftrag, Abnahme,
+        Wofür, Größe, fehlende Zuständige, Ziele und Deliverable. `ziele` (schluessel, titel) optional. {RECHT}""",
+    )
+    async def plan_skizzieren(vorgabe_id: int, schritte: List[dict], ziele: Optional[List[dict]] = None,
+                              anmerkung: str = "") -> Any:
+        v = await vorgabe_holen(vorgabe_id)
+        rumpf: Dict[str, Any] = {"schritte": list(schritte), "ziele": list(ziele or []), "anmerkung": anmerkung}
+        if v.get("plan"):
+            rumpf["version"] = v.get("aktuelle_version")
+        return await transport("POST", f"{API}/vorgaben/{_seg(vorgabe_id)}/skizze", json_body=rumpf)
+
+    @mcp.tool(
+        name="projekt_aendern",
+        description=f"""Ändert ein laufendes Projekt, wie „Änderungen übernehmen“ im Canvas (24.11.2026).
+
+        `aenderungen`: je Paket ein Objekt mit `schluessel` (Planschlüssel) und nur den Feldern, die sich ändern:
+        - neues Paket: neu=true, titel, agent, optional abhaengig_von, ziel, leitung, beschreibung
+        - streichen=true: nur, solange es nicht begonnen hat
+        - agent, abhaengig_von: nur, solange es nicht begonnen hat
+        - titel, leitung ("" = Projektleitung, "eigen" oder ein Agent): solange es nicht fertig ist
+        Geprüft wird alles vorher; geht etwas nicht, kommt 422 mit allen Gründen und nichts ist geändert. Danach
+        weckt die project-api, wer dran ist, und die Projektleitung erfährt die Änderung. {RECHT}""",
+    )
+    async def projekt_aendern(vorgabe_id: int, aenderungen: List[dict], anmerkung: str = "") -> Any:
+        return await transport("POST", f"{API}/vorgaben/{_seg(vorgabe_id)}/aenderungen",
+                               json_body={"aenderungen": list(aenderungen), "anmerkung": anmerkung})
 
     @mcp.tool(
         name="vorgabe_ablehnen",

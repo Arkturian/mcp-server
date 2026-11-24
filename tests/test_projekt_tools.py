@@ -28,13 +28,15 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
             "projektleitung_antworten", "tor_oeffnen", "meine_aufgaben", "vorgabe_loeschen",
             "paket_fragen", "paket_verlauf", "deliverable", "deliverable_nachtragen", "deliverable_abnehmen",
             "projekt_entscheidung", "projekt_entscheidungen", "projektleitung_absichten",
+            "plan_zeichnen", "plan_skizzieren", "projekt_aendern",
         })
 
     async def test_freigeber_tools_carry_the_rule(self):
         tools = {t.name: t for t in await self.mcp.list_tools()}
         for name in ("vorgabe_anlegen", "projekt_starten", "plan_ueberarbeiten", "vorgabe_ablehnen",
                      "plan_absegnen", "projektleitung_schalten", "projektleitung_antworten", "tor_oeffnen",
-                     "vorgabe_loeschen", "paket_fragen", "deliverable_nachtragen", "deliverable_abnehmen"):
+                     "vorgabe_loeschen", "paket_fragen", "deliverable_nachtragen", "deliverable_abnehmen",
+                     "plan_zeichnen", "plan_skizzieren", "projekt_aendern"):
             self.assertIn(RECHT, tools[name].description, name)
 
     async def test_vorgabe_mit_analyse(self):
@@ -133,3 +135,35 @@ class AbsichtenToolTests(ProjektToolsTests):
         await self.rufe("projektleitung_absichten", {"vorgabe_id": 10, "absichten": [{"art": "logbuch", "text": "x"}]})
         self.assertEqual(self.calls[-1], ("POST", "/api/v1/projekt/projekte/6417/absichten", {"json_body": {
             "absichten": [{"art": "logbuch", "text": "x"}], "lage": "", "notiz": ""}}))
+
+
+class DesigntoolTests(ProjektToolsTests):
+    """Plan zeichnen, skizzieren und laufend ändern (Alex, 24.11.2026)."""
+
+    async def test_vorgabe_zum_skizzieren(self):
+        await self.rufe("vorgabe_anlegen", {"text": "Testseite", "skizzieren": True})
+        self.assertEqual(self.calls, [("POST", "/api/v1/vorgaben", {"json_body": {"text": "Testseite", "planen": False}})])
+
+    async def test_plan_zeichnen_nimmt_die_aktuelle_fassung(self):
+        self.antworten[("GET", "/api/v1/vorgaben/8")] = {"aktuelle_version": 3, "plan": {"version": 3}}
+        pakete = [{"schluessel": "I1", "titel": "Bauen", "agent": "CloudV2"}]
+        await self.rufe("plan_zeichnen", {"vorgabe_id": 8, "pakete": pakete})
+        self.assertEqual(self.calls[-1], ("PUT", "/api/v1/vorgaben/8/plan",
+                                          {"json_body": {"version": 3, "issues": pakete, "anmerkung": ""}}))
+
+    async def test_skizze_ohne_plan_hat_keine_fassung(self):
+        self.antworten[("GET", "/api/v1/vorgaben/9")] = {"aktuelle_version": None, "plan": None}
+        schritte = [{"schluessel": "I1", "titel": "Bauen", "abhaengig_von": []}]
+        await self.rufe("plan_skizzieren", {"vorgabe_id": 9, "schritte": schritte})
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/vorgaben/9/skizze",
+                                          {"json_body": {"schritte": schritte, "ziele": [], "anmerkung": ""}}))
+        self.antworten[("GET", "/api/v1/vorgaben/9")] = {"aktuelle_version": 2, "plan": {"version": 2}}
+        await self.rufe("plan_skizzieren", {"vorgabe_id": 9, "schritte": schritte})
+        self.assertEqual(self.calls[-1][2]["json_body"]["version"], 2)
+
+    async def test_projekt_aendern(self):
+        aenderungen = [{"schluessel": "I4", "neu": True, "titel": "Domain", "agent": "Cloud-worker"},
+                       {"schluessel": "I2", "leitung": "eigen"}]
+        await self.rufe("projekt_aendern", {"vorgabe_id": 10, "aenderungen": aenderungen})
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/vorgaben/10/aenderungen",
+                                          {"json_body": {"aenderungen": aenderungen, "anmerkung": ""}}))

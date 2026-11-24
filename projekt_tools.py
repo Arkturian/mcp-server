@@ -307,8 +307,9 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         - `auftrag`: Alex hat deinen laufenden Zug selbst begonnen (ref leer). Dann gilt sie sofort.
         - `karte`: message_id der Karte, auf die Alex so geantwortet hat.
         - `austausch`: Nummer des Ereignisses im Austausch des Projekts.
-        - `portal`: Agent und Zeit eines Portal-Zugs, etwa „Cloud 23.11. 15:34 UTC“. Den kann die project-api
-          nicht nachlesen: Die Entscheidung bleibt ungeprüft, Alex bekommt eine Karte und bestätigt sie.""",
+        - `portal`: Alex hat es dir im Portal geschrieben. `quelle_ref` ist `<dein Name>@<ISO-Zeit>` seiner
+          Nachricht, etwa `Cloud@2026-11-23T15:34:00Z`, und `text` steht wörtlich darin. Die cloud-api bestätigt
+          das (zug-pruefen); dann gilt sie sofort. Passt es nicht, bekommt Alex eine Karte und bestätigt sie.""",
     )
     async def projekt_entscheidung(vorgabe_id: int, text: str, quelle_art: str, quelle_ref: str = "") -> Any:
         return await transport("POST", f"{API}/vorgaben/{_seg(vorgabe_id)}/entscheidungen",

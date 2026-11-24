@@ -204,13 +204,24 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
 
     @mcp.tool(
         name="projektleitung_schalten",
-        description=f"""Schalter je Projekt: `modus` an (handelt selbst), trocken (schreibt nur ins
-        Logbuch, was sie täte) oder aus; `gehirn` kette (zustandslos) oder sitzung (eigene
-        Opus-Sitzung). {RECHT}""",
+        description=f"""Schalter je Projekt wie im Canvas: `modus` an (handelt selbst), trocken (schreibt
+        nur ins Logbuch, was sie täte) oder aus. `intelligenz` sparsam (zustandslos), normal (eigene
+        Sitzung, Sonnet) oder gruendlich (eigene Sitzung, Opus); leer lässt sie, wie sie ist.
+        `quelle_agent`: ein eigener Agent des Besitzers, aus dem die Projektleitung mit Verlauf und
+        Gedächtnis geklont wird; leer ("") nimmt die Quelle weg, weglassen lässt sie. {RECHT}""",
     )
-    async def projektleitung_schalten(vorgabe_id: int, modus: str, gehirn: str = "kette") -> Any:
-        return await transport("PUT", f"{API}/vorgaben/{_seg(vorgabe_id)}/leitung",
-                               json_body={"modus": modus, "gehirn": gehirn})
+    async def projektleitung_schalten(vorgabe_id: int, modus: str, intelligenz: Optional[str] = None,
+                                      quelle_agent: Optional[str] = None) -> Any:
+        rumpf: Dict[str, Any] = {"modus": modus}
+        if not intelligenz:
+            # Der Schalter setzt Gehirn und Intelligenz immer mit; ohne Angabe bleibt die bisherige.
+            detail = await transport("GET", f"{API}/vorgaben/{_seg(vorgabe_id)}")
+            intelligenz = ((detail or {}).get("leitung") or {}).get("intelligenz") if isinstance(detail, dict) else None
+        if intelligenz:
+            rumpf["intelligenz"] = intelligenz
+        if quelle_agent is not None:
+            rumpf["quelle_agent"] = quelle_agent
+        return await transport("PUT", f"{API}/vorgaben/{_seg(vorgabe_id)}/leitung", json_body=rumpf)
 
     @mcp.tool(
         name="projektleitung_antworten",

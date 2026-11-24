@@ -61,6 +61,18 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
         await self.rufe("projekt_starten", {"vorgabe_id": 3})
         self.assertEqual([c[0] for c in self.calls], ["GET"])
 
+    async def test_projektleitung_schalten_behaelt_die_intelligenz(self):
+        self.antworten[("GET", "/api/v1/vorgaben/10")] = {"leitung": {"modus": "an", "intelligenz": "gruendlich"}}
+        await self.rufe("projektleitung_schalten", {"vorgabe_id": 10, "modus": "trocken"})
+        self.assertEqual(self.calls[-1], ("PUT", "/api/v1/vorgaben/10/leitung",
+                                          {"json_body": {"modus": "trocken", "intelligenz": "gruendlich"}}))
+
+    async def test_projektleitung_schalten_mit_klon_quelle(self):
+        await self.rufe("projektleitung_schalten", {"vorgabe_id": 10, "modus": "an", "intelligenz": "normal",
+                                                    "quelle_agent": "Marketing"})
+        self.assertEqual(self.calls, [("PUT", "/api/v1/vorgaben/10/leitung", {"json_body": {
+            "modus": "an", "intelligenz": "normal", "quelle_agent": "Marketing"}})])
+
     async def test_vorgabe_loeschen(self):
         await self.rufe("vorgabe_loeschen", {"vorgabe_id": 9})
         self.assertEqual(self.calls, [("DELETE", "/api/v1/vorgaben/9", {})])

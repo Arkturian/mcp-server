@@ -28,7 +28,7 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
             "projektleitung_antworten", "tor_oeffnen", "meine_aufgaben", "vorgabe_loeschen",
             "paket_fragen", "paket_verlauf", "deliverable", "deliverable_nachtragen", "deliverable_abnehmen",
             "projekt_entscheidung", "projekt_entscheidungen", "projektleitung_absichten",
-            "plan_zeichnen", "plan_skizzieren", "projekt_aendern",
+            "plan_zeichnen", "plan_skizzieren", "projekt_aendern", "spaces_liste", "space_posten",
         })
 
     async def test_freigeber_tools_carry_the_rule(self):
@@ -167,3 +167,24 @@ class DesigntoolTests(ProjektToolsTests):
         await self.rufe("projekt_aendern", {"vorgabe_id": 10, "aenderungen": aenderungen})
         self.assertEqual(self.calls[-1], ("POST", "/api/v1/vorgaben/10/aenderungen",
                                           {"json_body": {"aenderungen": aenderungen, "anmerkung": ""}}))
+
+
+class SpacePostenTests(ProjektToolsTests):
+    async def test_space_posten_nach_name_wortlich_als_idee(self):
+        self.antworten[("GET", "/api/v1/spaces")] = [{"id": 0, "name": "Allgemein"}, {"id": 3, "name": "Insecta"}]
+        self.antworten[("POST", "/api/v1/spaces/3/ideen")] = {"id": 41, "titel": None, "status": "idee",
+                                                             "space_id": 3, "quelle": "gespraech:Insecta"}
+        await self.rufe("space_posten", {"text": "Gasmodell gegen Messdaten prüfen", "space": "insecta",
+                                         "quelle": "gespraech:Insecta"})
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/spaces/3/ideen", {"json_body": {
+            "text": "Gasmodell gegen Messdaten prüfen", "quelle": "gespraech:Insecta"}}))
+
+    async def test_space_posten_ohne_space_geht_nach_allgemein(self):
+        await self.rufe("space_posten", {"text": "Eine Idee für später"})
+        self.assertEqual(self.calls, [("POST", "/api/v1/spaces/0/ideen", {"json_body": {"text": "Eine Idee für später"}})])
+
+    async def test_space_posten_unbekannter_space_nennt_die_liste(self):
+        self.antworten[("GET", "/api/v1/spaces")] = [{"id": 0, "name": "Allgemein"}]
+        ergebnis = await self.rufe("space_posten", {"text": "x y z", "space": "Gibtsnicht"})
+        self.assertNotIn(("POST", "/api/v1/spaces/0/ideen"), [(c[0], c[1]) for c in self.calls])
+        self.assertIn("space_unbekannt", str(ergebnis))

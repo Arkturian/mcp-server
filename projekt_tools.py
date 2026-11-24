@@ -397,3 +397,41 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         _, post = await projekt_von(vorgabe_id)
         return await transport("POST", f"{API}/projekt/projekte/{_seg(post)}/absichten",
                                json_body={"absichten": list(absichten), "lage": lage, "notiz": notiz})
+
+    # Project Spaces (#3954, Alex 24.11.2026) --------------------------------------------------------------
+
+    @mcp.tool(
+        name="spaces_liste",
+        description="""Die Project Spaces im Projektmanagement: Whiteboards je Thema mit Ideen und Projekten.
+        id, name und Zahl der Karten; „Allgemein“ (id 0) für Karten ohne Space.""",
+    )
+    async def spaces_liste() -> Any:
+        return await transport("GET", f"{API}/spaces")
+
+    @mcp.tool(
+        name="space_posten",
+        description="""Legt eine Karte in einen Project Space, so wie sie ist: eine Idee, an der nichts läuft
+        (kein Planer, keine Analyse, keine Projektleitung). Aus ihr wird erst ein Projekt, wenn der Mensch im
+        Canvas „Daraus ein Projekt machen“ wählt.
+
+        - Nur, wenn dein Mensch es dir ausdrücklich sagt, etwa „hau das in den Project Space“. Nie von dir aus.
+        - `text`: genau das, was er meint, wörtlich übernommen, ohne Umformulieren oder Ergänzen. `titel` nur,
+          wenn er einen nennt.
+        - `space`: Name oder id des Space; ohne Angabe „Allgemein“. Gibt es den Namen nicht, kommt die Liste der
+          Spaces zurück, und du fragst nach.
+        - `quelle`: woher es kommt, etwa `gespraech:<dein Name>`.""",
+    )
+    async def space_posten(text: str, space: Optional[str] = None, titel: Optional[str] = None,
+                           quelle: Optional[str] = None) -> Any:
+        space_id = 0
+        if space not in (None, "", "0"):
+            liste = await transport("GET", f"{API}/spaces")
+            gesucht = str(space).strip().lower()
+            treffer = [s for s in liste if str(s.get("id")) == gesucht or str(s.get("name", "")).lower() == gesucht]
+            if not treffer:
+                return {"fehler": "space_unbekannt", "text": f"Einen Space „{space}“ gibt es nicht.",
+                        "spaces": [{"id": s.get("id"), "name": s.get("name")} for s in liste]}
+            space_id = int(treffer[0]["id"])
+        karte = await transport("POST", f"{API}/spaces/{_seg(space_id)}/ideen",
+                                json_body=_drop_none({"text": text, "titel": titel, "quelle": quelle}))
+        return {k: karte.get(k) for k in ("id", "titel", "status", "space_id", "quelle")}

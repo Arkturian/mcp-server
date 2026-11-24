@@ -12600,7 +12600,8 @@ async def cloud_history_activity(
         "show their latest window readings. eigenes_konto marks the account your own last "
         "answers ran on; pass agent=<name> to mark another agent's account. Read before "
         "starting large work: if your account runs out before the reset, say so; if a lot "
-        "will expire unused, that is room for backlog work. Operator agents and admins only."
+        "will expire unused, that is room for backlog work. Operator agents and admins; a customer "
+        "agent only for the one account of its tenant that the account register names it in (#3893)."
     ),
 )
 async def cloud_token_lage(agent: str = "") -> Dict[str, Any]:

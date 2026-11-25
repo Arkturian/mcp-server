@@ -56,7 +56,7 @@ def test_storage_id_wird_signiert_und_als_formular_geschickt(als_agent, netz):
     r = _aufruf(storage_id=7, speakers=True)
     url, kw = netz[-1]
     assert kw["form"] == {"file_url": SIGNIERT, "model": "gpt-4o-transcribe-diarize",
-                          "response_format": "diarized_json"}
+                          "response_format": "diarized_json", "confirm_api_billing": "true"}
     assert not kw.get("json_body") and not kw.get("params")
     assert kw["timeout"] >= 1200
     assert r == DIARIZED
@@ -94,7 +94,18 @@ def test_storage_id_verlangt_einen_agenten(netz):
 
 def test_oeffentliche_adresse_bleibt_moeglich(netz):
     _aufruf(file_url="https://example.com/a.mp3", model="whisper-1", language="sl")
-    assert netz[-1][1]["form"] == {"file_url": "https://example.com/a.mp3", "model": "whisper-1", "language": "sl"}
+    assert netz[-1][1]["form"] == {"file_url": "https://example.com/a.mp3", "model": "whisper-1", "language": "sl",
+                                   "confirm_api_billing": "true"}
+
+
+@pytest.mark.parametrize("kw", [{"file_url": "https://example.com/a.mp3"},
+                                {"file_url": "https://example.com/a.mp3", "speakers": True},
+                                {"file_url": "https://example.com/a.mp3", "model": "gpt-4o-transcribe"}])
+def test_bezahlung_wird_immer_bestaetigt(netz, kw):
+    """#3980: /ai/transcribe ist bezahlt (OpenAI); jeder Aufruf traegt confirm_api_billing=true,
+    auch mit der Vorgabe whisper-1 ohne model."""
+    _aufruf(**kw)
+    assert netz[-1][1]["form"]["confirm_api_billing"] == "true"
 
 
 @pytest.mark.parametrize("kw", [{}, {"storage_id": 7, "file_url": "https://example.com/a.mp3"}])

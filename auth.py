@@ -498,8 +498,13 @@ def _werkzeug_erlaubt(perms: list[str], mcp_server: str, tool_name: str) -> bool
 # tools/call (tools/list bleibt beim Token: ein 403 dort hiesse "MCP server failed", und der
 # MCP-Waechter startete den Agenten neu). Antwortet auth-api nicht, gilt ein Stand bis
 # LIVE_RECHTE_NOTSTAND_S; danach wird abgewiesen (fail-closed, Geld-Werkzeuge).
-LIVE_RECHTE_SERVER: frozenset = frozenset(
-    s.strip().lower() for s in os.getenv("MCP_LIVE_RECHTE_SERVER", "business").split(",") if s.strip())
+def _live_server_vorgabe() -> frozenset:
+    """MCP_LIVE_RECHTE_SERVER, kommagetrennt; Vorgabe business. Leer gesetzt schaltet den Abgleich ab."""
+    return frozenset(s.strip().lower() for s in os.getenv("MCP_LIVE_RECHTE_SERVER", "business").split(",")
+                     if s.strip())
+
+
+LIVE_RECHTE_SERVER: frozenset = _live_server_vorgabe()
 LIVE_RECHTE_TTL_S = float(os.getenv("MCP_LIVE_RECHTE_TTL_S", "60"))
 LIVE_RECHTE_NOTSTAND_S = float(os.getenv("MCP_LIVE_RECHTE_NOTSTAND_S", "900"))
 _LIVE_RECHTE: dict[str, tuple[float, list[str]]] = {}

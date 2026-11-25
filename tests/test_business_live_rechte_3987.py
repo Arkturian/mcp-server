@@ -22,6 +22,9 @@ for _k in ("ARKTURIAN_API_KEY", "ONEAL_STORAGE_API_KEY", "JWT_PUBLIC_KEY", "COMM
 import auth  # noqa: E402
 from pruef_helfer import claims_fest  # noqa: E402
 
+# Der echte Abruf, bevor conftest ihn fuer jeden Test sperrt (_live_rechte_ohne_netz).
+_ECHTER_ABRUF = auth._live_rechte_abruf
+
 
 def _app():
     async def ok(request):
@@ -241,7 +244,7 @@ def test_abruf_liest_effective_permissions(monkeypatch):
         return httpx.Response(200, json={"agent": "A b", "extra_permissions": ["x"],
                                          "effective_permissions": ["mcp:business:documents_list", "", 7]})
     _mock_client(monkeypatch, handler)
-    rechte = asyncio.run(auth._live_rechte_abruf("A b/../c", "tok"))
+    rechte = asyncio.run(_ECHTER_ABRUF("A b/../c", "tok"))
     assert rechte == ["mcp:business:documents_list"]
     assert gesehen["url"] == "http://auth.invalid:8050/api/v1/auth/rbac/agents/A%20b%2F..%2Fc/permissions"
     assert gesehen["auth"] == "Bearer tok"
@@ -250,7 +253,7 @@ def test_abruf_liest_effective_permissions(monkeypatch):
 def test_abruf_404_heisst_keine_rechte(monkeypatch):
     monkeypatch.setattr(auth, "MCP_JWT_BASE_URL", "http://auth.invalid:8050")
     _mock_client(monkeypatch, lambda req: httpx.Response(404, json={"detail": "agent_not_found:A"}))
-    assert asyncio.run(auth._live_rechte_abruf("A", "tok")) == []
+    assert asyncio.run(_ECHTER_ABRUF("A", "tok")) == []
 
 
 @pytest.mark.parametrize("antwort", [
@@ -261,7 +264,7 @@ def test_abruf_ohne_verwertbaren_stand(monkeypatch, antwort):
     monkeypatch.setattr(auth, "MCP_JWT_BASE_URL", "http://auth.invalid:8050")
     _mock_client(monkeypatch, lambda req: antwort)
     with pytest.raises(auth.LiveRechteUnbekannt):
-        asyncio.run(auth._live_rechte_abruf("A", "tok"))
+        asyncio.run(_ECHTER_ABRUF("A", "tok"))
 
 
 def test_basis_ohne_mcp_jwt_base_url(monkeypatch):
@@ -270,5 +273,17 @@ def test_basis_ohne_mcp_jwt_base_url(monkeypatch):
     assert auth._auth_api_basis() == "https://auth.invalid"
 
 
-def test_vorgabe_nur_business():
-    assert auth.LIVE_RECHTE_SERVER == frozenset({"business"}) or os.getenv("MCP_LIVE_RECHTE_SERVER")
+def test_vorgabe_nur_business(monkeypatch):
+    monkeypatch.delenv("MCP_LIVE_RECHTE_SERVER", raising=False)
+    assert auth._live_server_vorgabe() == frozenset({"business"})
+    monkeypatch.setenv("MCP_LIVE_RECHTE_SERVER", " Business , tree ,")
+    assert auth._live_server_vorgabe() == frozenset({"business", "tree"})
+    monkeypatch.setenv("MCP_LIVE_RECHTE_SERVER", "")
+    assert auth._live_server_vorgabe() == frozenset()
+
+
+def test_business_ist_hauptschluessel_server():
+    """Am Gateway zaehlen fuer business nur mcp:business:-Rechte (EXPLICIT_ONLY_SERVERS):
+    `*` und `mcp:*:*` oeffnen es nicht, weder im Token noch in auth-api."""
+    assert "business" in auth.EXPLICIT_ONLY_SERVERS
+    assert auth._live_verweigert(["*", "mcp:*:*"], "business", ["documents_mark_paid"]) == "documents_mark_paid"

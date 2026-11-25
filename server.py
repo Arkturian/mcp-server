@@ -10685,6 +10685,79 @@ async def comm_telegram_get_file(file_id: str) -> Dict[str, Any]:
     return await call_comm_api("GET", f"/api/v1/telegram/files/{file_id}")
 
 
+_ANHANG_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_ANHANG_DATEI_MAX = 5 * 1024 * 1024
+
+
+def _anhang_objekt_id(url: str) -> Optional[int]:
+    """Objekt-ID aus einem signierten `/storage/media/<id>`-Link, sonst None."""
+    try:
+        teil = httpx.URL(url).path.rstrip("/").rsplit("/", 1)[-1]
+    except Exception:  # noqa: BLE001
+        return None
+    return int(teil) if teil.isdigit() else None
+
+
+@comm_mcp.tool(
+    name="attachment_get",
+    description="""Open a file that arrived for you via WhatsApp or Discord.
+
+    Pass the `Attachment-ID` from the queue message (line "Attachment-ID: …").
+    Only the agent the message was delivered to gets the file; for everyone else
+    the answer is attachment_not_found_or_not_for_caller.
+    - Images, video frames and PDFs (first page) come back as a picture you can look at
+      (JPEG, long edge at most max_px, 64..2000, default 1568), like media_view.
+    - Other files up to 5 MB come back as {filename, mime_type, size_bytes, data}
+      with `data` base64. Larger ones give too_large.
+    Voice messages already carry their transcript in the queue message.
+    """,
+)
+async def comm_attachment_get(attachment_id: str, max_px: int = 1568):
+    from mcp.server.fastmcp import Image as _McpImage
+
+    _require_agent("attachment_get")
+    attachment_id = (attachment_id or "").strip()
+    if not _ANHANG_ID.match(attachment_id):
+        return {"attachment_id": attachment_id, "error": "invalid_attachment_id"}
+    max_px = max(_MEDIA_VIEW_PX_MIN, min(_MEDIA_VIEW_PX_MAX, int(max_px)))
+    # comm prüft die Zustellung an genau diesen Agenten (Aufrufer-JWT) und signiert selbst.
+    info = await call_comm_api("GET", f"/api/v1/attachments/{attachment_id}",
+                               params={"mode": "signed_url"})
+    url = str((info or {}).get("url") or "")
+    objekt = _anhang_objekt_id(url)
+    if not url or objekt is None or not _media_view_url_ok(url, objekt):
+        return {"attachment_id": attachment_id, "error": "unexpected_media_url"}
+    mime = str(info.get("mime_type") or "").lower()
+    name = info.get("filename") or ""
+    ansehbar = mime.startswith("image/") or mime.startswith("video/") or mime == "application/pdf"
+    abruf = httpx.URL(url)
+    if ansehbar:
+        # comm nennt keine Maße: begrenzt wird die Höhe (wie media_view bei PDFs).
+        abruf = abruf.copy_merge_params(_media_view_params({}, max_px))
+    data = bytearray()
+    grenze = _MEDIA_VIEW_MAX_BYTES if ansehbar else _ANHANG_DATEI_MAX
+    # Nur der signierte Link, ohne Dienstschlüssel und ohne JWT (Post 5782).
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:
+        async with client.stream("GET", abruf) as r:
+            if r.status_code != 200:
+                return {"attachment_id": attachment_id, "error": f"storage_{r.status_code}"}
+            ctype = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+            if ansehbar and not ctype.startswith("image/"):
+                return {"attachment_id": attachment_id, "mime_type": mime,
+                        "error": "pdf_preview_unavailable" if mime == "application/pdf" else "no_image_returned"}
+            async for chunk in r.aiter_bytes():
+                data += chunk
+                if len(data) > grenze:
+                    return {"attachment_id": attachment_id, "mime_type": mime, "error": "too_large",
+                            "hint": "smaller max_px" if ansehbar else "file larger than 5 MB"}
+    if not ansehbar:
+        return {"attachment_id": attachment_id, "filename": name, "mime_type": mime,
+                "size_bytes": len(data), "data": base64.b64encode(bytes(data)).decode("ascii")}
+    fmt = {"image/jpeg": "jpeg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(ctype, "jpeg")
+    return [_McpImage(data=bytes(data), format=fmt),
+            f"attachment {attachment_id} · {name} · {mime} · {info.get('size_bytes') or '?'} bytes"]
+
+
 # --- Discord Guild (read-only, Issue #2228 Baustein 1) ---
 
 

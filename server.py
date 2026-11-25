@@ -5183,6 +5183,111 @@ async def content_sections_patch(
 
 
 @content_mcp.tool(
+    name="board_get",
+    description="""Read a live whiteboard (board post, doc_type "board").
+
+    Returns every object with id, art (statement | notiz | pfeil | rahmen |
+    bild), x, y, w, h, optional z and farbe, text (statement, notiz, rahmen
+    title, pfeil label), vorgabe_id (statement), von/nach (pfeil),
+    storage_id (bild), plus the board's text form and doc_version.
+    Sorted by position (y, then x).
+
+    Args:
+        post_id: the board post id
+    """,
+)
+async def content_board_get(post_id: int) -> Any:
+    return await call_content_api("GET", f"/api/v1/posts/{post_id}/board")
+
+
+@content_mcp.tool(
+    name="board_objekte_anlegen",
+    description="""Add objects to a live whiteboard. Open browsers see them at once.
+
+    Each object: {"art": "statement"|"notiz"|"pfeil"|"rahmen"|"bild",
+    "x": num, "y": num, "w": num, "h": num, ...}. Optional "id" (letters,
+    digits, _ and -, max 64; the server picks "o-…" if omitted).
+    - statement / notiz: "text" required; statement may carry "vorgabe_id".
+    - pfeil (arrow, connects two objects): "von" and "nach" object ids;
+      w/h optional.
+    - rahmen (frame): optional "text" as title.
+    - bild (image): "storage_id" of a storage file.
+    Optional "farbe" ("#rrggbb"), "z", and up to 16 own simple fields.
+    Up to 200 objects per call. Invalid objects: 422 with the error code
+    and index; an existing id: 409.
+
+    Args:
+        post_id: the board post id
+        objekte: list of objects as above
+
+    Returns: {post_id, doc_version, ids}
+    """,
+)
+async def content_board_objekte_anlegen(post_id: int, objekte: List[Dict[str, Any]]) -> Any:
+    return await call_content_api(
+        "POST", f"/api/v1/posts/{post_id}/board/objekte", json_body={"objekte": objekte},
+    )
+
+
+@content_mcp.tool(
+    name="board_objekt_aendern",
+    description="""Change one whiteboard object: move or resize it, change its
+    text, colour, vorgabe_id or arrow ends. Open browsers see it at once.
+
+    `felder` sets values, e.g. {"x": 120, "y": 80} to move,
+    {"text": "new wording"} to rewrite the text (only the changed part is
+    replaced, a person typing in the same text at the same time keeps
+    their input), {"von": "a", "nach": "b"} to reconnect an arrow.
+    `entfernen` removes optional fields, e.g. ["vorgabe_id", "farbe"].
+    "art" cannot change (delete and recreate instead).
+
+    Args:
+        post_id: the board post id
+        objekt_id: the object id (from board_get)
+        felder: values to set
+        entfernen: optional field names to remove
+
+    Returns: {post_id, doc_version, objekt}
+    """,
+)
+async def content_board_objekt_aendern(
+    post_id: int,
+    objekt_id: str,
+    felder: Optional[Dict[str, Any]] = None,
+    entfernen: Optional[List[str]] = None,
+) -> Any:
+    body: Dict[str, Any] = {"felder": felder or {}}
+    if entfernen:
+        body["entfernen"] = entfernen
+    return await call_content_api(
+        "PATCH",
+        f"/api/v1/posts/{post_id}/board/objekte/{urllib.parse.quote(objekt_id, safe='')}",
+        json_body=body,
+    )
+
+
+@content_mcp.tool(
+    name="board_objekt_loeschen",
+    description="""Delete one whiteboard object. By default the arrows attached
+    to it are deleted too (pfeile=False keeps them dangling).
+
+    Args:
+        post_id: the board post id
+        objekt_id: the object id
+        pfeile: also delete arrows from or to this object (default True)
+
+    Returns: {post_id, doc_version, geloescht: [ids]}
+    """,
+)
+async def content_board_objekt_loeschen(post_id: int, objekt_id: str, pfeile: bool = True) -> Any:
+    return await call_content_api(
+        "DELETE",
+        f"/api/v1/posts/{post_id}/board/objekte/{urllib.parse.quote(objekt_id, safe='')}",
+        params={"pfeile": "true" if pfeile else "false"},
+    )
+
+
+@content_mcp.tool(
     name="sections_decline",
     description="""Explicit decline of a question (or task) section.
 

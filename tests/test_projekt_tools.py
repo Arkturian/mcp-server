@@ -75,6 +75,42 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [("PUT", "/api/v1/vorgaben/10/leitung", {"json_body": {
             "modus": "an", "intelligenz": "normal", "quelle_agent": "Marketing"}})])
 
+    async def test_projektleitung_schalten_mit_art_agent(self):
+        await self.rufe("projektleitung_schalten", {"vorgabe_id": 21, "modus": "an", "art": "agent",
+                                                    "anbieter": "claude", "modell": "opus", "aufwand": "high"})
+        # Mit Art kein Nachlesen der alten Intelligenz: die Art bestimmt Gehirn und Stufe auf dem Server.
+        self.assertEqual(self.calls, [("PUT", "/api/v1/vorgaben/21/leitung", {"json_body": {
+            "modus": "an", "art": "agent", "anbieter": "claude", "modell": "opus", "aufwand": "high"}})])
+
+    async def test_projektleitung_schalten_zurueck_auf_zustandslos(self):
+        await self.rufe("projektleitung_schalten", {"vorgabe_id": 21, "modus": "an", "art": "zustandslos"})
+        self.assertEqual(self.calls, [("PUT", "/api/v1/vorgaben/21/leitung", {"json_body": {
+            "modus": "an", "art": "zustandslos"}})])
+
+    async def test_projektleitung_schalten_leeres_modell_heisst_vorgabe(self):
+        self.antworten[("GET", "/api/v1/vorgaben/21")] = {"leitung": {"intelligenz": "normal"}}
+        await self.rufe("projektleitung_schalten", {"vorgabe_id": 21, "modus": "an", "modell": "", "aufwand": ""})
+        self.assertEqual(self.calls[-1], ("PUT", "/api/v1/vorgaben/21/leitung", {"json_body": {
+            "modus": "an", "modell": "", "aufwand": "", "intelligenz": "normal"}}))
+
+    async def test_projekt_stand_nennt_art_und_anbieter(self):
+        self.antworten[("GET", "/api/v1/vorgaben/21")] = {
+            "titel": "T", "projekt_post_id": 6509,
+            "leitung": {"modus": "an", "gehirn": "sitzung", "art": "agent", "anbieter": "claude", "modell": "opus"}}
+        self.antworten[("GET", "/api/v1/projekt/projekte/6509")] = {"aufgaben": []}
+        self.antworten[("GET", "/api/v1/projekt/projekte/6509/leitung")] = {"modus": "an", "gehirn": "sitzung"}
+        stand = await self.mcp._tool_manager.call_tool("projekt_stand", {"vorgabe_id": 21})
+        pl = stand["projektleitung"]
+        self.assertEqual((pl["art"], pl["anbieter"], pl["modell"], pl["aufwand"]), ("agent", "claude", "opus", ""))
+
+    async def test_projekt_stand_alter_rahmen_ohne_art(self):
+        self.antworten[("GET", "/api/v1/vorgaben/14")] = {"projekt_post_id": 6465, "leitung": {"gehirn": "kette"}}
+        self.antworten[("GET", "/api/v1/projekt/projekte/6465")] = {"aufgaben": []}
+        self.antworten[("GET", "/api/v1/projekt/projekte/6465/leitung")] = {"gehirn": "kette"}
+        stand = await self.mcp._tool_manager.call_tool("projekt_stand", {"vorgabe_id": 14})
+        self.assertEqual(stand["projektleitung"]["art"], "zustandslos")
+        self.assertIsNone(stand["projektleitung"]["anbieter"])
+
     async def test_vorgabe_loeschen(self):
         await self.rufe("vorgabe_loeschen", {"vorgabe_id": 9})
         self.assertEqual(self.calls, [("DELETE", "/api/v1/vorgaben/9", {})])
@@ -180,8 +216,29 @@ class SpacePostenTests(ProjektToolsTests):
             "text": "Gasmodell gegen Messdaten prüfen", "quelle": "gespraech:Insecta"}}))
 
     async def test_space_posten_ohne_space_geht_nach_allgemein(self):
+        self.antworten[("GET", "/api/v1/spaces")] = [{"id": 0, "name": "Allgemein"}, {"id": 3, "name": "Insecta"}]
         await self.rufe("space_posten", {"text": "Eine Idee für später"})
-        self.assertEqual(self.calls, [("POST", "/api/v1/spaces/0/ideen", {"json_body": {"text": "Eine Idee für später"}})])
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/spaces/0/ideen", {"json_body": {"text": "Eine Idee für später"}}))
+
+    async def test_space_posten_mitglied_ohne_allgemein(self):
+        # Ein Mitglied (6516) sieht „Allgemein“ nicht: mit genau einem Space geht es dorthin.
+        self.antworten[("GET", "/api/v1/spaces")] = [{"id": 3, "name": "Insecta"}]
+        await self.rufe("space_posten", {"text": "Notiz"})
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/spaces/3/ideen", {"json_body": {"text": "Notiz"}}))
+        # Mit mehreren Spaces fragt das Werkzeug zurück, statt zu raten.
+        self.calls.clear()
+        self.antworten[("GET", "/api/v1/spaces")] = [{"id": 3, "name": "Insecta"}, {"id": 5, "name": "Labor"}]
+        ergebnis = await self.rufe("space_posten", {"text": "Notiz"})
+        self.assertEqual([c[0] for c in self.calls], ["GET"])
+        self.assertIn("space_noetig", str(ergebnis))
+
+    async def test_space_posten_name_mit_leerzeichen_und_fehlerantwort(self):
+        self.antworten[("GET", "/api/v1/spaces")] = [{"id": 0, "name": "Allgemein"}, {"id": 4, "name": "Live  Board"}]
+        await self.rufe("space_posten", {"text": "x", "space": " live board "})
+        self.assertEqual(self.calls[-1][1], "/api/v1/spaces/4/ideen")
+        self.antworten[("GET", "/api/v1/spaces")] = {"error": "kein_recht"}
+        ergebnis = await self.rufe("space_posten", {"text": "x", "space": "Insecta"})
+        self.assertIn("kein_recht", str(ergebnis))
 
     async def test_space_posten_unbekannter_space_nennt_die_liste(self):
         self.antworten[("GET", "/api/v1/spaces")] = [{"id": 0, "name": "Allgemein"}]

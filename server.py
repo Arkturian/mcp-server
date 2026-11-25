@@ -7305,7 +7305,8 @@ def _transkript_als_text(ergebnis: Dict[str, Any]) -> str:
 
 @ai_mcp.tool(
     name="transcribe_audio",
-    description="""Audio transkribieren, auch mit Sprechertrennung. Kostet je Minute (OpenAI).
+    description="""Audio transkribieren, auch mit Sprechertrennung. Kostet je Minute (OpenAI); die
+    Abrechnung bestaetigt das Werkzeug selbst (STT ist bezahlt erlaubt).
 
     Quelle, genau eine von beiden:
     - storage_id: Datei im Storage, auch privat. Sie muss an dich gebunden sein, sonst
@@ -7350,7 +7351,10 @@ async def ai_transcribe_audio(
             return {"id": storage_id, "error": signiert["error"]}
         quelle = signiert["url"]
 
-    felder: Dict[str, str] = {"file_url": quelle}
+    # #3980 (AiApi b58da5be): /ai/transcribe kostet je Minute (OpenAI, 0,003-0,006 $). STT ist laut
+    # Alex bezahlt erlaubt; das Werkzeug bestaetigt die Abrechnung deshalb immer selbst. api-ai prueft
+    # das Flag seit 25.11. (zuerst nur beobachtend, danach als Tor).
+    felder: Dict[str, str] = {"file_url": quelle, "confirm_api_billing": "true"}
     if speakers:
         felder.update(model="gpt-4o-transcribe-diarize", response_format="diarized_json")
     if model:

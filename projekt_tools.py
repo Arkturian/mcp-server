@@ -32,6 +32,17 @@ def _drop_none(d: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in d.items() if v is not None}
 
 
+def _leitungsart(rahmen: Any, gehirn: Any = None) -> Dict[str, Any]:
+    """Art, Anbieter, Modell und Aufwand der Projektleitung aus dem Rahmen der Vorgabe (#4021).
+
+    Ältere Rahmen ohne `art` ergeben sie aus dem Gehirn: eine eigene Sitzung ist ein Agent.
+    """
+    r = rahmen if isinstance(rahmen, dict) else {}
+    art = r.get("art") or ("agent" if (r.get("gehirn") or gehirn) == "sitzung" else "zustandslos")
+    return {"art": art, "anbieter": (r.get("anbieter") or "claude") if art == "agent" else None,
+            "modell": r.get("modell") or "", "aufwand": r.get("aufwand") or ""}
+
+
 def _kurz(eintraege: List[dict], anzahl: int) -> List[dict]:
     return list(eintraege or [])[-anzahl:]
 
@@ -232,7 +243,8 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         description="""Stand eines Projekts auf einen Blick: Phase, Pakete mit Zuständigen und Phase
         (wartet, bereit, aktiv, blockiert, tor, fertig), Analyse (Antworten je Gesprächspartner),
         Befund, Abstimmung über den Plan, die letzten Fragen der Projektleitung an Alex und die
-        letzten Einträge ihres Logbuchs.""",
+        letzten Einträge ihres Logbuchs. Unter `projektleitung` stehen auch `art` (zustandslos oder agent),
+        `anbieter`, `modell` und `aufwand` (leer: Vorgabe).""",
     )
     async def projekt_stand(vorgabe_id: int) -> Any:
         v, post = await projekt_von(vorgabe_id)
@@ -248,6 +260,7 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
                        for a in graph.get("aufgaben", [])],
             "phasen": leitung.get("phasen"),
             "projektleitung": {"modus": leitung.get("modus"), "gehirn": leitung.get("gehirn"),
+                               **_leitungsart(v.get("leitung"), leitung.get("gehirn")),
                                "austausch": _kurz(leitung.get("austausch"), 5),
                                "logbuch": _kurz(leitung.get("logbuch"), 5)},
         }
@@ -264,14 +277,39 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
     @mcp.tool(
         name="projektleitung_schalten",
         description=f"""Schalter je Projekt wie im Canvas: `modus` an (handelt selbst), trocken (schreibt
-        nur ins Logbuch, was sie täte) oder aus. `intelligenz` sparsam (zustandslos), normal (eigene
-        Sitzung, Sonnet) oder gruendlich (eigene Sitzung, Opus); leer lässt sie, wie sie ist.
-        `quelle_agent`: ein eigener Agent des Besitzers, aus dem die Projektleitung mit Verlauf und
-        Gedächtnis geklont wird; leer ("") nimmt die Quelle weg, weglassen lässt sie. {RECHT}""",
+        nur ins Logbuch, was sie täte) oder aus.
+
+        - `art` (#4021): `zustandslos` (jede Runde ein einzelner Aufruf ohne Gedächtnis, für kleine Projekte)
+          oder `agent` (eine dauerhafte Projektleitung, die ihr Gespräch über alle Runden behält).
+          Weglassen lässt die Art, wie sie ist.
+        - Bei `agent`: `anbieter` (claude; codex und agy erst nach Freigabe, sonst 422
+          `anbieter_nicht_freigegeben`), `modell` (nur Abo-Modelle aus dem Katalog dieses Anbieters, etwa
+          opus oder sonnet; sonst 422 `modell_unbekannt`) und `aufwand` (low, medium, high, xhigh, max,
+          soweit das Modell sie kann). Leer ("") heißt Vorgabe, weglassen lässt den Wert.
+        - `intelligenz` (alte Stufe, ohne `art`): sparsam, normal oder gruendlich; leer lässt sie.
+        - `quelle_agent`: ein eigener Agent des Besitzers, aus dem die Projektleitung mit Verlauf und
+          Gedächtnis geklont wird; leer ("") nimmt die Quelle weg, weglassen lässt sie.
+
+        Welche Anbieter, Modelle und Denkstufen es gibt, zeigt `projekt_stand` nicht; frag im Zweifel
+        den Menschen oder nimm die Vorgabe. {RECHT}""",
     )
     async def projektleitung_schalten(vorgabe_id: int, modus: str, intelligenz: Optional[str] = None,
-                                      quelle_agent: Optional[str] = None) -> Any:
+                                      quelle_agent: Optional[str] = None, art: Optional[str] = None,
+                                      anbieter: Optional[str] = None, modell: Optional[str] = None,
+                                      aufwand: Optional[str] = None) -> Any:
         rumpf: Dict[str, Any] = {"modus": modus}
+        if art:
+            # Die Art bestimmt Gehirn und Stufe auf dem Server; eine alte Intelligenz schicken wir nicht mit.
+            rumpf["art"] = art
+            for feld, wert in (("anbieter", anbieter), ("modell", modell), ("aufwand", aufwand)):
+                if wert is not None:
+                    rumpf[feld] = wert
+            if quelle_agent is not None:
+                rumpf["quelle_agent"] = quelle_agent
+            return await transport("PUT", f"{API}/vorgaben/{_seg(vorgabe_id)}/leitung", json_body=rumpf)
+        for feld, wert in (("anbieter", anbieter), ("modell", modell), ("aufwand", aufwand)):
+            if wert is not None:
+                rumpf[feld] = wert
         if not intelligenz:
             # Der Schalter setzt Gehirn und Intelligenz immer mit; ohne Angabe bleibt die bisherige.
             detail = await transport("GET", f"{API}/vorgaben/{_seg(vorgabe_id)}")
@@ -417,21 +455,36 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         - Nur, wenn dein Mensch es dir ausdrücklich sagt, etwa „hau das in den Project Space“. Nie von dir aus.
         - `text`: genau das, was er meint, wörtlich übernommen, ohne Umformulieren oder Ergänzen. `titel` nur,
           wenn er einen nennt.
-        - `space`: Name oder id des Space; ohne Angabe „Allgemein“. Gibt es den Namen nicht, kommt die Liste der
-          Spaces zurück, und du fragst nach.
+        - `space`: Name oder id des Space; ohne Angabe „Allgemein“. Siehst du „Allgemein“ nicht (du bist nur
+          Mitglied einzelner Spaces), nimmt es deinen einzigen Space; hast du mehrere, kommt die Liste zurück.
+          Gibt es den Namen nicht, kommt ebenso die Liste der Spaces zurück, und du fragst nach.
         - `quelle`: woher es kommt, etwa `gespraech:<dein Name>`.""",
     )
     async def space_posten(text: str, space: Optional[str] = None, titel: Optional[str] = None,
                            quelle: Optional[str] = None) -> Any:
-        space_id = 0
-        if space not in (None, "", "0"):
-            liste = await transport("GET", f"{API}/spaces")
-            gesucht = str(space).strip().lower()
-            treffer = [s for s in liste if str(s.get("id")) == gesucht or str(s.get("name", "")).lower() == gesucht]
+        liste = await transport("GET", f"{API}/spaces")
+        if not isinstance(liste, list):
+            return liste                      # Fehler der project-api unverändert, etwa fehlendes Recht
+        sichtbar = [s for s in liste if isinstance(s, dict) and s.get("id") is not None]
+        uebersicht = [{"id": s.get("id"), "name": s.get("name")} for s in sichtbar]
+        gesucht = "" if space is None else " ".join(str(space).split()).casefold()
+        if gesucht in ("", "0") and any(str(s.get("id")) == "0" for s in sichtbar):
+            space_id = 0
+        elif gesucht in ("", "0"):
+            # Mitglieder sehen „Allgemein“ nicht (6516); mit genau einem Space ist die Wahl eindeutig.
+            if len(sichtbar) != 1:
+                return {"fehler": "space_noetig", "spaces": uebersicht,
+                        "text": "Ohne Angabe ginge es nach „Allgemein“, das du nicht siehst. Frag, in welchen Space."}
+            space_id = int(sichtbar[0]["id"])
+        else:
+            treffer = [s for s in sichtbar if str(s.get("id")) == gesucht
+                       or " ".join(str(s.get("name", "")).split()).casefold() == gesucht]
             if not treffer:
                 return {"fehler": "space_unbekannt", "text": f"Einen Space „{space}“ gibt es nicht.",
-                        "spaces": [{"id": s.get("id"), "name": s.get("name")} for s in liste]}
+                        "spaces": uebersicht}
             space_id = int(treffer[0]["id"])
         karte = await transport("POST", f"{API}/spaces/{_seg(space_id)}/ideen",
                                 json_body=_drop_none({"text": text, "titel": titel, "quelle": quelle}))
+        if not isinstance(karte, dict):
+            return karte
         return {k: karte.get(k) for k in ("id", "titel", "status", "space_id", "quelle")}

@@ -92,6 +92,8 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         - Ein Projekt dreht sich um ein Deliverable: was der Mensch am Ende hat. `typ` (frage, funktion,
           fehler, dokument, inhalt, betrieb) und `deliverable` (in seinen Worten, woran er erkennt, dass es
           fertig ist, etwa „Screenshot der neuen Ansicht“) sind freiwillig; sonst erkennt sie der Planer.
+        - Mit `skizzieren=true` plant niemand: Der Mensch skizziert die Pakete selbst, danach formuliert der
+          Planer sie aus (`plan_skizzieren`).
         {RECHT}""",
     )
     async def vorgabe_anlegen(
@@ -101,8 +103,11 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         analyse_fragen: Optional[List[str]] = None,
         typ: Optional[str] = None,
         deliverable: Optional[str] = None,
+        skizzieren: bool = False,
     ) -> Any:
         rumpf: Dict[str, Any] = _drop_none({"text": text, "titel": titel, "typ": typ, "deliverable": deliverable})
+        if skizzieren:
+            rumpf["planen"] = False
         if analyse_partner:
             rumpf["analyse"] = {"partner": list(analyse_partner), "fragen": list(analyse_fragen or [])}
         return await transport("POST", f"{API}/vorgaben", json_body=rumpf)
@@ -143,6 +148,60 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         v = await vorgabe_holen(vorgabe_id)
         return await transport("POST", f"{API}/vorgaben/{_seg(vorgabe_id)}/ueberarbeiten",
                                json_body={"version": v.get("aktuelle_version"), "anmerkung": anmerkung})
+
+    @mcp.tool(
+        name="plan_zeichnen",
+        description=f"""Speichert einen umgezeichneten Plan als neue Fassung, wie „Als Fassung speichern“ im Canvas
+        (Alex, 24.11.2026: Projektmanager als Designtool). Geht, solange der Plan zur Prüfung steht, mit Phasen in
+        Abstimmung oder Absegnen (dann stimmen die Beteiligten neu ab).
+
+        `pakete`: die vollständige Liste, jedes mit schluessel, ziel, titel, beschreibung, agent, groesse (S, M, L),
+        abhaengig_von, abnahme, optional tor, wofuer, lieferung, folgearbeit, nachweis und `leitung` (leer =
+        Projektleitung, "eigen" = eigene zustandslose Leitung, sonst ein Agent aus dem Katalog). Alles Übrige
+        (Deliverable, Verständnis, Risiken) bleibt aus der Fassung davor. `ziele` nur, wenn sie sich ändern.
+        Prüffehler (Kreise, unbekannte Bezüge oder Agenten) kommen als 422 und werden nicht gespeichert. {RECHT}""",
+    )
+    async def plan_zeichnen(vorgabe_id: int, pakete: List[dict], ziele: Optional[List[dict]] = None,
+                            anmerkung: str = "") -> Any:
+        v = await vorgabe_holen(vorgabe_id)
+        rumpf: Dict[str, Any] = {"version": v.get("aktuelle_version"), "issues": list(pakete), "anmerkung": anmerkung}
+        if ziele:
+            rumpf["ziele"] = list(ziele)
+        return await transport("PUT", f"{API}/vorgaben/{_seg(vorgabe_id)}/plan", json_body=rumpf)
+
+    @mcp.tool(
+        name="plan_skizzieren",
+        description=f"""Der Mensch skizziert die Pakete, der Planer formuliert sie aus (24.11.2026). Geht ohne Plan
+        (Vorgabe mit `skizzieren=true` angelegt oder nach einem Planungsfehler), auf einem Plan zur Prüfung und mit
+        Phasen in der Abstimmung.
+
+        `schritte`: je Paket schluessel (I1, I2 …), titel, abhaengig_von (Schlüssel), optional agent, ziel und
+        leitung. Schlüssel, Titel, Pfeile und angegebene Zuständige bleiben; der Planer ergänzt Auftrag, Abnahme,
+        Wofür, Größe, fehlende Zuständige, Ziele und Deliverable. `ziele` (schluessel, titel) optional. {RECHT}""",
+    )
+    async def plan_skizzieren(vorgabe_id: int, schritte: List[dict], ziele: Optional[List[dict]] = None,
+                              anmerkung: str = "") -> Any:
+        v = await vorgabe_holen(vorgabe_id)
+        rumpf: Dict[str, Any] = {"schritte": list(schritte), "ziele": list(ziele or []), "anmerkung": anmerkung}
+        if v.get("plan"):
+            rumpf["version"] = v.get("aktuelle_version")
+        return await transport("POST", f"{API}/vorgaben/{_seg(vorgabe_id)}/skizze", json_body=rumpf)
+
+    @mcp.tool(
+        name="projekt_aendern",
+        description=f"""Ändert ein laufendes Projekt, wie „Änderungen übernehmen“ im Canvas (24.11.2026).
+
+        `aenderungen`: je Paket ein Objekt mit `schluessel` (Planschlüssel) und nur den Feldern, die sich ändern:
+        - neues Paket: neu=true, titel, agent, optional abhaengig_von, ziel, leitung, beschreibung
+        - streichen=true: nur, solange es nicht begonnen hat
+        - agent, abhaengig_von: nur, solange es nicht begonnen hat
+        - titel, leitung ("" = Projektleitung, "eigen" oder ein Agent): solange es nicht fertig ist
+        Geprüft wird alles vorher; geht etwas nicht, kommt 422 mit allen Gründen und nichts ist geändert. Danach
+        weckt die project-api, wer dran ist, und die Projektleitung erfährt die Änderung. {RECHT}""",
+    )
+    async def projekt_aendern(vorgabe_id: int, aenderungen: List[dict], anmerkung: str = "") -> Any:
+        return await transport("POST", f"{API}/vorgaben/{_seg(vorgabe_id)}/aenderungen",
+                               json_body={"aenderungen": list(aenderungen), "anmerkung": anmerkung})
 
     @mcp.tool(
         name="vorgabe_ablehnen",
@@ -204,13 +263,24 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
 
     @mcp.tool(
         name="projektleitung_schalten",
-        description=f"""Schalter je Projekt: `modus` an (handelt selbst), trocken (schreibt nur ins
-        Logbuch, was sie täte) oder aus; `gehirn` kette (zustandslos) oder sitzung (eigene
-        Opus-Sitzung). {RECHT}""",
+        description=f"""Schalter je Projekt wie im Canvas: `modus` an (handelt selbst), trocken (schreibt
+        nur ins Logbuch, was sie täte) oder aus. `intelligenz` sparsam (zustandslos), normal (eigene
+        Sitzung, Sonnet) oder gruendlich (eigene Sitzung, Opus); leer lässt sie, wie sie ist.
+        `quelle_agent`: ein eigener Agent des Besitzers, aus dem die Projektleitung mit Verlauf und
+        Gedächtnis geklont wird; leer ("") nimmt die Quelle weg, weglassen lässt sie. {RECHT}""",
     )
-    async def projektleitung_schalten(vorgabe_id: int, modus: str, gehirn: str = "kette") -> Any:
-        return await transport("PUT", f"{API}/vorgaben/{_seg(vorgabe_id)}/leitung",
-                               json_body={"modus": modus, "gehirn": gehirn})
+    async def projektleitung_schalten(vorgabe_id: int, modus: str, intelligenz: Optional[str] = None,
+                                      quelle_agent: Optional[str] = None) -> Any:
+        rumpf: Dict[str, Any] = {"modus": modus}
+        if not intelligenz:
+            # Der Schalter setzt Gehirn und Intelligenz immer mit; ohne Angabe bleibt die bisherige.
+            detail = await transport("GET", f"{API}/vorgaben/{_seg(vorgabe_id)}")
+            intelligenz = ((detail or {}).get("leitung") or {}).get("intelligenz") if isinstance(detail, dict) else None
+        if intelligenz:
+            rumpf["intelligenz"] = intelligenz
+        if quelle_agent is not None:
+            rumpf["quelle_agent"] = quelle_agent
+        return await transport("PUT", f"{API}/vorgaben/{_seg(vorgabe_id)}/leitung", json_body=rumpf)
 
     @mcp.tool(
         name="projektleitung_antworten",
@@ -296,8 +366,9 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         - `auftrag`: Alex hat deinen laufenden Zug selbst begonnen (ref leer). Dann gilt sie sofort.
         - `karte`: message_id der Karte, auf die Alex so geantwortet hat.
         - `austausch`: Nummer des Ereignisses im Austausch des Projekts.
-        - `portal`: Agent und Zeit eines Portal-Zugs, etwa „Cloud 23.11. 15:34 UTC“. Den kann die project-api
-          nicht nachlesen: Die Entscheidung bleibt ungeprüft, Alex bekommt eine Karte und bestätigt sie.""",
+        - `portal`: Alex hat es dir im Portal geschrieben. `quelle_ref` ist `<dein Name>@<ISO-Zeit>` seiner
+          Nachricht, etwa `Cloud@2026-11-23T15:34:00Z`, und `text` steht wörtlich darin. Die cloud-api bestätigt
+          das (zug-pruefen); dann gilt sie sofort. Passt es nicht, bekommt Alex eine Karte und bestätigt sie.""",
     )
     async def projekt_entscheidung(vorgabe_id: int, text: str, quelle_art: str, quelle_ref: str = "") -> Any:
         return await transport("POST", f"{API}/vorgaben/{_seg(vorgabe_id)}/entscheidungen",
@@ -326,3 +397,41 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         _, post = await projekt_von(vorgabe_id)
         return await transport("POST", f"{API}/projekt/projekte/{_seg(post)}/absichten",
                                json_body={"absichten": list(absichten), "lage": lage, "notiz": notiz})
+
+    # Project Spaces (#3954, Alex 24.11.2026) --------------------------------------------------------------
+
+    @mcp.tool(
+        name="spaces_liste",
+        description="""Die Project Spaces im Projektmanagement: Whiteboards je Thema mit Statements und Projekten.
+        id, name und Zahl der Karten; „Allgemein“ (id 0) für Karten ohne Space.""",
+    )
+    async def spaces_liste() -> Any:
+        return await transport("GET", f"{API}/spaces")
+
+    @mcp.tool(
+        name="space_posten",
+        description="""Legt eine Karte in einen Project Space, so wie sie ist: ein Statement, an dem nichts läuft
+        (kein Planer, keine Analyse, keine Projektleitung). Daraus wird erst ein Projekt, wenn der Mensch im
+        Canvas „Daraus ein Projekt machen“ wählt. Nenn es dem Menschen gegenüber „Statement“, nicht „Idee“.
+
+        - Nur, wenn dein Mensch es dir ausdrücklich sagt, etwa „hau das in den Project Space“. Nie von dir aus.
+        - `text`: genau das, was er meint, wörtlich übernommen, ohne Umformulieren oder Ergänzen. `titel` nur,
+          wenn er einen nennt.
+        - `space`: Name oder id des Space; ohne Angabe „Allgemein“. Gibt es den Namen nicht, kommt die Liste der
+          Spaces zurück, und du fragst nach.
+        - `quelle`: woher es kommt, etwa `gespraech:<dein Name>`.""",
+    )
+    async def space_posten(text: str, space: Optional[str] = None, titel: Optional[str] = None,
+                           quelle: Optional[str] = None) -> Any:
+        space_id = 0
+        if space not in (None, "", "0"):
+            liste = await transport("GET", f"{API}/spaces")
+            gesucht = str(space).strip().lower()
+            treffer = [s for s in liste if str(s.get("id")) == gesucht or str(s.get("name", "")).lower() == gesucht]
+            if not treffer:
+                return {"fehler": "space_unbekannt", "text": f"Einen Space „{space}“ gibt es nicht.",
+                        "spaces": [{"id": s.get("id"), "name": s.get("name")} for s in liste]}
+            space_id = int(treffer[0]["id"])
+        karte = await transport("POST", f"{API}/spaces/{_seg(space_id)}/ideen",
+                                json_body=_drop_none({"text": text, "titel": titel, "quelle": quelle}))
+        return {k: karte.get(k) for k in ("id", "titel", "status", "space_id", "quelle")}

@@ -28,13 +28,15 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
             "projektleitung_antworten", "tor_oeffnen", "meine_aufgaben", "vorgabe_loeschen",
             "paket_fragen", "paket_verlauf", "deliverable", "deliverable_nachtragen", "deliverable_abnehmen",
             "projekt_entscheidung", "projekt_entscheidungen", "projektleitung_absichten",
+            "plan_zeichnen", "plan_skizzieren", "projekt_aendern", "spaces_liste", "space_posten",
         })
 
     async def test_freigeber_tools_carry_the_rule(self):
         tools = {t.name: t for t in await self.mcp.list_tools()}
         for name in ("vorgabe_anlegen", "projekt_starten", "plan_ueberarbeiten", "vorgabe_ablehnen",
                      "plan_absegnen", "projektleitung_schalten", "projektleitung_antworten", "tor_oeffnen",
-                     "vorgabe_loeschen", "paket_fragen", "deliverable_nachtragen", "deliverable_abnehmen"):
+                     "vorgabe_loeschen", "paket_fragen", "deliverable_nachtragen", "deliverable_abnehmen",
+                     "plan_zeichnen", "plan_skizzieren", "projekt_aendern"):
             self.assertIn(RECHT, tools[name].description, name)
 
     async def test_vorgabe_mit_analyse(self):
@@ -60,6 +62,18 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
                                                          "projekt_post_id": None}
         await self.rufe("projekt_starten", {"vorgabe_id": 3})
         self.assertEqual([c[0] for c in self.calls], ["GET"])
+
+    async def test_projektleitung_schalten_behaelt_die_intelligenz(self):
+        self.antworten[("GET", "/api/v1/vorgaben/10")] = {"leitung": {"modus": "an", "intelligenz": "gruendlich"}}
+        await self.rufe("projektleitung_schalten", {"vorgabe_id": 10, "modus": "trocken"})
+        self.assertEqual(self.calls[-1], ("PUT", "/api/v1/vorgaben/10/leitung",
+                                          {"json_body": {"modus": "trocken", "intelligenz": "gruendlich"}}))
+
+    async def test_projektleitung_schalten_mit_klon_quelle(self):
+        await self.rufe("projektleitung_schalten", {"vorgabe_id": 10, "modus": "an", "intelligenz": "normal",
+                                                    "quelle_agent": "Marketing"})
+        self.assertEqual(self.calls, [("PUT", "/api/v1/vorgaben/10/leitung", {"json_body": {
+            "modus": "an", "intelligenz": "normal", "quelle_agent": "Marketing"}})])
 
     async def test_vorgabe_loeschen(self):
         await self.rufe("vorgabe_loeschen", {"vorgabe_id": 9})
@@ -121,3 +135,56 @@ class AbsichtenToolTests(ProjektToolsTests):
         await self.rufe("projektleitung_absichten", {"vorgabe_id": 10, "absichten": [{"art": "logbuch", "text": "x"}]})
         self.assertEqual(self.calls[-1], ("POST", "/api/v1/projekt/projekte/6417/absichten", {"json_body": {
             "absichten": [{"art": "logbuch", "text": "x"}], "lage": "", "notiz": ""}}))
+
+
+class DesigntoolTests(ProjektToolsTests):
+    """Plan zeichnen, skizzieren und laufend ändern (Alex, 24.11.2026)."""
+
+    async def test_vorgabe_zum_skizzieren(self):
+        await self.rufe("vorgabe_anlegen", {"text": "Testseite", "skizzieren": True})
+        self.assertEqual(self.calls, [("POST", "/api/v1/vorgaben", {"json_body": {"text": "Testseite", "planen": False}})])
+
+    async def test_plan_zeichnen_nimmt_die_aktuelle_fassung(self):
+        self.antworten[("GET", "/api/v1/vorgaben/8")] = {"aktuelle_version": 3, "plan": {"version": 3}}
+        pakete = [{"schluessel": "I1", "titel": "Bauen", "agent": "CloudV2"}]
+        await self.rufe("plan_zeichnen", {"vorgabe_id": 8, "pakete": pakete})
+        self.assertEqual(self.calls[-1], ("PUT", "/api/v1/vorgaben/8/plan",
+                                          {"json_body": {"version": 3, "issues": pakete, "anmerkung": ""}}))
+
+    async def test_skizze_ohne_plan_hat_keine_fassung(self):
+        self.antworten[("GET", "/api/v1/vorgaben/9")] = {"aktuelle_version": None, "plan": None}
+        schritte = [{"schluessel": "I1", "titel": "Bauen", "abhaengig_von": []}]
+        await self.rufe("plan_skizzieren", {"vorgabe_id": 9, "schritte": schritte})
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/vorgaben/9/skizze",
+                                          {"json_body": {"schritte": schritte, "ziele": [], "anmerkung": ""}}))
+        self.antworten[("GET", "/api/v1/vorgaben/9")] = {"aktuelle_version": 2, "plan": {"version": 2}}
+        await self.rufe("plan_skizzieren", {"vorgabe_id": 9, "schritte": schritte})
+        self.assertEqual(self.calls[-1][2]["json_body"]["version"], 2)
+
+    async def test_projekt_aendern(self):
+        aenderungen = [{"schluessel": "I4", "neu": True, "titel": "Domain", "agent": "Cloud-worker"},
+                       {"schluessel": "I2", "leitung": "eigen"}]
+        await self.rufe("projekt_aendern", {"vorgabe_id": 10, "aenderungen": aenderungen})
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/vorgaben/10/aenderungen",
+                                          {"json_body": {"aenderungen": aenderungen, "anmerkung": ""}}))
+
+
+class SpacePostenTests(ProjektToolsTests):
+    async def test_space_posten_nach_name_wortlich_als_idee(self):
+        self.antworten[("GET", "/api/v1/spaces")] = [{"id": 0, "name": "Allgemein"}, {"id": 3, "name": "Insecta"}]
+        self.antworten[("POST", "/api/v1/spaces/3/ideen")] = {"id": 41, "titel": None, "status": "idee",
+                                                             "space_id": 3, "quelle": "gespraech:Insecta"}
+        await self.rufe("space_posten", {"text": "Gasmodell gegen Messdaten prüfen", "space": "insecta",
+                                         "quelle": "gespraech:Insecta"})
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/spaces/3/ideen", {"json_body": {
+            "text": "Gasmodell gegen Messdaten prüfen", "quelle": "gespraech:Insecta"}}))
+
+    async def test_space_posten_ohne_space_geht_nach_allgemein(self):
+        await self.rufe("space_posten", {"text": "Eine Idee für später"})
+        self.assertEqual(self.calls, [("POST", "/api/v1/spaces/0/ideen", {"json_body": {"text": "Eine Idee für später"}})])
+
+    async def test_space_posten_unbekannter_space_nennt_die_liste(self):
+        self.antworten[("GET", "/api/v1/spaces")] = [{"id": 0, "name": "Allgemein"}]
+        ergebnis = await self.rufe("space_posten", {"text": "x y z", "space": "Gibtsnicht"})
+        self.assertNotIn(("POST", "/api/v1/spaces/0/ideen"), [(c[0], c[1]) for c in self.calls])
+        self.assertIn("space_unbekannt", str(ergebnis))

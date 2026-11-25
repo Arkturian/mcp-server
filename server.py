@@ -7410,7 +7410,8 @@ def _transkript_als_text(ergebnis: Dict[str, Any]) -> str:
 
 @ai_mcp.tool(
     name="transcribe_audio",
-    description="""Audio transkribieren, auch mit Sprechertrennung. Kostet je Minute (OpenAI).
+    description="""Audio transkribieren, auch mit Sprechertrennung. Kostet je Minute (OpenAI); die
+    Abrechnung bestaetigt das Werkzeug selbst (STT ist bezahlt erlaubt).
 
     Quelle, genau eine von beiden:
     - storage_id: Datei im Storage, auch privat. Sie muss an dich gebunden sein, sonst
@@ -7455,7 +7456,10 @@ async def ai_transcribe_audio(
             return {"id": storage_id, "error": signiert["error"]}
         quelle = signiert["url"]
 
-    felder: Dict[str, str] = {"file_url": quelle}
+    # #3980 (AiApi b58da5be): /ai/transcribe kostet je Minute (OpenAI, 0,003-0,006 $). STT ist laut
+    # Alex bezahlt erlaubt; das Werkzeug bestaetigt die Abrechnung deshalb immer selbst. api-ai prueft
+    # das Flag seit 25.11. (zuerst nur beobachtend, danach als Tor).
+    felder: Dict[str, str] = {"file_url": quelle, "confirm_api_billing": "true"}
     if speakers:
         felder.update(model="gpt-4o-transcribe-diarize", response_format="diarized_json")
     if model:
@@ -12202,6 +12206,45 @@ async def cloud_send_draft_for_review(
     return await call_cloud_api("POST", "/api/user-messages", json_body=body)
 
 
+# #3915/#3985: Was die Anfrage an den Agenten zurueckgibt. Eine feste Liste, damit nie mehr als der
+# Stand hinausgeht, auch wenn die cloud-api spaeter weitere Felder liefert. Einen Wert gibt es dort nie.
+_GEHEIMNIS_FELDER = ("id", "status", "zweck", "art", "ziel", "ziel_text", "fuer", "von", "laeuft_ab",
+                     "versuche_rest", "laenge", "sha256_praefix", "karte", "knoten")
+# Ein benanntes Ziel `<ort>:<kennung>` (etwa arkserver:github-dispatch), nie ein Pfad. Welche Ziele es
+# gibt, entscheidet allein die feste Liste der cloud-api (sonst 422 ziel_unbekannt).
+_GEHEIMNIS_ZIEL_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,30}:[A-Za-z0-9][A-Za-z0-9_.:-]{0,80}")
+
+
+@cloud_mcp.tool(
+    name="geheimnis_anfordern",
+    description=(
+        "Ask a HUMAN to type in a secret (token, key, password) for a NAMED TARGET, so that no "
+        "agent ever sees the value (#3915). The human gets a card 'geheimnis_eingabe' in the "
+        "portal and enters the value there with their own login; the cloud-api checks it with the "
+        "provider and stores it at the target. Use this instead of asking anyone to paste a "
+        "secret into a chat, mail or file. zweck: one line why (max 300 chars, never the secret "
+        "itself); art: telegram_bot | github_pat | ms_app | generisch, matching the target; "
+        "ziel: a named target such as 'arkserver:github-dispatch' (only targets of the fixed list "
+        "in the cloud-api; a free path or unknown name gives 422 ziel_unbekannt, a wrong art 422 "
+        "art_passt_nicht, a target of another node 409 anderer_knoten); fuer: e-mail of the human "
+        "who enters it. Allowed for admins and the agents Cloud, Cloud-Operator and Comm; others "
+        "get 403 nicht_erlaubt. Returns only the state {id, status, ziel, ziel_text, karte, "
+        "laeuft_ab, ...}, never a value. Afterwards you get system notices (abgelegt with length "
+        "and sha256 prefix, gesperrt after 5 provider rejections, uebernommen); the link is valid 24 h."
+    ),
+)
+async def cloud_geheimnis_anfordern(zweck: str, art: str, ziel: str, fuer: str) -> Dict[str, Any]:
+    z = (ziel or "").strip()
+    if not _GEHEIMNIS_ZIEL_RE.fullmatch(z):
+        raise ValueError("geheimnis_anfordern: ziel ist ein benanntes Ziel wie 'arkserver:github-dispatch', "
+                         "kein Pfad und kein freier Text")
+    body = {"zweck": (zweck or "").strip(), "art": (art or "").strip(), "ziel": z, "fuer": (fuer or "").strip()}
+    out = await call_cloud_api("POST", "/api/geheimnisse/anfragen", json_body=body)
+    if not isinstance(out, dict):
+        return {}
+    return {k: out[k] for k in _GEHEIMNIS_FELDER if k in out}
+
+
 @cloud_mcp.tool(
     name="queue_antworten",
     description=(
@@ -12705,7 +12748,8 @@ async def cloud_history_activity(
         "show their latest window readings. eigenes_konto marks the account your own last "
         "answers ran on; pass agent=<name> to mark another agent's account. Read before "
         "starting large work: if your account runs out before the reset, say so; if a lot "
-        "will expire unused, that is room for backlog work. Operator agents and admins only."
+        "will expire unused, that is room for backlog work. Operator agents and admins; a customer "
+        "agent only for the one account of its tenant that the account register names it in (#3893)."
     ),
 )
 async def cloud_token_lage(agent: str = "") -> Dict[str, Any]:

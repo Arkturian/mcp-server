@@ -486,6 +486,120 @@ def _werkzeug_erlaubt(perms: list[str], mcp_server: str, tool_name: str) -> bool
     return any(_match_permission(p, z) for p in perms for z in ziele)
 
 
+# ──────────────────────────────────────────────────────────────
+# Live-Rechte fuer Server mit Wirkung (#3987)
+# ──────────────────────────────────────────────────────────────
+# Ein Agenten-Token traegt die Rechte vom Zeitpunkt des Praegens und gilt 8760 h; Claude Code
+# holt es nur beim Verbinden (headersHelper). Entzieht auth-api ein Recht (#3987: mcp:business:*
+# aus 11 Grundrollen), behielten laufende Agenten es bis zum naechsten Neustart. Fuer die Server
+# hier wird deshalb jeder tools/call ZUSAETZLICH gegen die aktuellen Rechte in auth-api geprueft
+# (GET /rbac/agents/{name}/permissions, effective_permissions, mit dem Token des Aufrufers).
+# Nur einengend: erlaubt ist, was Token UND auth-api erlauben. Nur fuer type=agent und nur fuer
+# tools/call (tools/list bleibt beim Token: ein 403 dort hiesse "MCP server failed", und der
+# MCP-Waechter startete den Agenten neu). Antwortet auth-api nicht, gilt ein Stand bis
+# LIVE_RECHTE_NOTSTAND_S; danach wird abgewiesen (fail-closed, Geld-Werkzeuge).
+def _live_server_vorgabe() -> frozenset:
+    """MCP_LIVE_RECHTE_SERVER, kommagetrennt; Vorgabe business. Leer gesetzt schaltet den Abgleich ab."""
+    return frozenset(s.strip().lower() for s in os.getenv("MCP_LIVE_RECHTE_SERVER", "business").split(",")
+                     if s.strip())
+
+
+LIVE_RECHTE_SERVER: frozenset = _live_server_vorgabe()
+LIVE_RECHTE_TTL_S = float(os.getenv("MCP_LIVE_RECHTE_TTL_S", "60"))
+LIVE_RECHTE_NOTSTAND_S = float(os.getenv("MCP_LIVE_RECHTE_NOTSTAND_S", "900"))
+_LIVE_RECHTE: dict[str, tuple[float, list[str]]] = {}
+
+
+class LiveRechteUnbekannt(Exception):
+    """auth-api lieferte keinen verwertbaren Stand (Ausfall, 5xx, kaputte Antwort)."""
+
+
+def _auth_api_basis() -> str:
+    if MCP_JWT_BASE_URL:
+        return MCP_JWT_BASE_URL.rstrip("/")
+    return AUTH_API_JWKS_URL.split("/api/v1/auth/", 1)[0].rstrip("/")
+
+
+async def _live_rechte_abruf(agent_name: str, token: str) -> list[str]:
+    """Aktuelle effektive Rechte eines Agenten aus auth-api. 404 (Agent weg) ergibt []."""
+    import httpx
+    from urllib.parse import quote
+    url = f"{_auth_api_basis()}/api/v1/auth/rbac/agents/{quote(agent_name, safe='')}/permissions"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+    except Exception as e:
+        raise LiveRechteUnbekannt(type(e).__name__) from None
+    if r.status_code == 404:
+        return []
+    if r.status_code != 200:
+        raise LiveRechteUnbekannt(f"HTTP {r.status_code}")
+    try:
+        roh = (r.json() or {}).get("effective_permissions")
+    except Exception:
+        raise LiveRechteUnbekannt("keine JSON-Antwort") from None
+    if not isinstance(roh, list):
+        raise LiveRechteUnbekannt("effective_permissions fehlt")
+    return [p for p in roh if isinstance(p, str) and p.strip()]
+
+
+async def _live_rechte(agent_name: str, token: str, jetzt: float) -> list[str]:
+    """Rechte mit Zwischenspeicher je Agent: frisch fuer LIVE_RECHTE_TTL_S; scheitert der Abruf,
+    gilt ein Stand bis LIVE_RECHTE_NOTSTAND_S, sonst LiveRechteUnbekannt."""
+    stand = _LIVE_RECHTE.get(agent_name)
+    if stand and jetzt - stand[0] < LIVE_RECHTE_TTL_S:
+        return stand[1]
+    try:
+        rechte = await _live_rechte_abruf(agent_name, token)
+    except LiveRechteUnbekannt as e:
+        if stand and jetzt - stand[0] < LIVE_RECHTE_NOTSTAND_S:
+            logger.warning("Live-Rechte von %s nicht abrufbar (%s), Stand von vor %.0f s gilt",
+                           agent_name, e, jetzt - stand[0])
+            return stand[1]
+        raise
+    _LIVE_RECHTE[agent_name] = (jetzt, rechte)
+    return rechte
+
+
+def _live_verweigert(live: list[str], mcp_server: str, werkzeuge: list) -> str:
+    """Das erste Werkzeug, das die aktuellen Rechte NICHT erlauben, sonst ""."""
+    perms = _permissions_for_server(live, mcp_server)
+    for w in werkzeuge:
+        if not w or not _werkzeug_erlaubt(perms, mcp_server, w):
+            return w or "?"
+    return ""
+
+
+async def _live_pruefung(agent: "AgentContext", mcp_server: str, token: str, body_bytes):
+    """JSONResponse zum Abweisen, oder None. Fail-closed: auch ein Fehler in der Pruefung weist ab."""
+    import time as _t
+    body_json = None
+    try:
+        body_json = _json.loads(body_bytes)
+        werkzeuge = _aufgerufene_werkzeuge(body_json)
+        live = await _live_rechte(agent.name, token, _t.monotonic())
+        verweigert = _live_verweigert(live, mcp_server, werkzeuge)
+    except LiveRechteUnbekannt as e:
+        logger.error("Live-Rechte nicht pruefbar, abgewiesen: agent=%s mcp:%s (%s)", agent.name, mcp_server, e)
+        return JSONResponse({"jsonrpc": "2.0", "id": body_json.get("id") if isinstance(body_json, dict) else None,
+                             "error": {"code": -32603,
+                                       "message": f"Rechte fuer mcp:{mcp_server} gerade nicht pruefbar "
+                                                  f"(auth-api), Aufruf abgewiesen. Bitte spaeter erneut."}},
+                            status_code=503)
+    except Exception:
+        logger.exception("Live-Rechte-Pruefung gescheitert, abgewiesen: agent=%s mcp:%s", agent.name, mcp_server)
+        verweigert = "?"
+    if not verweigert:
+        return None
+    logger.warning("RBAC denied (live, #3987): agent=%s role=%s perm=mcp:%s:%s",
+                   agent.name, agent.role, mcp_server, verweigert)
+    return JSONResponse({"jsonrpc": "2.0", "id": body_json.get("id") if isinstance(body_json, dict) else None,
+                         "error": {"code": -32600,
+                                   "message": f"Permission denied: agent '{agent.name}' cannot call "
+                                              f"mcp:{mcp_server}:{verweigert} (Recht laut auth-api entzogen)"}},
+                        status_code=403)
+
+
 def _jsonrpc_teile(body_json) -> list:
     """Einzelne JSON-RPC-Nachrichten; ein Stapel (Liste) wird aufgefaechert."""
     teile = body_json if isinstance(body_json, list) else [body_json]
@@ -820,6 +934,12 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                         },
                         status_code=403,
                     )
+
+        # #3987: Fuer Server mit Wirkung zaehlen zusaetzlich die AKTUELLEN Rechte (nur einengend).
+        if is_tool_call and mcp_server in LIVE_RECHTE_SERVER and claims.get("type") == "agent":
+            _abweisung = await _live_pruefung(agent, mcp_server, token, body_bytes)
+            if _abweisung is not None:
+                return _abweisung
 
         # Erlaubt: Aufrufer, Server, Werkzeug und gegriffenes Recht zaehlen (#2806).
         # Nur Werkzeugaufrufe -- tools/list & Co. waeren sonst leere Zeilen.

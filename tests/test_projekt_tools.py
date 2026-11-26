@@ -45,6 +45,19 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [("POST", "/api/v1/vorgaben", {"json_body": {
             "text": "Verbrauchsansicht", "analyse": {"partner": ["Cloud-worker"], "fragen": []}}})])
 
+    async def test_vorgabe_anlegen_wie_die_projektzeile(self):
+        self.antworten[("GET", "/api/v1/spaces")] = [{"id": 0, "name": "Allgemein"}, {"id": 3, "name": "Board A"}]
+        await self.rufe("vorgabe_anlegen", {"text": "Neue Ansicht", "start": "sofort", "space": "board a",
+                                            "anhaenge": [136422], "browser_test": False})
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/vorgaben", {"json_body": {
+            "text": "Neue Ansicht", "browser_test": False, "start": "sofort", "anhaenge": [136422], "space_id": 3}}))
+
+    async def test_vorgabe_anlegen_mit_unbekanntem_space_legt_nichts_an(self):
+        self.antworten[("GET", "/api/v1/spaces")] = [{"id": 3, "name": "Board A"}]
+        antwort = await self.rufe("vorgabe_anlegen", {"text": "Neue Ansicht", "space": "Board B"})
+        self.assertIn("space_unbekannt", str(antwort))
+        self.assertNotIn("POST", [c[0] for c in self.calls])
+
     async def test_projekt_starten_nimmt_die_aktuelle_fassung(self):
         self.antworten[("GET", "/api/v1/vorgaben/8")] = {"status": "zur_pruefung", "aktuelle_version": 2,
                                                          "projekt_post_id": None}

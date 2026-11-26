@@ -147,6 +147,12 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
           `zweite_pruefung` (ein zweiter Agent prüft gegen). Aus heißt: Der Planer plant dafür kein Paket, den
           Nachweis erbringt der bauende Agent. Weggelassen entscheidet der Planer wie bisher. Wie im Canvas sind
           beide aus, wenn der Mensch nichts anderes sagt.
+        - `start` (Zeile „/projekt“ im Portal): `sofort` heißt, das Projekt startet ohne weiteres Ja, sobald der Plan
+          die Prüfung besteht (nur ohne Analyse, nur mit Freigeber im Zug). `freigabe` (Vorgabe ohne Analyse):
+          der Plan wartet auf `projekt_starten`. Mit Analyse gilt immer Absegnen.
+        - `space`: Name oder id eines Space, in dem das Projekt liegt. `anhaenge`: Storage-IDs, die der Planer
+          und die Beteiligten sehen.
+        - Die Projektleitung stellst du danach mit `projektleitung_schalten` ein, im selben Zug.
         {RECHT}""",
     )
     async def vorgabe_anlegen(
@@ -159,9 +165,26 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         skizzieren: bool = False,
         browser_test: Optional[bool] = None,
         zweite_pruefung: Optional[bool] = None,
+        start: Optional[str] = None,
+        space: Optional[str] = None,
+        anhaenge: Optional[List[int]] = None,
     ) -> Any:
         rumpf: Dict[str, Any] = _drop_none({"text": text, "titel": titel, "typ": typ, "deliverable": deliverable,
-                                            "browser_test": browser_test, "zweite_pruefung": zweite_pruefung})
+                                            "browser_test": browser_test, "zweite_pruefung": zweite_pruefung,
+                                            "start": start})
+        if anhaenge:
+            rumpf["anhaenge"] = [int(a) for a in anhaenge]
+        if space not in (None, ""):
+            liste = await transport("GET", f"{API}/spaces")
+            if not isinstance(liste, list):
+                return liste
+            gesucht = " ".join(str(space).split()).casefold()
+            treffer = [x for x in liste if isinstance(x, dict) and x.get("id") is not None
+                       and (str(x.get("id")) == gesucht or " ".join(str(x.get("name", "")).split()).casefold() == gesucht)]
+            if not treffer:
+                return {"fehler": "space_unbekannt", "text": f"Einen Space „{space}“ gibt es nicht.",
+                        "spaces": [{"id": x.get("id"), "name": x.get("name")} for x in liste if isinstance(x, dict)]}
+            rumpf["space_id"] = int(treffer[0]["id"])
         if skizzieren:
             rumpf["planen"] = False
         if analyse_partner:

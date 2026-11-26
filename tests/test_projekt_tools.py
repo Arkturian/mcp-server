@@ -103,6 +103,28 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
         pl = stand["projektleitung"]
         self.assertEqual((pl["art"], pl["anbieter"], pl["modell"], pl["aufwand"]), ("agent", "claude", "opus", ""))
 
+    async def test_projekt_stand_kuerzt_analyse_und_befund(self):
+        lang = "x" * 5000
+        phasen = {"phase": "ausfuehrung",
+                  "gespraeche": [{"partner": "Cloud", "section_id": "q-1",
+                                  "antworten": [{"von": "Cloud", "am": "a", "text": lang},
+                                                {"von": "Cloud", "am": "b", "text": "kurz"}]},
+                                 {"partner": "Issue", "section_id": "q-2", "antworten": []}],
+                  "befund": {"section_id": "p-1", "status": "approved", "text": lang}}
+        self.antworten[("GET", "/api/v1/vorgaben/23")] = {"projekt_post_id": 6533, "leitung": {"gehirn": "kette"}}
+        self.antworten[("GET", "/api/v1/projekt/projekte/6533")] = {"aufgaben": []}
+        self.antworten[("GET", "/api/v1/projekt/projekte/6533/leitung")] = {"gehirn": "kette", "phasen": phasen}
+        stand = await self.mcp._tool_manager.call_tool("projekt_stand", {"vorgabe_id": 23})
+        g = stand["phasen"]["gespraeche"]
+        self.assertEqual((g[0]["partner"], g[0]["section_id"], g[0]["antworten"]), ("Cloud", "q-1", 2))
+        self.assertEqual(g[0]["letzte"], {"von": "Cloud", "am": "b", "text": "kurz"})
+        self.assertEqual((g[1]["antworten"], g[1]["letzte"]), (0, None))
+        self.assertTrue(stand["phasen"]["befund"]["text"].endswith(" …"))
+        self.assertLess(len(stand["phasen"]["befund"]["text"]), 900)
+        self.assertEqual(stand["phasen"]["befund"]["status"], "approved")
+        voll = await self.mcp._tool_manager.call_tool("projekt_stand", {"vorgabe_id": 23, "voll": True})
+        self.assertEqual(voll["phasen"], phasen)
+
     async def test_projekt_stand_alter_rahmen_ohne_art(self):
         self.antworten[("GET", "/api/v1/vorgaben/14")] = {"projekt_post_id": 6465, "leitung": {"gehirn": "kette"}}
         self.antworten[("GET", "/api/v1/projekt/projekte/6465")] = {"aufgaben": []}

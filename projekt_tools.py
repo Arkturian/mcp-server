@@ -209,10 +209,22 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
     @mcp.tool(
         name="plan_ueberarbeiten",
         description=f"""Der Planer erstellt aus der Anmerkung eine neue Fassung der aktuellen Planung
-        (nur solange der Plan zur Prüfung steht). {RECHT}""",
+        (solange der Plan zur Prüfung steht). {RECHT}
+
+        Ausnahme: Ist die Planung fehlgeschlagen und gibt es noch keine Fassung (Status `fehler`), plant er die
+        Vorgabe neu. Das darf jeder Agent, wie das Anlegen mit Planung. Die Anmerkung geht dabei nicht ein; die
+        Antwort sagt es (`neu_geplant`, `hinweis`).""",
     )
     async def plan_ueberarbeiten(vorgabe_id: int, anmerkung: str) -> Any:
         v = await vorgabe_holen(vorgabe_id)
+        if not v.get("aktuelle_version") and v.get("status") == "fehler":
+            # Planung fehlgeschlagen, noch keine Fassung: neu planen statt 422 (CloudV2 für Alex, 26.11.).
+            # „neu“ bleibt außen vor: dort wartet eine Vorgabe mit skizzieren=true auf ihre Skizze.
+            antwort = await transport("POST", f"{API}/vorgaben/{_seg(vorgabe_id)}/planen", json_body={})
+            return {"neu_geplant": True, "vorgabe": antwort,
+                    "hinweis": "Die Planung war fehlgeschlagen, es gab keine Fassung: Der Planer plant die Vorgabe "
+                               "neu. Deine Anmerkung ist dabei nicht eingegangen; ruf plan_ueberarbeiten nach der "
+                               "ersten Fassung erneut auf."}
         return await transport("POST", f"{API}/vorgaben/{_seg(vorgabe_id)}/ueberarbeiten",
                                json_body={"version": v.get("aktuelle_version"), "anmerkung": anmerkung})
 

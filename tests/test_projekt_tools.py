@@ -58,6 +58,24 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
         await self.rufe("projekt_starten", {"vorgabe_id": 9})
         self.assertEqual(self.calls[-1], ("POST", "/api/v1/projekt/projekte/6406/plan/absegnen", {"json_body": {}}))
 
+    async def test_plan_ueberarbeiten_plant_nach_einem_fehler_neu(self):
+        self.antworten[("GET", "/api/v1/vorgaben/28")] = {"status": "fehler", "aktuelle_version": None}
+        antwort = await self.rufe("plan_ueberarbeiten", {"vorgabe_id": 28, "anmerkung": "Bitte ohne Playwright"})
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/vorgaben/28/planen", {"json_body": {}}))
+        self.assertIn("nicht eingegangen", str(antwort))
+
+    async def test_plan_ueberarbeiten_nimmt_sonst_die_fassung(self):
+        self.antworten[("GET", "/api/v1/vorgaben/29")] = {"status": "zur_pruefung", "aktuelle_version": 2}
+        await self.rufe("plan_ueberarbeiten", {"vorgabe_id": 29, "anmerkung": "Bitte ohne Playwright"})
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/vorgaben/29/ueberarbeiten",
+                                          {"json_body": {"version": 2, "anmerkung": "Bitte ohne Playwright"}}))
+
+    async def test_plan_ueberarbeiten_startet_bei_skizze_keinen_planer(self):
+        # skizzieren=true: Die Vorgabe bleibt „neu“ ohne Fassung und wartet auf /skizze.
+        self.antworten[("GET", "/api/v1/vorgaben/31")] = {"status": "neu", "aktuelle_version": None}
+        await self.rufe("plan_ueberarbeiten", {"vorgabe_id": 31, "anmerkung": "Bitte ohne Playwright"})
+        self.assertNotIn("/api/v1/vorgaben/31/planen", [c[1] for c in self.calls])
+
     async def test_projekt_starten_ohne_plan_sagt_woran_es_haengt(self):
         self.antworten[("GET", "/api/v1/vorgaben/3")] = {"status": "plant", "aktuelle_version": None,
                                                          "projekt_post_id": None}

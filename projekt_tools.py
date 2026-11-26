@@ -47,6 +47,36 @@ def _kurz(eintraege: List[dict], anzahl: int) -> List[dict]:
     return list(eintraege or [])[-anzahl:]
 
 
+def _gekuerzt(text: Any, grenze: int) -> str:
+    t = str(text or "")
+    return t if len(t) <= grenze else t[:grenze].rstrip() + " …"
+
+
+def _phasen_kurz(phasen: Any) -> Any:
+    """Analyse und Befund knapp (26.11.: projekt_stand lieferte bis 150.000 Zeichen, fast alles Analysegespräche).
+
+    Je Gespräch die Zahl der Antworten und die letzte, gekürzt; Texte von Befund und Plan gekürzt. Den vollen
+    Wortlaut liefert `voll=true` oder `sections_get(projekt_post_id, section_id)`."""
+    if not isinstance(phasen, dict):
+        return phasen
+    kurz = dict(phasen)
+    gespraeche = phasen.get("gespraeche")
+    if isinstance(gespraeche, list):
+        liste = []
+        for g in gespraeche:
+            if not isinstance(g, dict):
+                continue
+            antworten = list(g.get("antworten") or [])
+            letzte = antworten[-1] if antworten and isinstance(antworten[-1], dict) else None
+            liste.append({**{k: v for k, v in g.items() if k != "antworten"}, "antworten": len(antworten),
+                          "letzte": {**letzte, "text": _gekuerzt(letzte.get("text"), 400)} if letzte else None})
+        kurz["gespraeche"] = liste
+    for teil in ("befund", "plan", "abstimmung"):
+        if isinstance(kurz.get(teil), dict) and "text" in kurz[teil]:
+            kurz[teil] = {**kurz[teil], "text": _gekuerzt(kurz[teil]["text"], 800)}
+    return kurz
+
+
 def register_projekt_tools(mcp, transport: Transport) -> None:
     """Register the project tools on ``mcp``; ``transport(method, path, **kw)``."""
 
@@ -244,9 +274,13 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         (wartet, bereit, aktiv, blockiert, tor, fertig), Analyse (Antworten je Gesprächspartner),
         Befund, Abstimmung über den Plan, die letzten Fragen der Projektleitung an Alex und die
         letzten Einträge ihres Logbuchs. Unter `projektleitung` stehen auch `art` (zustandslos oder agent),
-        `anbieter`, `modell` und `aufwand` (leer: Vorgabe).""",
+        `anbieter`, `modell` und `aufwand` (leer: Vorgabe).
+
+        Analyse und Befund kommen knapp: je Gespräch die Zahl der Antworten und die letzte, gekürzt. Den vollen
+        Wortlaut liefert `voll=true` (kann über 100.000 Zeichen haben) oder gezielt
+        `sections_get(projekt_post_id, section_id)`.""",
     )
-    async def projekt_stand(vorgabe_id: int) -> Any:
+    async def projekt_stand(vorgabe_id: int, voll: bool = False) -> Any:
         v, post = await projekt_von(vorgabe_id)
         graph = await transport("GET", f"{API}/projekt/projekte/{_seg(post)}")
         leitung = await transport("GET", f"{API}/projekt/projekte/{_seg(post)}/leitung")
@@ -258,7 +292,7 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
                                               "angenommen", "wartet_auf", "wartet_was", "wofuer", "lieferung",
                                               "folgearbeit", "nachweis")}
                        for a in graph.get("aufgaben", [])],
-            "phasen": leitung.get("phasen"),
+            "phasen": leitung.get("phasen") if voll else _phasen_kurz(leitung.get("phasen")),
             "projektleitung": {"modus": leitung.get("modus"), "gehirn": leitung.get("gehirn"),
                                **_leitungsart(v.get("leitung"), leitung.get("gehirn")),
                                "austausch": _kurz(leitung.get("austausch"), 5),

@@ -13909,6 +13909,9 @@ issue_mcp = FastMCP(
       - description (required): the bug report in free text (your own language).
       - screenshot_storage_id (optional): id from storage-api upload, attached
         as an IssueAttachment with role='screenshot'.
+      - projekt_id (optional): project of the project-api (`projekt.id`, the
+        Vorgabe number in the Project-Canvas); the work then counts in that
+        project's report.
 
     Returns: {id, title, severity, component, tags, ai_confidence, url}.
     """,
@@ -13916,10 +13919,13 @@ issue_mcp = FastMCP(
 async def issue_create(
     description: str,
     screenshot_storage_id: Optional[int] = None,
+    projekt_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {"text": description}
     if screenshot_storage_id is not None:
         body["screenshot_storage_id"] = screenshot_storage_id
+    if projekt_id is not None:
+        body["projekt_id"] = projekt_id
     return await call_issue_api("POST", "/api/v1/issues/intake", json_body=body)
 
 
@@ -13934,6 +13940,9 @@ async def issue_create(
     Optional: severity (critical|major|minor|cosmetic, default minor),
       component, tags, file_pointer, assignee, status (default open),
       goal_id (parent Goal in three-tier work model),
+      projekt_id (project of the project-api, `projekt.id` = Vorgabe number in
+      the Project-Canvas; counts the work in that project's report and is
+      inherited by sub-issues this one waits on via wait(issue:<id>)),
       process_template (opt-in Phase-A gating, e.g. "design-impl-test" —
       when set, the issue cannot be resolved to `fixed` until all stages
       are done; stages enforce strict sequential ordering),
@@ -13961,6 +13970,7 @@ async def issue_create_structured(
     process_template: Optional[str] = None,
     abnahme_stufen: Optional[List[str]] = None,
     force: bool = False,
+    projekt_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {
         "title": title,
@@ -13978,6 +13988,8 @@ async def issue_create_structured(
         body["assignee"] = assignee
     if goal_id is not None:
         body["goal_id"] = goal_id
+    if projekt_id is not None:
+        body["projekt_id"] = projekt_id
     if process_template is not None:
         body["process_template"] = process_template
     if abnahme_stufen is not None:
@@ -13994,6 +14006,7 @@ async def issue_create_structured(
     Filters (all optional): status (open|in_progress|blocked|deferred|fixed|
     closed|duplicate|wontfix), severity (critical|major|minor|cosmetic), component,
     assignee, goal_id (filter to issues under a specific parent Goal),
+    projekt_id (issues of one project of the project-api),
     q (full-text search across title+description), limit (default 20,
     max 200), offset.
 
@@ -14009,6 +14022,7 @@ async def issue_list(
     q: Optional[str] = None,
     limit: int = 20,
     offset: int = 0,
+    projekt_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     params = _clean_params(
         status=status,
@@ -14016,6 +14030,7 @@ async def issue_list(
         component=component,
         assignee=assignee,
         goal_id=goal_id,
+        projekt_id=projekt_id,
         q=q,
         limit=limit,
         offset=offset,
@@ -14025,7 +14040,8 @@ async def issue_list(
 
 @issue_mcp.tool(
     name="get",
-    description="""Get full issue detail by ID — includes attachments + comments.""",
+    description="""Get full issue detail by ID — includes attachments, comments and
+    statusverlauf (every status change {von, nach, durch, am}, recorded since 26.11.2026).""",
 )
 async def issue_get(id: int) -> Dict[str, Any]:
     return await call_issue_api("GET", f"/api/v1/issues/{id}")
@@ -14037,7 +14053,7 @@ async def issue_get(id: int) -> Dict[str, Any]:
 
     Updatable: title, description, severity, status, component, tags (list),
     file_pointer, assignee, duplicate_of, goal_id (link/unlink parent Goal),
-    metadata_json.
+    projekt_id (project of the project-api; 0 removes it), metadata_json.
 
     status — what each value does to dispatch and escalation:
       open / in_progress  live work; dispatched, rotated by the stall sweep,
@@ -14089,6 +14105,7 @@ async def issue_update(
     goal_id: Optional[int] = None,
     metadata_json: Optional[Dict[str, Any]] = None,
     wartet_auf: Optional[Dict[str, Any]] = None,
+    projekt_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     body = _clean_params(
         title=title,
@@ -14103,7 +14120,12 @@ async def issue_update(
         goal_id=goal_id,
         metadata_json=metadata_json,
         wartet_auf=wartet_auf,
+        projekt_id=projekt_id,
     )
+    # projekt_id=0 entfernt die Zuordnung (issue-api: null). None heisst
+    # "nicht angegeben" und wird wie jedes andere Feld weggelassen.
+    if body.get("projekt_id") == 0:
+        body["projekt_id"] = None
     return await call_issue_api("PATCH", f"/api/v1/issues/{id}", json_body=body)
 
 

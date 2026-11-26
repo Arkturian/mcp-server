@@ -7913,6 +7913,39 @@ async def ai_jev(
     return await call_ai_api("POST", "/ai/jev", json_body=body, extra_headers=extra or None)
 
 
+@ai_mcp.tool(
+    name="ai_kosten",
+    description="""Kosten und Kontingent der KI-Dienste dieser Instanz: Geld je Topf, Abo-Mengen, Aufrufe je Weg/Aufrufer, Lücken. Recht ai:kosten:lesen.
+
+Reicht AiApi GET /ai/kosten unverändert durch (Vertrag #4127, Kommentar 13985).
+
+Params:
+- von, bis: JJJJ-MM-TT, Wiener Kalendertage, beide einschließlich. Vorgabe: die letzten 7 Tage bis heute.
+- gruppe: weg | aufrufer | anbieter | tag. Vorgabe: weg.
+- takt: optional, nur "tag" (Tagesreihe je Zeile).
+
+Lesen der Antwort:
+- Geld steht NUR in Zeilen mit art=geld, als betrag + waehrung. `summe` zählt nur dieses Geld.
+- Zeilen mit art=abo oder art=guthaben tragen Mengen und gegenwert_usd. Das ist ein API-Gegenwert, nie bezahlt: nicht summieren und nie zum Geld rechnen.
+- `luecken` nennt, was nicht gezählt ist (etwa Zeit vor dem Kostenbuch).
+
+Zugang: nur mit deinem eigenen JWT, ohne Betreiber- oder Dienstschlüssel. AiApi lässt Admin-Menschen und JWTs mit dem Recht ai:kosten:lesen zu (beantragen bei AuthAPI). Sonst kommt 401/403 von AiApi unverändert zurück.""",
+)
+async def ai_kosten(
+    von: Optional[str] = None,
+    bis: Optional[str] = None,
+    gruppe: Optional[str] = None,
+    takt: Optional[str] = None,
+) -> Dict[str, Any]:
+    # Bewusst NICHT call_ai_api (#4127): das haengt den Betreiber-Schluessel (X-API-Key) an, und
+    # /ai/kosten liesse damit jeden durch, auch ohne ai:kosten:lesen. Hier geht nur die Identitaet
+    # des Aufrufers mit (Bearer <jwt>, X-Agent-Name aus dem geprueften JWT), ohne Schluessel-Rueckfall.
+    params = {k: str(v).strip() for k, v in (("von", von), ("bis", bis), ("gruppe", gruppe), ("takt", takt))
+              if v is not None and str(v).strip()}
+    return await _fetch_json("GET", f"{AI_API_BASE}/ai/kosten", headers=_caller_auth_headers(),
+                             params=params or None)
+
+
 # NOTE deliberately NOT exposed as MCP tools:
 #   /ai/tts/clone          — multipart/form-data file upload; needs a
 #                            file-relay path (download-then-forward) that

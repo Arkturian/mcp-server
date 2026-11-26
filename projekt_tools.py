@@ -143,6 +143,10 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
           fertig ist, etwa „Screenshot der neuen Ansicht“) sind freiwillig; sonst erkennt sie der Planer.
         - Mit `skizzieren=true` plant niemand: Der Mensch skizziert die Pakete selbst, danach formuliert der
           Planer sie aus (`plan_skizzieren`).
+        - Prüfung (Alex 26.11.2026): `browser_test` (Playwright prüft am Ende im echten Portal) und
+          `zweite_pruefung` (ein zweiter Agent prüft gegen). Aus heißt: Der Planer plant dafür kein Paket, den
+          Nachweis erbringt der bauende Agent. Weggelassen entscheidet der Planer wie bisher. Wie im Canvas sind
+          beide aus, wenn der Mensch nichts anderes sagt.
         {RECHT}""",
     )
     async def vorgabe_anlegen(
@@ -153,13 +157,27 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         typ: Optional[str] = None,
         deliverable: Optional[str] = None,
         skizzieren: bool = False,
+        browser_test: Optional[bool] = None,
+        zweite_pruefung: Optional[bool] = None,
     ) -> Any:
-        rumpf: Dict[str, Any] = _drop_none({"text": text, "titel": titel, "typ": typ, "deliverable": deliverable})
+        rumpf: Dict[str, Any] = _drop_none({"text": text, "titel": titel, "typ": typ, "deliverable": deliverable,
+                                            "browser_test": browser_test, "zweite_pruefung": zweite_pruefung})
         if skizzieren:
             rumpf["planen"] = False
         if analyse_partner:
             rumpf["analyse"] = {"partner": list(analyse_partner), "fragen": list(analyse_fragen or [])}
         return await transport("POST", f"{API}/vorgaben", json_body=rumpf)
+
+    @mcp.tool(
+        name="pruefung_setzen",
+        description=f"""Browser-Test und zweite Prüfung eines Projekts, wie die Haken im Canvas (Alex 26.11.2026).
+        Gilt für die nächste Planung und für neue Schritte der Projektleitung; schon geplante Schritte bleiben.
+        Weggelassen bleibt ein Wert, wie er ist. {RECHT}""",
+    )
+    async def pruefung_setzen(vorgabe_id: int, browser_test: Optional[bool] = None,
+                              zweite_pruefung: Optional[bool] = None) -> Any:
+        return await transport("PUT", f"{API}/vorgaben/{_seg(vorgabe_id)}/pruefung",
+                               json_body=_drop_none({"browser_test": browser_test, "zweite_pruefung": zweite_pruefung}))
 
     @mcp.tool(
         name="projekt_starten",

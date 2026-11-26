@@ -29,6 +29,7 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
             "paket_fragen", "paket_verlauf", "deliverable", "deliverable_nachtragen", "deliverable_abnehmen",
             "projekt_entscheidung", "projekt_entscheidungen", "projektleitung_absichten",
             "plan_zeichnen", "plan_skizzieren", "projekt_aendern", "spaces_liste", "space_posten",
+            "pruefung_setzen",
         })
 
     async def test_freigeber_tools_carry_the_rule(self):
@@ -102,6 +103,15 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
         stand = await self.mcp._tool_manager.call_tool("projekt_stand", {"vorgabe_id": 21})
         pl = stand["projektleitung"]
         self.assertEqual((pl["art"], pl["anbieter"], pl["modell"], pl["aufwand"]), ("agent", "claude", "opus", ""))
+
+    async def test_pruefung_beim_anlegen_und_spaeter(self):
+        await self.rufe("vorgabe_anlegen", {"text": "Baue X", "browser_test": False, "zweite_pruefung": True})
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/vorgaben", {"json_body": {
+            "text": "Baue X", "browser_test": False, "zweite_pruefung": True}}))
+        await self.rufe("vorgabe_anlegen", {"text": "Baue Y"})
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/vorgaben", {"json_body": {"text": "Baue Y"}}))
+        await self.rufe("pruefung_setzen", {"vorgabe_id": 24, "browser_test": True})
+        self.assertEqual(self.calls[-1], ("PUT", "/api/v1/vorgaben/24/pruefung", {"json_body": {"browser_test": True}}))
 
     async def test_projekt_stand_kuerzt_analyse_und_befund(self):
         lang = "x" * 5000

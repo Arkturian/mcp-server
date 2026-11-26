@@ -209,10 +209,14 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
     @mcp.tool(
         name="plan_ueberarbeiten",
         description=f"""Der Planer erstellt aus der Anmerkung eine neue Fassung der aktuellen Planung
-        (nur solange der Plan zur Prüfung steht). {RECHT}""",
+        (solange der Plan zur Prüfung steht). Gibt es noch keine Fassung, weil die Planung fehlschlug, plant er
+        die Vorgabe neu; die Anmerkung geht dabei nicht ein. {RECHT}""",
     )
     async def plan_ueberarbeiten(vorgabe_id: int, anmerkung: str) -> Any:
         v = await vorgabe_holen(vorgabe_id)
+        if not v.get("aktuelle_version") and v.get("status") in ("fehler", "neu"):
+            # Noch keine Fassung (etwa nach einem Fehler): neu planen statt 422 (CloudV2 für Alex, 26.11.).
+            return await transport("POST", f"{API}/vorgaben/{_seg(vorgabe_id)}/planen", json_body={})
         return await transport("POST", f"{API}/vorgaben/{_seg(vorgabe_id)}/ueberarbeiten",
                                json_body={"version": v.get("aktuelle_version"), "anmerkung": anmerkung})
 

@@ -52,6 +52,14 @@ def _gekuerzt(text: Any, grenze: int) -> str:
     return t if len(t) <= grenze else t[:grenze].rstrip() + " …"
 
 
+def _eintraege(eintraege: Any, anzahl: int, voll: bool) -> List[dict]:
+    """Die letzten Einträge von Logbuch oder Austausch; ohne `voll` jeder Text auf 600 Zeichen (Cloud-release 26.11.)."""
+    letzte = _kurz(eintraege, anzahl)
+    if voll:
+        return letzte
+    return [{**e, "text": _gekuerzt(e.get("text"), 600)} if isinstance(e, dict) and "text" in e else e for e in letzte]
+
+
 def _phasen_kurz(phasen: Any) -> Any:
     """Analyse und Befund knapp (26.11.: projekt_stand lieferte bis 150.000 Zeichen, fast alles Analysegespräche).
 
@@ -295,8 +303,8 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
             "phasen": leitung.get("phasen") if voll else _phasen_kurz(leitung.get("phasen")),
             "projektleitung": {"modus": leitung.get("modus"), "gehirn": leitung.get("gehirn"),
                                **_leitungsart(v.get("leitung"), leitung.get("gehirn")),
-                               "austausch": _kurz(leitung.get("austausch"), 5),
-                               "logbuch": _kurz(leitung.get("logbuch"), 5)},
+                               "austausch": _eintraege(leitung.get("austausch"), 5, voll),
+                               "logbuch": _eintraege(leitung.get("logbuch"), 5, voll)},
         }
 
     @mcp.tool(

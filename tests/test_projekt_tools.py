@@ -125,6 +125,21 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
         voll = await self.mcp._tool_manager.call_tool("projekt_stand", {"vorgabe_id": 23, "voll": True})
         self.assertEqual(voll["phasen"], phasen)
 
+    async def test_projekt_stand_kuerzt_logbuch_und_austausch(self):
+        lang = "y" * 3000
+        log = [{"von": "service:project-api", "am": str(i), "text": lang} for i in range(8)]
+        self.antworten[("GET", "/api/v1/vorgaben/23")] = {"projekt_post_id": 6533, "leitung": {"gehirn": "kette"}}
+        self.antworten[("GET", "/api/v1/projekt/projekte/6533")] = {"aufgaben": []}
+        self.antworten[("GET", "/api/v1/projekt/projekte/6533/leitung")] = {
+            "gehirn": "kette", "logbuch": log, "austausch": [{"von": "Alex", "am": "x", "text": "kurz"}]}
+        stand = await self.mcp._tool_manager.call_tool("projekt_stand", {"vorgabe_id": 23})
+        pl = stand["projektleitung"]
+        self.assertEqual([e["am"] for e in pl["logbuch"]], ["3", "4", "5", "6", "7"])
+        self.assertTrue(all(len(e["text"]) < 650 and e["text"].endswith(" …") for e in pl["logbuch"]))
+        self.assertEqual(pl["austausch"], [{"von": "Alex", "am": "x", "text": "kurz"}])
+        voll = await self.mcp._tool_manager.call_tool("projekt_stand", {"vorgabe_id": 23, "voll": True})
+        self.assertEqual(voll["projektleitung"]["logbuch"], log[-5:])
+
     async def test_projekt_stand_alter_rahmen_ohne_art(self):
         self.antworten[("GET", "/api/v1/vorgaben/14")] = {"projekt_post_id": 6465, "leitung": {"gehirn": "kette"}}
         self.antworten[("GET", "/api/v1/projekt/projekte/6465")] = {"aufgaben": []}

@@ -1060,13 +1060,23 @@ async def call_person_api(
 
 
 def _event_headers() -> Dict[str, str]:
-    """Instanzschluessel + gepruefter Agentenname; nie den JWT weiterreichen."""
-    from auth import current_caller_agent_name
+    """Instanzschluessel + gepruefter Agent (Name und Heimat-Mandant); nie den JWT weiterreichen.
+
+    #4061: Die event-api gibt eine Freigabe nur fuer Name *und* Heimat-Mandant
+    (X-Caller-Tenant = `tenant`-Claim, wie bei storage #3811). Ein gleichnamiger
+    Agent eines anderen Mandanten bekommt so nichts. Nur Agenten-Tokens zaehlen:
+    ein Benutzer-Token traegt im Namensfeld seinen sub, das ist kein Agent.
+    Ohne Name oder Heimat-Mandant schickt das Gateway keinen, die event-api
+    weist dann ab (fail closed)."""
+    from auth import current_caller_home_tenant, current_caller_verified_agent
 
     if not EVENT_API_KEY:
         raise ValueError("event_unavailable: EVENT_API_KEY is not configured on this gateway")
     headers: Dict[str, str] = {"X-API-Key": EVENT_API_KEY}
-    set_agent_name(headers, current_caller_agent_name() or "")
+    set_agent_name(headers, current_caller_verified_agent() or "")
+    heimat = current_caller_home_tenant()
+    if heimat:
+        headers["X-Caller-Tenant"] = heimat
     return headers
 
 

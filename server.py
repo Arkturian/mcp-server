@@ -13586,11 +13586,13 @@ async def cloud_session_restart(session_name: str) -> Dict[str, Any]:
     description=(
         "Rename YOURSELF: session_name must be your own agent name, new_name the new one. "
         "Same path as the portal (POST /api/sessions/{name}/rename): clone with history, "
-        "auth-api identity renamed (same id, rights kept), old entry removed. Your running "
-        "turn ends; you continue under the new name with --continue. The answer lists what "
-        "moved (carried) and what did not (not_carried) -- follow those up. Only for agents "
-        "that hold the explicit right mcp:cloud:session_rename; other agents' names are refused. "
-        "If the answer says the auth-api outcome is open, do NOT retry -- ask for it to be checked."
+        "auth-api identity renamed (same id, rights kept), old entry removed. This call ENDS "
+        "your current turn -- you will not see its answer here. You continue under the new name "
+        "with --continue, and the result (new name, what moved, what did not move and needs "
+        "follow-up) arrives there as a [Umbenennung] system message. Do not rename again to check. "
+        "If an error comes back instead, nothing was moved; if it says the auth-api outcome is "
+        "open, do NOT retry -- ask for it to be checked. Only for agents that hold the explicit "
+        "right mcp:cloud:session_rename; other agents' names are refused."
     ),
 )
 async def cloud_session_rename(session_name: str, new_name: str) -> Dict[str, Any]:

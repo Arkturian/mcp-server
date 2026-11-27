@@ -150,3 +150,28 @@ def test_neuer_name_ohne_raender_und_pfad_aus_dem_token():
     out, call = _rufen("r_cubic", "r_cubic", "  r-cubic_Development ")
     assert call.call_args.args == ("POST", "/api/sessions/r_cubic/rename")
     assert call.call_args.kwargs["json_body"] == {"new_name": "r-cubic_Development"}
+
+
+def _stapel(teile, srv="cloud"):
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app()), base_url="http://gw") as c:
+            return await c.post(f"/{srv}/", content=json.dumps(teile),
+                                headers={"Content-Type": "application/json", "Authorization": "Bearer t"})
+    return code(asyncio.run(go()))
+
+
+def test_stapel_mit_session_rename_ist_gesperrt(rechte):
+    """Cloud 76d91ba6: ein Stapel [health, session_rename] mit mcp:cloud:* -- der zweite Aufruf sperrt."""
+    rechte(["mcp:cloud:*"])
+    teile = [{"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": w, "arguments": {}}}
+             for i, w in enumerate(["health", "session_rename"])]
+    assert _stapel(teile) == 403                      # Stapel: gesperrt als HTTP 403, nicht als Werkzeugergebnis
+    rechte(["mcp:cloud:*", "mcp:cloud:session_rename"])
+    assert _stapel(teile) == 200
+
+
+@pytest.mark.parametrize("methode", ["initialize", "tools/list", "notifications/initialized", "ping"])
+def test_andere_methoden_mit_platzhalter_bleiben_offen(rechte, methode):
+    """Der Rumpf wird jetzt fuer alle cloud-Aufrufe gelesen -- Handshake und Liste bleiben 200."""
+    rechte(["mcp:cloud:*"])
+    assert _stapel({"jsonrpc": "2.0", "id": 1, "method": methode, "params": {}}) == 200

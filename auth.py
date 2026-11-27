@@ -480,8 +480,27 @@ def _stufen_fuer(mcp_server: str, tool_name: str) -> list[str]:
     return list(reihe[reihe.index(stufe):]) if stufe in reihe else [stufe]
 
 
+# Werkzeuge, die NUR ein ausdrueckliches Recht mcp:<server>:<werkzeug> oeffnet (#4188): kein
+# Platzhalter (mcp:<server>:*, mcp:*, *) und keine Stufe. Anlass: session_rename im cloud-MCP soll nur
+# fuer die Agenten des Mandanten lesser gelten (Alex 27.11.), die Rolle customer-agent traegt aber
+# mcp:cloud:* auch in anderen Mandanten. Form "server:werkzeug", kommagetrennt; MCP_NUR_AUSDRUECKLICH
+# ersetzt die Vorgabe (leer setzen schaltet sie ab).
+_NUR_AUSDRUECKLICH_VORGABE = "cloud:session_rename"
+NUR_AUSDRUECKLICH_WERKZEUGE: set[tuple[str, str]] = {
+    (t.split(":", 1)[0].strip().lower(), t.split(":", 1)[1].strip())
+    for t in os.getenv("MCP_NUR_AUSDRUECKLICH", _NUR_AUSDRUECKLICH_VORGABE).split(",")
+    if ":" in t and t.split(":", 1)[1].strip()
+}
+
+
+def nur_ausdruecklich(mcp_server: str, tool_name: str) -> bool:
+    return ((mcp_server or "").lower(), tool_name or "") in NUR_AUSDRUECKLICH_WERKZEUGE
+
+
 def _werkzeug_erlaubt(perms: list[str], mcp_server: str, tool_name: str) -> bool:
     """Darf ein Agent mit `perms` (schon nach _permissions_for_server) das Werkzeug rufen?"""
+    if nur_ausdruecklich(mcp_server, tool_name):
+        return f"mcp:{mcp_server}:{tool_name}" in perms                  # #4188: woertlich
     ziele = [f"mcp:{mcp_server}:{tool_name}"] + [f"mcp:{mcp_server}:{s}" for s in _stufen_fuer(mcp_server, tool_name)]
     return any(_match_permission(p, z) for p in perms for z in ziele)
 
@@ -692,6 +711,8 @@ def gegriffenes_recht(permissions: list[str], mcp_server: str, tool_name: str, r
     war er fuer den Aufruf noetig. "offen" fuer offene Server; dieselbe Pruefung
     wie im Tor (_permissions_for_server, _match_permission, WERKZEUG_STUFEN)."""
     import aufruf_protokoll as _ap
+    if nur_ausdruecklich(mcp_server, tool_name):                     # #4188: nur woertlich
+        return f"mcp:{mcp_server}:{tool_name}" if f"mcp:{mcp_server}:{tool_name}" in permissions else "?"
     if mcp_server and _offen(mcp_server, rolle):
         return "offen"
     perms = _permissions_for_server(permissions, mcp_server)
@@ -911,12 +932,16 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                     status_code=403,
                 )
 
-            # 2. Tool-level: check specific tool from the body we already parsed
-            if not any(_match_permission(p, f"mcp:{mcp_server}:*") for p in perms) and body_bytes:
+            # 2. Tool-level: check specific tool from the body we already parsed. Mit Platzhalter
+            # fuer den Server nur noch die Werkzeuge, die ein ausdrueckliches Recht verlangen (#4188).
+            _platzhalter = any(_match_permission(p, f"mcp:{mcp_server}:*") for p in perms)
+            if body_bytes and (not _platzhalter or any(w[0] == mcp_server for w in NUR_AUSDRUECKLICH_WERKZEUGE)):
                 try:
                     body_json = _json.loads(body_bytes)
                     # Jeder Aufruf eines Stapels einzeln.
                     for tool_name in _aufgerufene_werkzeuge(body_json):
+                        if _platzhalter and not nur_ausdruecklich(mcp_server, tool_name):
+                            continue
                         required_perm = " | ".join(
                             [f"mcp:{mcp_server}:{tool_name}"]
                             + [f"mcp:{mcp_server}:{s}" for s in _stufen_fuer(mcp_server, tool_name)])

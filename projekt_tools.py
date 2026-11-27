@@ -116,7 +116,7 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         liste = await transport("GET", f"{API}/vorgaben", params=_drop_none({"status": status, "limit": limit}))
         return [
             {k: v.get(k) for k in ("id", "titel", "status", "phase", "aktuelle_version", "erstellt_von",
-                                   "geaendert_am")}
+                                   "geaendert_am", "rang")}
             for v in liste
         ]
 
@@ -201,6 +201,18 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
                               zweite_pruefung: Optional[bool] = None) -> Any:
         return await transport("PUT", f"{API}/vorgaben/{_seg(vorgabe_id)}/pruefung",
                                json_body=_drop_none({"browser_test": browser_test, "zweite_pruefung": zweite_pruefung}))
+
+    @mcp.tool(
+        name="rangfolge_setzen",
+        description=f"""Rangfolge der Projekte, wie die Pfeile in „Alle Projekte“ im Canvas (Alex 27.11.2026).
+
+        `reihenfolge` nennt die Vorgaben vom wichtigsten an. Nicht genannte verlieren ihren Rang. Hat ein Agent
+        Pakete in mehreren Projekten mit Rang, weckt ihn die project-api zuerst für das höhere, das andere
+        wartet (im `projekt_stand` steht dann `vorrang`). Projekte ohne Rang laufen wie bisher. Den heutigen
+        Rang zeigt `vorgaben_liste` im Feld `rang`. {RECHT}""",
+    )
+    async def rangfolge_setzen(reihenfolge: list[int]) -> Any:
+        return await transport("PUT", f"{API}/vorgaben/rangfolge", json_body={"reihenfolge": [int(v) for v in reihenfolge]})
 
     @mcp.tool(
         name="projekt_starten",
@@ -351,7 +363,7 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
             "deliverable": graph.get("deliverable"),
             "pakete": [{k: a.get(k) for k in ("plan", "titel", "agent", "phase", "status", "tor", "schluessel",
                                               "angenommen", "wartet_auf", "wartet_was", "wofuer", "lieferung",
-                                              "folgearbeit", "nachweis")}
+                                              "folgearbeit", "nachweis", "vorrang")}
                        for a in graph.get("aufgaben", [])],
             "phasen": leitung.get("phasen") if voll else _phasen_kurz(leitung.get("phasen")),
             "projektleitung": {"modus": leitung.get("modus"), "gehirn": leitung.get("gehirn"),

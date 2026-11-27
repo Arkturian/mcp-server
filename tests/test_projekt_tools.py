@@ -29,7 +29,7 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
             "paket_fragen", "paket_verlauf", "deliverable", "deliverable_nachtragen", "deliverable_abnehmen",
             "projekt_entscheidung", "projekt_entscheidungen", "projektleitung_absichten",
             "plan_zeichnen", "plan_skizzieren", "projekt_aendern", "spaces_liste", "space_posten",
-            "pruefung_setzen", "board_freigabe",
+            "pruefung_setzen", "board_freigabe", "rangfolge_setzen",
         })
 
     async def test_freigeber_tools_carry_the_rule(self):
@@ -37,7 +37,7 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
         for name in ("vorgabe_anlegen", "projekt_starten", "plan_ueberarbeiten", "vorgabe_ablehnen",
                      "plan_absegnen", "projektleitung_schalten", "projektleitung_antworten", "tor_oeffnen",
                      "vorgabe_loeschen", "paket_fragen", "deliverable_nachtragen", "deliverable_abnehmen",
-                     "plan_zeichnen", "plan_skizzieren", "projekt_aendern"):
+                     "plan_zeichnen", "plan_skizzieren", "projekt_aendern", "rangfolge_setzen"):
             self.assertIn(RECHT, tools[name].description, name)
 
     async def test_vorgabe_mit_analyse(self):
@@ -143,6 +143,13 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls[-1], ("POST", "/api/v1/vorgaben", {"json_body": {"text": "Baue Y"}}))
         await self.rufe("pruefung_setzen", {"vorgabe_id": 24, "browser_test": True})
         self.assertEqual(self.calls[-1], ("PUT", "/api/v1/vorgaben/24/pruefung", {"json_body": {"browser_test": True}}))
+
+    async def test_rangfolge_setzen(self):
+        await self.rufe("rangfolge_setzen", {"reihenfolge": [29, 24]})
+        self.assertEqual(self.calls[-1], ("PUT", "/api/v1/vorgaben/rangfolge", {"json_body": {"reihenfolge": [29, 24]}}))
+        self.antworten[("GET", "/api/v1/vorgaben")] = [{"id": 29, "titel": "Zugänge", "rang": 1}]
+        liste = await self.mcp._tool_manager.call_tool("vorgaben_liste", {})
+        self.assertEqual(liste[0]["rang"], 1)
 
     async def test_projekt_stand_kuerzt_analyse_und_befund(self):
         lang = "x" * 5000

@@ -23,17 +23,23 @@ Regeln:
 - 401 des Zieldienstes wird 403, `WWW-Authenticate` faellt weg: Claude Code
   startet bei 401 mit resource_metadata seinen OAuth-Ablauf, der Agent haengt
   dann am Anmeldebanner. Der Gateway selbst antwortet aus demselben Grund 403.
+- GET-Stroeme (#4180, config 27.11.: 100 offene Stroeme belegten den ganzen
+  Verbindungsvorrat, jeder POST endete in PoolTimeout): eigener Client je Ziel,
+  hoechstens MCP_PASSTHROUGH_STROEME (Vorgabe 32) zugleich. Darueber bekommt ein
+  GET sofort 405; nach dem Streamable-HTTP-Transport heisst das "kein Strom vom
+  Server", der MCP-Client arbeitet ohne weiter. POST und DELETE haben ihren
+  eigenen Vorrat und scheitern nie an offenen Stroemen.
 """
 from __future__ import annotations
 
 import logging
 import os
 import re
+import time
 from typing import Dict, Optional
 from urllib.parse import urlsplit
 
 import httpx
-from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 
@@ -79,6 +85,20 @@ def parse(raw: Optional[str], reserved=()) -> Dict[str, str]:
     return out
 
 
+STROEME_VORGABE = 32
+GRENZE_MELDEN_S = 60.0
+
+
+def stroeme_grenze(roh: Optional[str] = None) -> int:
+    """Hoechstzahl gleichzeitiger GET-Stroeme je Ziel (MCP_PASSTHROUGH_STROEME). 0 = keine Stroeme."""
+    roh = os.getenv("MCP_PASSTHROUGH_STROEME") if roh is None else roh
+    try:
+        return max(0, int(str(roh).strip())) if str(roh or "").strip() else STROEME_VORGABE
+    except ValueError:
+        logger.warning("MCP_PASSTHROUGH_STROEME ungueltig (%r), Vorgabe %d", str(roh)[:20], STROEME_VORGABE)
+        return STROEME_VORGABE
+
+
 def _ziel(basis: str, pfad: str, query: str) -> str:
     rest = pfad.lstrip("/")
     url = f"{basis}/{rest}" if rest else basis
@@ -88,11 +108,16 @@ def _ziel(basis: str, pfad: str, query: str) -> str:
 class Durchreiche:
     """ASGI-App fuer genau einen Zieldienst."""
 
-    def __init__(self, name: str, basis: str, transport: Optional[httpx.AsyncBaseTransport] = None):
+    def __init__(self, name: str, basis: str, transport: Optional[httpx.AsyncBaseTransport] = None,
+                 stroeme: Optional[int] = None):
         self.name = name
         self.basis = basis
         self._transport = transport
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: Optional[httpx.AsyncClient] = None          # POST, DELETE
+        self._strom_client: Optional[httpx.AsyncClient] = None    # GET-Stroeme (#4180)
+        self.stroeme = stroeme_grenze() if stroeme is None else max(0, int(stroeme))
+        self.offene_stroeme = 0
+        self._gemeldet = 0.0
 
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -102,6 +127,31 @@ class Durchreiche:
                 follow_redirects=False,
             )
         return self._client
+
+    def _http_strom(self) -> httpx.AsyncClient:
+        """Eigener Vorrat fuer GET-Stroeme: sie halten ihre Verbindung beliebig lange und duerfen den der
+        Aufrufe nie belegen. Die Zahl begrenzt __call__ selbst (offene_stroeme), der Vorrat passt dazu."""
+        if self._strom_client is None:
+            self._strom_client = httpx.AsyncClient(
+                transport=self._transport,
+                timeout=httpx.Timeout(connect=5.0, read=None, write=30.0, pool=5.0),
+                limits=httpx.Limits(max_connections=max(1, self.stroeme), max_keepalive_connections=0),
+                follow_redirects=False,
+            )
+        return self._strom_client
+
+    async def schliessen(self) -> None:
+        for c in (self._client, self._strom_client):
+            if c is not None:
+                await c.aclose()
+        self._client = self._strom_client = None
+
+    def _grenze_melden(self) -> None:
+        jetzt = time.monotonic()
+        if jetzt - self._gemeldet >= GRENZE_MELDEN_S:
+            self._gemeldet = jetzt
+            logger.warning("Durchreiche %s: Grenze fuer GET-Stroeme erreicht (%d offen, MCP_PASSTHROUGH_STROEME), "
+                           "weitere GET bekommen 405", self.name, self.offene_stroeme)
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -121,26 +171,40 @@ class Durchreiche:
         if request.method not in ("POST", "GET", "DELETE"):
             await JSONResponse({"error": "Method Not Allowed"}, status_code=405)(scope, receive, send)
             return
+        strom = request.method == "GET"
+        if strom and self.offene_stroeme >= self.stroeme:
+            # #4180: kein weiterer Strom; 405 heisst fuer den MCP-Client "der Server bietet keinen".
+            self._grenze_melden()
+            await JSONResponse({"error": "Method Not Allowed", "grund": "strom_grenze"}, status_code=405,
+                               headers={"Allow": "POST, DELETE"})(scope, receive, send)
+            return
         ziel = _ziel(self.basis, pfad, scope.get("query_string", b"").decode("latin-1"))
         koepfe = [(k, v) for k, v in request.headers.items() if k.lower() not in _NICHT_HIN]
         body = await request.body()
-        client = self._http()
+        client = self._http_strom() if strom else self._http()
+        if strom:
+            self.offene_stroeme += 1
         try:
-            antwort = await client.send(
-                client.build_request(request.method, ziel, headers=koepfe, content=body),
-                stream=True,
-            )
-        except httpx.HTTPError as e:
-            logger.warning("Durchreiche %s: Ziel nicht erreichbar: %r", self.name, e)
-            await JSONResponse({"error": f"{self.name}: Zieldienst nicht erreichbar"},
-                               status_code=502)(scope, receive, send)
-            return
-        zurueck = {k: v for k, v in antwort.headers.items() if k.lower() not in _NICHT_ZURUECK}
-        status = 403 if antwort.status_code == 401 else antwort.status_code
-        await StreamingResponse(
-            antwort.aiter_raw(), status_code=status, headers=zurueck,
-            background=BackgroundTask(antwort.aclose),
-        )(scope, receive, send)
+            try:
+                antwort = await client.send(
+                    client.build_request(request.method, ziel, headers=koepfe, content=body),
+                    stream=True,
+                )
+            except httpx.HTTPError as e:
+                logger.warning("Durchreiche %s: Ziel nicht erreichbar: %r", self.name, e)
+                await JSONResponse({"error": f"{self.name}: Zieldienst nicht erreichbar"},
+                                   status_code=502)(scope, receive, send)
+                return
+            zurueck = {k: v for k, v in antwort.headers.items() if k.lower() not in _NICHT_ZURUECK}
+            status = 403 if antwort.status_code == 401 else antwort.status_code
+            try:
+                await StreamingResponse(antwort.aiter_raw(), status_code=status, headers=zurueck)(
+                    scope, receive, send)
+            finally:
+                await antwort.aclose()           # auch beim Abbruch des Aufrufers (Verbindung zurueck)
+        finally:
+            if strom:
+                self.offene_stroeme -= 1
 
 
 def aus_umgebung(reserved=()) -> Dict[str, Durchreiche]:

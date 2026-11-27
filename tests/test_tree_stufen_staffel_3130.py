@@ -7,6 +7,7 @@ waere beides erlaubt. Gegen die echte JWTAuthMiddleware mit gefaelschtem JWT, ke
 tree-api. person bleibt woertlich (person-api staffelt nicht).
 """
 import asyncio
+from rollensperre import GESPERRT, code  # noqa: E402  (#4171)
 import json
 import os
 
@@ -69,7 +70,7 @@ def _post(srv, werkzeug):
 
 
 def _erlaubt(srv, werkzeuge):
-    return {w for w in werkzeuge if _post(srv, w).status_code == 200}
+    return {w for w in werkzeuge if code(_post(srv, w)) == 200}
 
 
 def test_reihe_wie_tree_api():
@@ -92,8 +93,8 @@ def test_read_deckt_weder_status_noch_write(rechte):
     rechte(["mcp:tree:read"])
     assert _erlaubt("tree", LESEN | STATUS | SCHREIBEN) == LESEN
     r = _post("tree", "nodes_update")
-    assert r.status_code == 403
-    msg = r.json()["error"]["message"]
+    assert code(r) == GESPERRT                                     # #4171
+    msg = r.json()["result"]["content"][0]["text"]
     assert "mcp:tree:nodes_update | mcp:tree:status | mcp:tree:write" in msg
 
 

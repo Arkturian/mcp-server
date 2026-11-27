@@ -9,6 +9,7 @@ und Platzhalter decken alles.
 Nur gegen die echte JWTAuthMiddleware mit gefaelschtem JWT -- keine tree-api.
 """
 import asyncio
+from rollensperre import GESPERRT, code  # noqa: E402  (#4171)
 import json
 import os
 import subprocess
@@ -104,7 +105,7 @@ def _call(*werkzeuge):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app()), base_url="http://gw") as c:
             return await c.post("/tree/", content=json.dumps(body),
                                 headers={"Content-Type": "application/json", "Authorization": "Bearer t"})
-    return asyncio.run(go()).status_code
+    return code(asyncio.run(go()))
 
 
 def _erlaubt():
@@ -114,8 +115,8 @@ def _erlaubt():
 def test_nur_read(rechte):
     rechte(["mcp:tree:read"])
     assert _erlaubt() == LESEN
-    assert _call("nodes_update") == 403
-    assert _call("nodes_create") == 403
+    assert _call("nodes_update") == GESPERRT
+    assert _call("nodes_create") == GESPERRT
 
 
 def test_read_und_status(rechte):
@@ -123,7 +124,7 @@ def test_read_und_status(rechte):
     rechte(["mcp:tree:read", "mcp:tree:status"])
     assert _erlaubt() == LESEN | STATUS
     assert _call("nodes_update") == 200
-    assert _call("nodes_create") == 403
+    assert _call("nodes_create") == GESPERRT
 
 
 def test_mit_projekt_begrenzung(rechte):

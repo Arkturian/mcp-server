@@ -8,6 +8,7 @@
 Nur gegen Fakes -- die person-api ist vom Gateway noch nicht erreichbar.
 """
 import asyncio
+from rollensperre import GESPERRT, code  # noqa: E402  (#4171)
 import json
 import os
 import subprocess
@@ -172,7 +173,7 @@ def _post(body, token="t"):
     async def go():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app()), base_url="http://gw") as c:
             return await c.post("/person/", content=json.dumps(body), headers=headers)
-    return asyncio.run(go()).status_code
+    return code(asyncio.run(go()))
 
 
 def _call(*werkzeuge, token="t"):
@@ -183,15 +184,15 @@ def _call(*werkzeuge, token="t"):
 
 @pytest.mark.parametrize("perms,werkzeug,code", [
     (["mcp:person:read"], "persons_list", 200),
-    (["mcp:person:read"], "person_create", 403),
-    (["mcp:person:read"], "persons_merge", 403),
+    (["mcp:person:read"], "person_create", GESPERRT),
+    (["mcp:person:read"], "persons_merge", GESPERRT),
     (["mcp:person:write"], "person_create", 200),
-    (["mcp:person:write"], "persons_list", 403),          # woertlich, wie die person-api
+    (["mcp:person:write"], "persons_list", GESPERRT),          # woertlich, wie die person-api
     (["mcp:person:admin"], "persons_merge", 200),
-    (["mcp:person:admin"], "person_update", 403),
+    (["mcp:person:admin"], "person_update", GESPERRT),
     (["mcp:person:*"], "persons_merge", 200),
     (["mcp:person:persons_list"], "persons_list", 200),   # einzelnes Werkzeug ausdruecklich
-    (["mcp:person:contact"], "persons_list", 403),        # Sicht-Recht der person-api, kein Werkzeug
+    (["mcp:person:contact"], "persons_list", GESPERRT),        # Sicht-Recht der person-api, kein Werkzeug
     (["mcp:*"], "persons_list", 403),                     # kein offener Server, Platzhalter zaehlen nicht
     (["*"], "persons_list", 403),
     ([], "persons_list", 403),

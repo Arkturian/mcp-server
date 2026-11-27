@@ -7,6 +7,7 @@ Echte JWTAuthMiddleware mit festen Claims; auth-api ist eine Attrappe (_live_rec
 httpx.MockTransport). Keine business-api.
 """
 import asyncio
+from rollensperre import GESPERRT, code  # noqa: E402  (#4171)
 import json
 import os
 
@@ -83,9 +84,10 @@ def test_altes_token_neues_recht_entzogen_ergibt_403(gw):
     """Token aus der Rolle (mcp:business:*), in auth-api ist das Recht weg."""
     gw["setze"](["mcp:business:*"], live=["mcp:issue:*"])
     r = _call("documents_mark_paid")
-    assert r.status_code == 403
-    assert "documents_mark_paid" in r.json()["error"]["message"]
-    assert _call("documents_list").status_code == 403
+    assert code(r) == GESPERRT                                     # #4171: Werkzeugergebnis, nicht 403
+    assert "mcp:business:documents_mark_paid" in r.json()["result"]["content"][0]["text"]
+    assert "Recht laut auth-api entzogen" in r.json()["result"]["content"][0]["text"]
+    assert code(_call("documents_list")) == GESPERRT
 
 
 def test_business_mit_recht_arbeitet_weiter(gw):
@@ -99,8 +101,8 @@ def test_nur_lesend_vergeben(gw):
     gw["setze"](["mcp:business:*"], live=["mcp:business:documents_list", "mcp:business:clients_list"])
     assert _call("documents_list").status_code == 200
     assert _call("clients_list").status_code == 200
-    assert _call("documents_mark_paid").status_code == 403
-    assert _call("paypal_sync").status_code == 403
+    assert code(_call("documents_mark_paid")) == GESPERRT
+    assert code(_call("paypal_sync")) == GESPERRT
 
 
 def test_platzhalter_in_auth_api_gilt(gw):
@@ -114,7 +116,7 @@ def test_nur_einengend_live_oeffnet_nichts(gw):
     """auth-api darf nichts oeffnen, was das Token nicht hat."""
     gw["setze"](["mcp:business:documents_list"], live=["mcp:business:*"])
     assert _call("documents_list").status_code == 200
-    assert _call("documents_mark_paid").status_code == 403
+    assert code(_call("documents_mark_paid")) == GESPERRT
 
 
 def test_stapel_mit_einem_verbotenen_wird_abgewiesen(gw):
@@ -124,7 +126,7 @@ def test_stapel_mit_einem_verbotenen_wird_abgewiesen(gw):
 
 def test_agent_in_auth_api_geloescht(gw):
     gw["setze"](["mcp:business:*"], live=[])
-    assert _call("documents_list").status_code == 403
+    assert code(_call("documents_list")) == GESPERRT
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +162,7 @@ def test_mensch_nicht_live_geprueft(gw):
 
 def test_ohne_recht_im_token_kein_abruf(gw):
     gw["setze"](["mcp:issue:*"], live=["mcp:business:*"])
-    assert _call("documents_mark_paid").status_code == 403
+    assert _call("documents_mark_paid").status_code == 403          # kein Business-Recht: Server-Ebene
     assert gw["abrufe"] == []
 
 
@@ -184,7 +186,7 @@ def test_zwischenspeicher_je_agent(gw, monkeypatch):
     assert len(gw["abrufe"]) == 1
     gw["live"] = []                       # Recht entzogen
     uhr[0] += 61
-    assert _call("documents_list").status_code == 403
+    assert code(_call("documents_list")) == GESPERRT
     assert len(gw["abrufe"]) == 2
 
 
@@ -217,7 +219,7 @@ def test_ausfall_mit_stand_innerhalb_notstand(gw, monkeypatch):
     gw["fehler"] = "HTTP 502"
     uhr[0] += 300                          # TTL vorbei, Notstand nicht
     assert _call("documents_list").status_code == 200
-    assert _call("documents_mark_paid").status_code == 403     # der alte Stand engt weiter ein
+    assert code(_call("documents_mark_paid")) == GESPERRT      # der alte Stand engt weiter ein
     uhr[0] += 700                          # Notstand vorbei
     assert _call("documents_list").status_code == 503
 

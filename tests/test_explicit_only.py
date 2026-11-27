@@ -5,6 +5,7 @@ An einem Server in auth.EXPLICIT_ONLY_SERVERS zaehlen "*", "mcp:*" und
 Werkzeug frei. Andere Server pruefen unveraendert.
 """
 import asyncio
+from rollensperre import GESPERRT, code  # noqa: E402  (#4171)
 import json
 
 import httpx
@@ -47,7 +48,7 @@ def _post(path, body=CALL):
                                      base_url="http://gw") as c:
             return await c.post(path, content=body, headers={
                 "Authorization": "Bearer t", "Content-Type": "application/json"})
-    return asyncio.run(go()).status_code
+    return code(asyncio.run(go()))
 
 
 @pytest.mark.parametrize("perms", [["*"], ["mcp:*"], ["mcp:*:*"], ["mcp:*:projektkosten"],
@@ -66,7 +67,7 @@ def test_ausdrueckliches_recht_kommt_durch(mit_rechten, perms):
 
 def test_werkzeugrecht_gibt_nur_dieses_werkzeug_frei(mit_rechten):
     mit_rechten(["*", "mcp:p3-buchhaltung:anderes"])
-    assert _post("/p3-buchhaltung/") == 403
+    assert _post("/p3-buchhaltung/") == GESPERRT
 
 
 @pytest.mark.parametrize("perms", [["*"], ["mcp:*"], ["mcp:*:*"]])

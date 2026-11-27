@@ -534,6 +534,28 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
     # Project Spaces (#3954, Alex 24.11.2026) --------------------------------------------------------------
 
     @mcp.tool(
+        name="board_freigabe",
+        description="""Einen Agenten am Board eines Project Space lesen oder schreiben lassen, oder das zurücknehmen
+        (#4012). Jede Freigabe und jeder Entzug stehen im Rechtebericht, Alex kann widersprechen.
+
+        - Vergeben (`entziehen` false) geht nur mit einem Paket in der Ausführung, dessen Tor offen ist: `paket` als
+          `<Beitrag>/<Planschlüssel>`, etwa `6465/I7`. Du musst der Zuständige dieses Pakets sein, oder ein
+          freigebender Mensch hat deinen Zug begonnen. Ohne offenes Tor kommt 403 `keine_grundlage`, lehnt der
+          Rechtebericht ab, 409; dann gibt es keine Freigabe.
+        - `recht`: `read` oder `write`.
+        - Entziehen (`entziehen` true) nimmt jede offene Freigabe des Agenten an diesem Board zurück. Das darf nur ein
+          freigebender Mensch oder ein Agent in seinem Auftrag, auch nach dem Ende des Pakets (Aufräumen).
+        - `space`: id des Space (aus spaces_liste).""",
+    )
+    async def board_freigabe(space: int, agent: str, paket: str, recht: str = "write",
+                             entziehen: bool = False) -> Any:
+        if entziehen:
+            return await transport("DELETE", f"{API}/spaces/{_seg(space)}/board/agenten/{_seg(agent)}",
+                                   params={"paket": paket})
+        return await transport("POST", f"{API}/spaces/{_seg(space)}/board/agenten",
+                               json_body={"agent": agent, "recht": recht, "paket": paket})
+
+    @mcp.tool(
         name="spaces_liste",
         description="""Die Project Spaces im Projektmanagement: Whiteboards je Thema mit Statements und Projekten.
         id, name und Zahl der Karten; „Allgemein“ (id 0) für Karten ohne Space.""",

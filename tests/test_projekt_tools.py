@@ -29,7 +29,7 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
             "paket_fragen", "paket_verlauf", "deliverable", "deliverable_nachtragen", "deliverable_abnehmen",
             "projekt_entscheidung", "projekt_entscheidungen", "projektleitung_absichten",
             "plan_zeichnen", "plan_skizzieren", "projekt_aendern", "spaces_liste", "space_posten",
-            "pruefung_setzen",
+            "pruefung_setzen", "board_freigabe",
         })
 
     async def test_freigeber_tools_carry_the_rule(self):
@@ -323,3 +323,12 @@ class SpacePostenTests(ProjektToolsTests):
         ergebnis = await self.rufe("space_posten", {"text": "x y z", "space": "Gibtsnicht"})
         self.assertNotIn(("POST", "/api/v1/spaces/0/ideen"), [(c[0], c[1]) for c in self.calls])
         self.assertIn("space_unbekannt", str(ergebnis))
+
+    async def test_board_freigabe_vergeben_und_entziehen(self):
+        await self.rufe("board_freigabe", {"space": 3, "agent": "Playwright", "paket": "6465/I7", "recht": "read"})
+        self.assertEqual(self.calls[-1], ("POST", "/api/v1/spaces/3/board/agenten",
+                                          {"json_body": {"agent": "Playwright", "recht": "read", "paket": "6465/I7"}}))
+        await self.rufe("board_freigabe", {"space": 3, "agent": "Playwright", "paket": "6465/I7", "entziehen": True})
+        self.assertEqual(self.calls[-1], ("DELETE", "/api/v1/spaces/3/board/agenten/Playwright",
+                                          {"params": {"paket": "6465/I7"}}))
+

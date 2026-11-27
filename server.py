@@ -13582,6 +13582,37 @@ async def cloud_session_restart(session_name: str) -> Dict[str, Any]:
 
 
 @cloud_mcp.tool(
+    name="session_rename",
+    description=(
+        "Rename YOURSELF: session_name must be your own agent name, new_name the new one. "
+        "Same path as the portal (POST /api/sessions/{name}/rename): clone with history, "
+        "auth-api identity renamed (same id, rights kept), old entry removed. Your running "
+        "turn ends; you continue under the new name with --continue. The answer lists what "
+        "moved (carried) and what did not (not_carried) -- follow those up. Only for agents "
+        "that hold the explicit right mcp:cloud:session_rename; other agents' names are refused. "
+        "If the answer says the auth-api outcome is open, do NOT retry -- ask for it to be checked."
+    ),
+)
+async def cloud_session_rename(session_name: str, new_name: str) -> Dict[str, Any]:
+    """#4188 (Alex 27.11.): Agenten benennen sich selbst um, nur den eigenen Namen. Das Tor in
+    cloud-api (lifecycle_gate: der Agent selbst) prueft es noch einmal."""
+    from auth import current_caller_verified_agent
+    ich = current_caller_verified_agent()
+    if not ich:
+        return {"status": "error", "error": "nur_agenten",
+                "message": "session_rename ist fuer Agenten; Menschen benennen im Portal um."}
+    if (session_name or "") != ich:
+        return {"status": "error", "error": "nur_eigener_name",
+                "message": f"Du kannst nur dich selbst umbenennen ('{ich}'), nicht '{session_name}'."}
+    neu = (new_name or "").strip()
+    if not neu or neu == ich:
+        return {"status": "error", "error": "neuer_name_fehlt",
+                "message": "new_name fehlt oder ist dein jetziger Name."}
+    return await call_cloud_api("POST", f"/api/sessions/{ich}/rename", json_body={"new_name": neu},
+                                timeout=240.0)
+
+
+@cloud_mcp.tool(
     name="session_delete",
     description=(
         "DELETE an agent for good (federation-aware): stops its CLI, removes its registry row, "

@@ -4,6 +4,7 @@ MCP_OFFENE_SERVER je Gateway; Vorgabe leer. Ohne Token bleibt es zu, und ein
 Server, der zugleich nur mit ausdruecklichem Recht geht, bleibt zu.
 """
 import asyncio
+from rollensperre import GESPERRT, code  # noqa: E402  (#4171)
 import json
 
 import httpx
@@ -46,7 +47,7 @@ def _post(path, token=True):
             h["Authorization"] = "Bearer t"
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app()), base_url="http://gw") as c:
             return await c.post(path, content=CALL, headers=h)
-    return asyncio.run(go()).status_code
+    return code(asyncio.run(go()))
 
 
 def test_offener_server_ohne_eigenes_recht(agent):
@@ -91,14 +92,14 @@ def _projektleiter_aufruf(monkeypatch, werkzeug, server="projekt", rolle="projek
         h = {"Content-Type": "application/json", "Authorization": "Bearer t"}
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app()), base_url="http://gw") as c:
             return await c.post(f"/{server}/", content=aufruf, headers=h)
-    return asyncio.run(go()).status_code
+    return code(asyncio.run(go()))
 
 
 def test_projektleiter_ruft_nur_seine_werkzeuge(monkeypatch):
     assert _projektleiter_aufruf(monkeypatch, "projekt_stand") == 200
     assert _projektleiter_aufruf(monkeypatch, "projektleitung_absichten") == 200
     for werkzeug in ("plan_absegnen", "tor_oeffnen", "vorgabe_loeschen", "deliverable_abnehmen"):
-        assert _projektleiter_aufruf(monkeypatch, werkzeug) == 403, werkzeug
+        assert _projektleiter_aufruf(monkeypatch, werkzeug) == GESPERRT, werkzeug
 
 
 def test_projektleiter_hat_keinen_offenen_llmtime(monkeypatch):

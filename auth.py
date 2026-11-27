@@ -593,6 +593,9 @@ async def _live_pruefung(agent: "AgentContext", mcp_server: str, token: str, bod
         return None
     logger.warning("RBAC denied (live, #3987): agent=%s role=%s perm=mcp:%s:%s",
                    agent.name, agent.role, mcp_server, verweigert)
+    if verweigert != "?":                               # #4171: Sperre nach Recht, keine Stoerung
+        return _rolle_gesperrt(body_json, agent.role, f"mcp:{mcp_server}:{verweigert}",
+                               "Recht laut auth-api entzogen")
     return JSONResponse({"jsonrpc": "2.0", "id": body_json.get("id") if isinstance(body_json, dict) else None,
                          "error": {"code": -32600,
                                    "message": f"Permission denied: agent '{agent.name}' cannot call "
@@ -604,6 +607,25 @@ def _jsonrpc_teile(body_json) -> list:
     """Einzelne JSON-RPC-Nachrichten; ein Stapel (Liste) wird aufgefaechert."""
     teile = body_json if isinstance(body_json, list) else [body_json]
     return [t for t in teile if isinstance(t, dict)]
+
+
+def _rolle_gesperrt(body_json, rolle: str, werkzeug: str, grund: str = "") -> JSONResponse:
+    """#4171 (Cloud 14267): Sperre nach Werkzeugrecht bei GUELTIGEM Token. Antwort als Werkzeugergebnis
+    (HTTP 200, `isError: true`), nicht als HTTP 403: aus dem 403 machte der Client eine Meldung zu
+    Anmeldedaten, und die Sitzung (Projektleitung-v24) hielt die Sperre fuer eine Stoerung und meldete sie.
+    Der Text beginnt mit dem Code `rolle_gesperrt` und nennt Werkzeug und Rolle. Ein Stapel (mehrere
+    Aufrufe in einer Anfrage) bleibt bei 403 mit demselben Text: ein Werkzeugergebnis gehoert zu genau
+    einem Aufruf. Fehlende oder ungueltige Tokens sind hier nie gemeint (dort bleibt 401/403)."""
+    text = (f"rolle_gesperrt: Werkzeug {werkzeug} ist fuer die Rolle {rolle or '?'} gesperrt"
+            + (f" ({grund})" if grund else "") + ". Nicht wiederholen, nicht melden.")
+    if isinstance(body_json, dict):
+        return JSONResponse({"jsonrpc": "2.0", "id": body_json.get("id"),
+                             "result": {"content": [{"type": "text", "text": text}], "isError": True}},
+                            status_code=200)
+    return JSONResponse({"jsonrpc": "2.0", "id": None,
+                         "error": {"code": -32600, "message": text,
+                                   "data": {"code": "rolle_gesperrt", "werkzeug": werkzeug, "rolle": rolle}}},
+                        status_code=403)
 
 
 def _aufgerufene_werkzeuge(body_json) -> list:
@@ -903,18 +925,22 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                                 "RBAC denied (tool): agent=%s role=%s perm=%s",
                                 agent.name, agent.role, required_perm,
                             )
-                            return JSONResponse(
-                                {
-                                    "jsonrpc": "2.0",
-                                    "id": body_json.get("id") if isinstance(body_json, dict) else None,
-                                    "error": {
-                                        "code": -32600,
-                                        "message": f"Permission denied: agent '{agent.name}' "
-                                                   f"(role '{agent.role}') cannot call {required_perm}",
+                            if not tool_name:       # Aufruf ohne Namen: keine Rollensperre, Fehler wie bisher
+                                return JSONResponse(
+                                    {
+                                        "jsonrpc": "2.0",
+                                        "id": body_json.get("id") if isinstance(body_json, dict) else None,
+                                        "error": {
+                                            "code": -32600,
+                                            "message": f"Permission denied: agent '{agent.name}' "
+                                                       f"(role '{agent.role}') cannot call {required_perm}",
+                                        },
                                     },
-                                },
-                                status_code=403,
-                            )
+                                    status_code=403,
+                                )
+                            # #4171: Sperre nach Rolle bei gueltigem Token, als Werkzeugergebnis
+                            return _rolle_gesperrt(body_json, agent.role, f"mcp:{mcp_server}:{tool_name}",
+                                                   f"noetig: {required_perm}" if " | " in required_perm else "")
                 except Exception:
                     # Fail-closed: wirft die Pruefung unerwartet, wird der Aufruf
                     # abgewiesen statt ungeprueft durchgelassen (vorher `pass`).

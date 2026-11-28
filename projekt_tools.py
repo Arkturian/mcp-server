@@ -85,6 +85,19 @@ def _phasen_kurz(phasen: Any) -> Any:
     return kurz
 
 
+def _fertiger_plan(plan: Dict[str, Any], text: str) -> Dict[str, Any]:
+    """Ergänzt an einem fertigen Plan, was sich aus ihm selbst ergibt (#4244); alles Übrige prüft die project-api."""
+    fertig = dict(plan)
+    if not fertig.get("agenten"):
+        namen = [str(i.get("agent")) for i in fertig.get("issues") or [] if isinstance(i, dict) and i.get("agent")]
+        fertig["agenten"] = [{"name": n, "rolle": "zuständig für Pakete dieses Plans", "neu": False}
+                             for n in dict.fromkeys(namen)]
+    fertig.setdefault("art_vorschlag", "projekt")
+    fertig.setdefault("art_begruendung", "Plan vorgegeben, ohne Planer")
+    fertig.setdefault("verstaendnis", (text or "").strip()[:2000] or "Plan vorgegeben")
+    return fertig
+
+
 def register_projekt_tools(mcp, transport: Transport) -> None:
     """Register the project tools on ``mcp``; ``transport(method, path, **kw)``."""
 
@@ -152,6 +165,14 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
           der Plan wartet auf `projekt_starten`. Mit Analyse gilt immer Absegnen.
         - `space`: Name oder id eines Space, in dem das Projekt liegt. `anhaenge`: Storage-IDs, die der Planer
           und die Beteiligten sehen.
+        - Mit `plan` übernimmt die project-api einen fertigen Plan ohne Planer, etwa einen schon abgestimmten
+          Plan aus einem Beitrag (#4244). Nötig sind `ziele` (schluessel, titel, ergebnis), `issues` (schluessel,
+          ziel, titel, beschreibung = Auftrag, agent, groesse S/M/L, abhaengig_von, abnahme als Liste, optional
+          tor, wofuer, nachweis, leitung) und `deliverable` (was, nachweis). Fehlen `agenten`, `art_vorschlag`,
+          `art_begruendung` oder `verstaendnis`, ergänzt das Werkzeug sie aus den Paketen und dem Text. Geprüft
+          wird wie beim Planer; Prüffehler stehen in der Fassung, dann geht der Start nicht. Danach wartet der
+          Plan auf `projekt_starten`. Nicht zusammen mit Analyse, `skizzieren` oder `start="sofort"`. Der Start
+          öffnet keine Tore: Ein Paket mit `tor` wartet, bis ein Freigeber es mit `tor_oeffnen` öffnet.
         - Die Projektleitung stellst du danach mit `projektleitung_schalten` ein, im selben Zug.
         {RECHT}""",
     )
@@ -168,7 +189,11 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
         start: Optional[str] = None,
         space: Optional[str] = None,
         anhaenge: Optional[List[int]] = None,
+        plan: Optional[Dict[str, Any]] = None,
     ) -> Any:
+        if plan is not None and (skizzieren or analyse_partner or start == "sofort"):
+            return {"fehler": "plan_nicht_kombinierbar",
+                    "text": "Ein fertiger Plan geht nicht zusammen mit Analyse, Skizze oder start=sofort."}
         rumpf: Dict[str, Any] = _drop_none({"text": text, "titel": titel, "typ": typ, "deliverable": deliverable,
                                             "browser_test": browser_test, "zweite_pruefung": zweite_pruefung,
                                             "start": start})
@@ -189,6 +214,8 @@ def register_projekt_tools(mcp, transport: Transport) -> None:
             rumpf["planen"] = False
         if analyse_partner:
             rumpf["analyse"] = {"partner": list(analyse_partner), "fragen": list(analyse_fragen or [])}
+        if plan is not None:
+            rumpf["plan"] = _fertiger_plan(plan, text)
         return await transport("POST", f"{API}/vorgaben", json_body=rumpf)
 
     @mcp.tool(

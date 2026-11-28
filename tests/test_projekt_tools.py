@@ -52,6 +52,31 @@ class ProjektToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls[-1], ("POST", "/api/v1/vorgaben", {"json_body": {
             "text": "Neue Ansicht", "browser_test": False, "start": "sofort", "anhaenge": [136422], "space_id": 3}}))
 
+    async def test_vorgabe_mit_fertigem_plan(self):
+        """#4244: Ein abgestimmter Plan (Beitrag 6626) geht ohne Planer in die project-api."""
+        plan = {"ziele": [{"schluessel": "Z1", "titel": "Schnitt", "ergebnis": "Sendung geschnitten"}],
+                "issues": [{"schluessel": "A1", "ziel": "Z1", "titel": "Schnitt bauen", "beschreibung": "Baue …",
+                            "agent": "AiApi", "abnahme": ["Probe läuft"]},
+                           {"schluessel": "S1", "ziel": "Z1", "titel": "Story", "beschreibung": "Schreibe …",
+                            "agent": "Story-Codex", "abhaengig_von": ["A1"], "tor": "Rechte"},
+                           {"schluessel": "A2", "ziel": "Z1", "titel": "Mehr", "beschreibung": "…", "agent": "AiApi"}],
+                "deliverable": {"was": "Geschnittene Sendung", "nachweis": "Hörprobe"}}
+        await self.rufe("vorgabe_anlegen", {"text": "KI-Schnitt für Radiosendungen", "start": "freigabe", "plan": plan})
+        rumpf = self.calls[-1][2]["json_body"]
+        self.assertEqual(rumpf["start"], "freigabe")
+        self.assertEqual(rumpf["plan"]["issues"], plan["issues"])
+        self.assertEqual([a["name"] for a in rumpf["plan"]["agenten"]], ["AiApi", "Story-Codex"])
+        self.assertEqual(rumpf["plan"]["art_vorschlag"], "projekt")
+        self.assertEqual(rumpf["plan"]["verstaendnis"], "KI-Schnitt für Radiosendungen")
+        self.assertNotIn("planen", rumpf)
+
+    async def test_fertiger_plan_nicht_mit_skizze_oder_analyse(self):
+        plan = {"ziele": [], "issues": []}
+        for extra in ({"skizzieren": True}, {"analyse_partner": ["Cloud"]}, {"start": "sofort"}):
+            antwort = await self.rufe("vorgabe_anlegen", {"text": "x", "plan": plan, **extra})
+            self.assertIn("plan_nicht_kombinierbar", str(antwort))
+        self.assertEqual(self.calls, [])
+
     async def test_vorgabe_anlegen_mit_unbekanntem_space_legt_nichts_an(self):
         self.antworten[("GET", "/api/v1/spaces")] = [{"id": 3, "name": "Board A"}]
         antwort = await self.rufe("vorgabe_anlegen", {"text": "Neue Ansicht", "space": "Board B"})
